@@ -1,0 +1,29 @@
+[package]
+name = "odx-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+odx-core = { path = "../../../crates/odx-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tauri = { version = "=2.10.3", features = ["tray-icon"] }
+tauri-runtime = "=2.10.1"
+tauri-runtime-wry = "=2.10.1"
+tauri-macros = "=2.5.5"
+notify-rust = "=4.18.2"
+tauri-plugin-single-instance = "=2.4.5"
+zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "=5.19.0"
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

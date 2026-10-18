@@ -1,0 +1,179 @@
+import { i18n } from "./i18n";
+
+export type AppError = {
+  code: string;
+  params?: Record<string, string | number>;
+  detail?: string;
+  outcome?: "not_sent" | "failed" | "uncertain";
+};
+export type ErrorState = string | AppError;
+
+const codeKeys: Record<string, string> = {
+  "app.locked": "errors.codes.locked",
+  "app.unlock_failed": "errors.codes.unlockFailed",
+  "app.invalid_input": "errors.codes.invalidInput",
+  "app.unauthorized": "errors.codes.unauthorized",
+  "app.client_not_found": "errors.codes.clientNotFound",
+  "app.environment_not_found": "errors.codes.environmentNotFound",
+  "app.denied": "errors.codes.denied",
+  "app.approval_unavailable": "errors.codes.approvalUnavailable",
+  "app.persistence": "errors.codes.persistence",
+  "app.capacity": "errors.codes.capacity",
+  "app.operation_failed": "errors.codes.operationFailed",
+  "app.password_change_failed": "errors.codes.passwordChangeFailed",
+  "app.client_update_failed": "clients.updateError",
+  "app.client_revoke_failed": "clients.revokeError",
+  "app.environment_delete_failed": "environments.deleteError",
+  "system.operation_failed": "errors.codes.operationFailed",
+  "system.browser_open_failed": "errors.codes.browserOpenFailed",
+  "service.api_bind_failed": "errors.codes.apiBindFailed",
+  "service.mcp_socket_failed": "errors.codes.mcpSocketFailed",
+  "upstream.uncertain_result": "errors.codes.uncertainResult",
+  "upstream.auth_rejected": "errors.codes.upstreamAuth",
+  "upstream.failure": "errors.codes.upstreamFailure",
+  "upstream.http_status": "errors.codes.httpStatus",
+  "upstream.network": "errors.codes.network",
+  "upstream.remote": "errors.codes.remote",
+  "upstream.response_too_large": "errors.codes.responseTooLarge",
+  "validation.client.capability_required": "errors.validation.clientCapabilityRequired",
+  "validation.client.environment_required": "errors.validation.clientEnvironmentRequired",
+  "validation.client.environment_unknown": "errors.validation.clientEnvironmentUnknown",
+  "validation.client.label_invalid": "errors.validation.clientLabelInvalid",
+  "validation.client.local_profile_name_fixed": "errors.validation.clientLocalProfileNameFixed",
+  "validation.client.local_profile_no_token": "errors.validation.clientLocalProfileNoToken",
+  "validation.client.local_profile_shared": "errors.validation.clientLocalProfileShared",
+  "validation.client.name_exists": "errors.validation.clientNameExists",
+  "validation.console.args_list_required": "errors.validation.consoleArgsListRequired",
+  "validation.console.argument_duplicated": "errors.validation.consoleArgumentDuplicated",
+  "validation.console.arguments_too_deep": "errors.validation.consoleArgumentsTooDeep",
+  "validation.console.copy_relational_delete": "errors.validation.consoleCopyRelationalDelete",
+  "validation.console.create_relational_delete": "errors.validation.consoleCreateRelationalDelete",
+  "validation.console.ids_invalid": "errors.validation.consoleIdsInvalid",
+  "validation.console.ids_must_be_integers": "errors.validation.consoleIdsMustBeIntegers",
+  "validation.console.json2_ids_required": "errors.validation.consoleJson2IdsRequired",
+  "validation.console.json2_method_signature_unknown": "errors.validation.consoleJson2MethodSignatureUnknown",
+  "validation.console.json2_positional_arguments": "errors.validation.consoleJson2PositionalArguments",
+  "validation.console.json2_too_many_arguments": "errors.validation.consoleJson2TooManyArguments",
+  "validation.console.kwargs_object_required": "errors.validation.consoleKwargsObjectRequired",
+  "validation.console.parameter_duplicated": "errors.validation.consoleParameterDuplicated",
+  "validation.console.parameter_required": "errors.validation.consoleParameterRequired",
+  "validation.console.single_relational_delete": "errors.validation.consoleSingleRelationalDelete",
+  "validation.console.web_save_relational_delete": "errors.validation.consoleWebSaveRelationalDelete",
+  "validation.console.write_values_empty": "errors.validation.consoleWriteValuesEmpty",
+  "validation.console.write_values_invalid": "errors.validation.consoleWriteValuesInvalid",
+  "validation.console.xmlrpc_control_characters": "errors.validation.consoleXmlrpcControlCharacters",
+  "validation.console.xmlrpc_integer_out_of_range": "errors.validation.consoleXmlrpcIntegerOutOfRange",
+  "validation.context.empty_or_duplicate_key": "errors.validation.contextEmptyOrDuplicateKey",
+  "validation.context.object_required": "errors.validation.contextObjectRequired",
+  "validation.context.json_invalid": "settingsTable.errors.contextJsonInvalid",
+  "validation.headers.name_required": "settingsTable.errors.headerName",
+  "validation.context.key_required": "settingsTable.errors.contextKey",
+  "validation.context.too_large": "errors.validation.contextTooLarge",
+  "validation.context.too_many_entries": "errors.validation.contextTooManyEntries",
+  "validation.context.trimmed_key": "errors.validation.contextTrimmedKey",
+  "validation.environment.delete_confirmation": "errors.validation.environmentDeleteConfirmation",
+  "validation.environment.duration_out_of_range": "errors.validation.environmentDurationOutOfRange",
+  "validation.environment.duration_positive": "errors.validation.environmentDurationPositive",
+  "validation.environment.name_exists": "errors.validation.environmentNameExists",
+  "validation.environment.name_required": "errors.validation.environmentNameRequired",
+  "validation.environment.required_fields": "errors.validation.environmentRequiredFields",
+  "validation.environment.temporary_deadline_required": "errors.validation.environmentTemporaryDeadlineRequired",
+  "validation.environment.url_invalid": "errors.validation.environmentUrlInvalid",
+  "validation.environment.url_restricted": "errors.validation.environmentUrlRestricted",
+  "validation.environment.favicon_url_not_allowed": "errors.validation.environmentFaviconUrlNotAllowed",
+  "validation.environment.api_key_header_invalid": "errors.validation.environmentApiKeyHeaderInvalid",
+  "validation.environment.database_header_invalid": "errors.validation.environmentDatabaseHeaderInvalid",
+  "validation.environment.json2_reserved_headers": "errors.validation.environmentJson2ReservedHeaders",
+  "validation.headers.duplicate_name": "errors.validation.headersDuplicateName",
+  "validation.headers.limit_exceeded": "errors.validation.headersLimitExceeded",
+  "validation.headers.name_invalid": "errors.validation.headersNameInvalid",
+  "validation.headers.reserved_name": "errors.validation.headersReservedName",
+  "validation.headers.secret_reentry_required": "errors.validation.headersSecretReentryRequired",
+  "validation.headers.value_invalid": "errors.validation.headersValueInvalid",
+  "validation.json.id_invalid": "errors.validation.jsonIdInvalid",
+  "validation.json.integer_out_of_range": "errors.validation.jsonIntegerOutOfRange",
+  "validation.json.too_deep": "errors.validation.jsonTooDeep",
+  "validation.json.too_large": "errors.validation.jsonTooLarge",
+  "validation.proxy.credentials_invalid": "errors.validation.proxyCredentialsInvalid",
+  "validation.proxy.configuration_invalid": "errors.validation.proxyConfigurationInvalid",
+  "validation.proxy.password_reentry": "errors.validation.proxyPasswordReentry",
+  "validation.proxy.password_requires_username": "errors.validation.proxyPasswordRequiresUsername",
+  "validation.proxy.host_invalid": "proxy.errors.host",
+  "validation.proxy.port_invalid": "proxy.errors.port",
+  "validation.proxy.username_invalid": "proxy.errors.userColon",
+  "validation.proxy.password_missing_username": "proxy.errors.passwordNeedsUser",
+  "validation.proxy.socks5_unsupported": "errors.validation.proxySocks5Unsupported",
+  "validation.proxy.url_invalid": "errors.validation.proxyUrlInvalid",
+  "validation.proxy.username_reentry": "errors.validation.proxyUsernameReentry",
+  "validation.rule.context_object_required": "errors.validation.ruleContextObjectRequired",
+  "validation.rule.credential_method_not_allowed": "errors.validation.ruleCredentialMethodNotAllowed",
+  "validation.rule.duplicate_fields": "errors.validation.ruleDuplicateFields",
+  "validation.rule.environment_immutable": "errors.validation.ruleEnvironmentImmutable",
+  "validation.rule.expiry_future": "errors.validation.ruleExpiryFuture",
+  "validation.rule.field_invalid": "errors.validation.ruleFieldInvalid",
+  "validation.rule.fields_count": "errors.validation.ruleFieldsCount",
+  "validation.rule.kind_requires_write_method": "errors.validation.ruleKindRequiresWriteMethod",
+  "validation.rule.limit_reached": "errors.validation.ruleLimitReached",
+  "validation.rule.max_records": "errors.validation.ruleMaxRecords",
+  "validation.rule.method_invalid": "errors.validation.ruleMethodInvalid",
+  "validation.rule.model_invalid": "errors.validation.ruleModelInvalid",
+  "validation.rule.not_found": "errors.validation.ruleNotFound",
+  "validation.rule.read_method_not_needed": "errors.validation.ruleReadMethodNotNeeded",
+  "validation.rule.relational_delete_not_allowed": "errors.validation.ruleRelationalDeleteNotAllowed",
+  "validation.rule.shape_invalid": "errors.validation.ruleShapeInvalid",
+  "validation.rule.unlink_not_allowed": "errors.validation.ruleUnlinkNotAllowed",
+  "validation.rule.values_required": "errors.validation.ruleValuesRequired",
+  "validation.settings.concurrency_order": "errors.validation.settingsConcurrencyOrder",
+  "validation.settings.config_too_large": "errors.validation.settingsConfigTooLarge",
+  "validation.settings.out_of_range": "errors.validation.settingsOutOfRange",
+  "validation.vault.already_exists": "errors.validation.vaultAlreadyExists",
+  "validation.vault.already_unlocked": "errors.validation.vaultAlreadyUnlocked",
+  "validation.vault.password_empty": "errors.validation.vaultPasswordEmpty",
+  "validation.vault.protected_memory_unavailable": "errors.validation.vaultProtectedMemoryUnavailable",
+  "validation.vault.version_unsupported": "errors.validation.vaultVersionUnsupported",
+  invalid_arguments: "errors.codes.invalidInput",
+  unauthenticated: "errors.codes.unauthorized",
+  not_found: "errors.codes.notFound",
+  forbidden: "errors.codes.denied",
+  environment_unavailable: "errors.codes.environmentNotFound",
+  approval_revoked: "errors.codes.approvalUnavailable",
+  uncertain_result: "errors.codes.uncertainResult",
+  audit_unavailable: "errors.codes.persistence",
+  capacity_exceeded: "errors.codes.capacity",
+  upstream_error: "errors.codes.remote",
+  upstream_auth: "errors.codes.upstreamAuth",
+  upstream_timeout: "errors.codes.network",
+  upstream_network: "errors.codes.network",
+  output_too_large: "errors.codes.responseTooLarge",
+  output_storage_error: "errors.codes.persistence",
+};
+const safeParameterNames = new Set(["status", "kind", "limitMiB", "setting", "min", "max", "limit"]);
+
+/** Parse only the structured desktop IPC contract. Arbitrary exception text is never trusted as detail. */
+export function normalizeAppError(reason: unknown): AppError {
+  if (typeof reason === "object" && reason !== null && "code" in reason && typeof reason.code === "string") {
+    const raw = reason as Record<string, unknown>;
+    const params = typeof raw.params === "object" && raw.params !== null && !Array.isArray(raw.params)
+      ? Object.fromEntries(Object.entries(raw.params).filter(([name, value]) => safeParameterNames.has(name) && (typeof value === "string" || typeof value === "number"))) as Record<string, string | number>
+      : undefined;
+    return {
+      code: raw.code as string,
+      params,
+      detail: typeof raw.detail === "string" ? raw.detail : undefined,
+      outcome: raw.outcome === "not_sent" || raw.outcome === "failed" || raw.outcome === "uncertain" ? raw.outcome : undefined,
+    };
+  }
+  return { code: "unknown" };
+}
+
+/** Called while rendering, so react-i18next language changes re-resolve the stored code. */
+export function formatAppError(error: ErrorState): string {
+  if (typeof error === "string") return error;
+  const key = codeKeys[error.code] ?? "errors.unknown";
+  const translated = i18n.t(key as never, error.params ?? {});
+  return error.detail ? `${translated}\n${i18n.t("errors.technicalDetail")}: ${error.detail}` : translated;
+}
+
+export function appErrorMessage(code: string, params?: Record<string, string | number>): string {
+  return formatAppError({ code, params });
+}

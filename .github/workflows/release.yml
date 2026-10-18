@@ -1,0 +1,129 @@
+# Publish a Linux x86-64 AppImage for each v<version> tag.
+# Tests and the AppImage build run in parallel on separate runners (each compiles the whole
+# workspace and would fill one runner's disk); the release is published only if both pass.
+name: Release AppImage
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri v2 Debian/Ubuntu prerequisites (v2.tauri.app/start/prerequisites).
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # rustup is preinstalled; rust-toolchain.toml selects the pinned toolchain.
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      # Keeps compiled dependencies between runs; only the workspace crates rebuild.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/desktop
+
+      - name: Test
+        run: |
+          cargo test --workspace --locked
+          npm test --prefix apps/desktop
+
+  appimage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches the app version
+        run: |
+          version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $version"
+            exit 1
+          fi
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/desktop
+
+      # linuxdeploy runs as an AppImage; extract it instead of relying on FUSE on the runner.
+      - name: Build AppImage
+        working-directory: apps/desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri build -- --bundles appimage
+
+      # Bundled libwayland breaks the host Mesa EGL on newer systems ("Could not create default
+      # EGL display: EGL_BAD_PARAMETER", blank window). Use the host's copy, which every Wayland/XWayland
+      # desktop ships, and repack with the linuxdeploy plugin the Tauri build already downloaded.
+      # Fixed name so releases/latest/download/odx-linux-x86_64.AppImage always points to the newest build.
+      - name: Repack without bundled Wayland libraries
+        env:
+          ARCH: x86_64
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          LDAI_OUTPUT: dist/odx-linux-x86_64.AppImage
+        run: |
+          appdir=target/release/bundle/appimage/Odx.AppDir
+          rm -f "$appdir"/usr/lib/libwayland-*.so*
+          mkdir dist
+          ~/.cache/tauri/linuxdeploy-plugin-appimage.AppImage --appdir "$appdir"
+          (cd dist && sha256sum odx-linux-x86_64.AppImage > odx-linux-x86_64.AppImage.sha256)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: appimage
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [test, appimage]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: appimage
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A SemVer pre-release tag (v0.1.0-alpha.1) is published as a GitHub pre-release.
+          prerelease=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
+          gh release create "$GITHUB_REF_NAME" dist/odx-linux-x86_64.AppImage dist/odx-linux-x86_64.AppImage.sha256 \
+            --repo "$GITHUB_REPOSITORY" --title "Odx $GITHUB_REF_NAME" --generate-notes $prerelease

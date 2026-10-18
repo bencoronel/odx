@@ -1,0 +1,128 @@
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import McpLocalPage from "./McpLocalPage";
+import type { Client, Environment, ServiceStatus } from "./ipc";
+afterEach(cleanup);
+beforeEach(() => localStorage.clear());
+const services: ServiceStatus = {
+  api: { state: "listening" }, mcp: { state: "listening" },
+  connector_command: "/tmp/fixture-Odx", connector_args: ["mcp-stdio"],
+  api_url: "http://127.0.0.1:8770/api/v1", connections: [],
+};
+const profile: Client = {
+  id: "local-mcp-stdio", local_stdio: true, label: "MCP local",
+  environment_ids: [], all_environments: true, capabilities: ["odoo:read"], revoked: false,
+  created_at: "2026-10-16T00:00:00Z", token_issued_at: "2026-10-16T00:00:00Z",
+};
+const envs: Environment[] = ["A", "B"].map((name) => ({
+  id: `env-${name}`, name, url: `https://${name}.test`, database: name, login: "fixture",
+  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true,
+}));
+function Page(props: Partial<Parameters<typeof McpLocalPage>[0]>) {
+  return <McpLocalPage clients={[]} services={services} envs={envs} busy={false} update={vi.fn()} {...props} />;
+}
+const snippet = () => document.querySelector("pre")!.textContent;
+
+it("summarises connected agents and last use without token actions", () => {
+  render(<Page clients={[{ ...profile, last_used_at: new Date(Date.now() - 5 * 60_000).toISOString() }]} services={{ ...services, connections: [
+    { client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:00:00Z" },
+    { client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:01:00Z" },
+  ] }} />);
+  const summary = within(screen.getByRole("region", { name: "Local MCP status" }));
+  expect(summary.getByText("2")).toBeTruthy();
+  expect(summary.getByText("5 minutes ago")).toBeTruthy();
+  expect(document.body.textContent).not.toContain("ODX_TOKEN");
+  for (const name of ["Replace token", "Revoke", "New HTTP client"]) expect(screen.queryByRole("button", { name })).toBeNull();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("shows one setup snippet at a time for the chosen agent", () => {
+  render(<Page clients={[profile]} />);
+  expect(snippet()).toBe("claude mcp add --transport stdio --scope user odx -- /tmp/fixture-Odx mcp-stdio");
+  fireEvent.click(screen.getByRole("radio", { name: "Codex CLI" }));
+  expect(snippet()).toBe('codex mcp add odx --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- /tmp/fixture-Odx mcp-stdio');
+  fireEvent.click(screen.getByRole("radio", { name: "JSON" }));
+  expect(JSON.parse(snippet()!).mcpServers.odx).toEqual({ command: services.connector_command, args: ["mcp-stdio"] });
+  expect(document.querySelectorAll("pre")).toHaveLength(1);
+});
+
+it("quotes both CLI executable paths with spaces, apostrophes and shell syntax", () => {
+  render(<Page clients={[profile]} services={{ ...services, connector_command: "/tmp/ODX user's $(example).AppImage" }} />);
+  expect(snippet()).toBe(String.raw`claude mcp add --transport stdio --scope user odx -- '/tmp/ODX user'\''s $(example).AppImage' mcp-stdio`);
+  fireEvent.click(screen.getByRole("radio", { name: "Codex CLI" }));
+  expect(snippet()).toBe(String.raw`codex mcp add odx --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- '/tmp/ODX user'\''s $(example).AppImage' mcp-stdio`);
+});
+
+it("edits shared permissions inline, discards drafts and warns that saving revokes pending requests", () => {
+  const update = vi.fn();
+  render(<Page clients={[profile]} update={update} />);
+  const form = within(screen.getByRole("form", { name: "Permissions" }));
+  const actions = () => ["Save", "Discard"].map((name) => form.queryByRole("button", { name }));
+  expect(actions()).toEqual([null, null]);
+  expect(form.queryByText(/revokes the pending requests/)).toBeNull();
+  fireEvent.click(form.getByRole("checkbox", { name: /Request writes/ }));
+  expect(actions().every(Boolean)).toBe(true);
+  expect(form.getByText(/revokes the pending requests/)).toBeTruthy();
+  fireEvent.click(form.getByRole("button", { name: "Discard" }));
+  expect((form.getByRole("checkbox", { name: /Request writes/ }) as HTMLInputElement).checked).toBe(false);
+  expect(actions()).toEqual([null, null]);
+  expect(update).not.toHaveBeenCalled();
+});
+
+it("ignores dormant environment selections when restoring unrestricted scope", () => {
+  render(<Page clients={[profile]} />);
+  const save = () => screen.queryByRole("button", { name: "Save" }) as HTMLButtonElement | null;
+  fireEvent.click(screen.getByRole("radio", { name: "Selected only" }));
+  expect(save()?.disabled).toBe(true);
+  fireEvent.click(screen.getByRole("checkbox", { name: /^A/ }));
+  expect(save()?.disabled).toBe(false);
+  fireEvent.click(screen.getByRole("radio", { name: "All environments" }));
+  expect(save()).toBeNull();
+});
+
+it("locks the form while saving and keeps the draft after an error", async () => {
+  let fail!: (reason: unknown) => void;
+  const update = vi.fn(() => new Promise<void>((_, reject) => { fail = reject; }));
+  render(<Page clients={[profile]} update={update} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Request writes/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(update).toHaveBeenCalledWith(profile.id, profile.label, null, ["odoo:read", "odoo:write-request"]);
+  expect(screen.getByRole("checkbox", { name: /Request writes/ }).matches(":disabled")).toBe(true);
+  fail({ code: "app.persistence" });
+  expect((await screen.findByRole("alert")).textContent).toContain("Odx could not save or audit this operation.");
+  expect((screen.getByRole("checkbox", { name: /Request writes/ }) as HTMLInputElement).checked).toBe(true);
+  await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
+});
+
+it("warns about missing environments and shows only connector errors in the summary", () => {
+  render(<Page clients={[profile]} envs={[]} services={{ ...services, mcp: { state: "error", error: "unknown" } }} />);
+  expect(screen.getByText(/No environments yet/)).toBeTruthy();
+  const summary = within(screen.getByRole("region", { name: "Local MCP status" }));
+  expect(summary.getByRole("alert")).toBeTruthy();
+  cleanup();
+  render(<Page clients={[profile]} />);
+  expect(within(screen.getByRole("region", { name: "Local MCP status" })).queryByRole("alert")).toBeNull();
+  expect(screen.queryByText("active")).toBeNull();
+});
+
+it("folds setup instructions once the local profile has been used and remembers the user's choice", () => {
+  const used = { ...profile, last_used_at: "2026-10-17T10:00:00Z" };
+  const { unmount } = render(<Page clients={[used]} />);
+  expect(document.querySelector("pre")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Expand Connect an agent" }));
+  expect(document.querySelectorAll("pre")).toHaveLength(1);
+  unmount();
+  render(<Page clients={[used]} />);
+  expect(screen.getByRole("button", { name: "Collapse Connect an agent" })).toBeTruthy();
+});
+
+it("keeps the last use time current while the page stays open", () => {
+  vi.useFakeTimers({ now: Date.parse("2026-10-18T10:00:00Z") });
+  try {
+    render(<Page clients={[{ ...profile, last_used_at: "2026-10-18T09:55:00Z" }]} />);
+    const summary = within(screen.getByRole("region", { name: "Local MCP status" }));
+    expect(summary.getByText("5 minutes ago")).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(2 * 60_000); });
+    expect(summary.getByText("7 minutes ago")).toBeTruthy();
+  } finally { vi.useRealTimers(); }
+});

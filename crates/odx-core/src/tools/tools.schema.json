@@ -1,0 +1,1693 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Odx: inputs of the 21 tools",
+  "description": "Select $defs by name. Additional semantic rules are in tools.md. Not an MCP outputSchema.",
+  "$defs": {
+    "envs": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "whoami": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "additionalProperties": false
+    },
+    "search_read": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "default": [
+            "display_name"
+          ],
+          "description": "Technical field names to read. Omitted: id and display_name, never all fields."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot."
+        },
+        "order": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated fields with asc/desc. id is appended as a stable tiebreaker.",
+          "examples": [
+            "name asc, id asc"
+          ]
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "read": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "description": "1–1000 unique positive IDs from this environment; IDs are not shared across databases."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "default": [
+            "display_name"
+          ],
+          "description": "Technical field names to read. Omitted: id and display_name, never all fields."
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "search": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot."
+        },
+        "order": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated fields with asc/desc. id is appended as a stable tiebreaker.",
+          "examples": [
+            "name asc, id asc"
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "search_count": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "wait": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "absent": {
+          "type": "boolean",
+          "default": false,
+          "description": "false waits for at least one match; true waits for none."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 60,
+          "description": "Maximum wait in seconds (1–600, default 60). Returns matched=false on expiry; not an error."
+        },
+        "interval": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 600,
+          "default": 3,
+          "description": "Seconds between poll starts (minimum 3). If another poll does not fit, waits until expiry; count is from the last completed poll."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "domain"
+      ],
+      "additionalProperties": false
+    },
+    "read_group": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "groupby": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "description": "Group-by fields, e.g. partner_id or date_order:month. [] computes totals and requires explicit aggregates in fields.",
+          "examples": [
+            [
+              "partner_id"
+            ],
+            [
+              "date_order:month"
+            ],
+            []
+          ]
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "description": "Aggregates such as amount_total:sum, id:count or total:sum(amount_total). Required with groupby=[]; with groups and no fields, only counts are returned.",
+          "examples": [
+            [
+              "amount_total:sum"
+            ],
+            [
+              "total:sum(amount_total)"
+            ]
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot."
+        },
+        "orderby": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Group order by field or aggregate alias with asc/desc. No id tiebreaker: groups are paginated, not records."
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "groupby"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "groupby": {
+                "maxItems": 0
+              }
+            },
+            "required": [
+              "groupby"
+            ]
+          },
+          "then": {
+            "required": [
+              "fields"
+            ],
+            "properties": {
+              "fields": {
+                "minItems": 1,
+                "items": {
+                  "pattern": ":"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "fields": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "q": {
+          "type": "string",
+          "description": "Filter by technical name or label."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot."
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "description": "Field names whose metadata is requested from Odoo. Omitted: all visible fields. q filters this selection afterward.",
+          "examples": [
+            [
+              "name",
+              "email"
+            ]
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "models": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "q": {
+          "type": "string",
+          "description": "Filter by technical name or label."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot."
+        }
+      },
+      "required": [
+        "env",
+        "q"
+      ],
+      "additionalProperties": false
+    },
+    "name_search": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "name": {
+          "type": "string",
+          "description": "Search text with Odoo name_search semantics. May be empty; refine it when more matches exist."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Max matches (1–1000, default 50). No offset: if refine_query appears, narrow the name or domain."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "ref": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "xmlid": {
+          "type": "string",
+          "pattern": "^[^.\\s]+\\.[^.\\s]+$",
+          "description": "External ID module.name; never interpreted as a display name.",
+          "examples": [
+            "base.main_company"
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "xmlid"
+      ],
+      "additionalProperties": false
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Positive record ID in this environment."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot. Counts messages, not tracked changes."
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "view": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "view_type": {
+          "type": "string",
+          "minLength": 1,
+          "default": "form",
+          "description": "Odoo view type, default form; e.g. list in Odoo 18–19 or tree in earlier versions."
+        },
+        "view_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Explicit ir.ui.view ID; omitted, Odoo picks the view that applies to the user."
+        },
+        "q": {
+          "type": "string",
+          "description": "Filter architecture lines by text; matching views are marked."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot. Applies to the inheritance chain."
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "access": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot. Applies to each list (acls, rules) separately."
+        }
+      },
+      "required": [
+        "env",
+        "model"
+      ],
+      "additionalProperties": false
+    },
+    "compare": {
+      "type": "object",
+      "properties": {
+        "env_a": {
+          "type": "string",
+          "minLength": 1,
+          "description": "First granted environment name; read independently of env_b."
+        },
+        "env_b": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Another granted environment name, different from env_a."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Technical field names to compare."
+        },
+        "domain": {
+          "type": "array",
+          "default": [],
+          "description": "Odoo domain as a JSON list of [field, operator, value] conditions. Consecutive conditions are ANDed; |, & and ! are prefix operators. Never a string expression.",
+          "examples": [
+            [
+              [
+                "is_company",
+                "=",
+                true
+              ],
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ]
+            ],
+            [
+              "|",
+              [
+                "name",
+                "ilike",
+                "Acme"
+              ],
+              [
+                "email",
+                "ilike",
+                "acme"
+              ]
+            ]
+          ]
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "default": "xmlid",
+          "description": "xmlid or a stable scalar field used to match records across databases. Never id or display_name by inference; missing or duplicate keys are flagged."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Page size, 1–1000, default 50. meta.page tells whether more exist."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Items to skip. Use next_offset from the response; pages are not a transactional snapshot. Applies to each environment separately; check both continuations."
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env_a",
+        "env_b",
+        "model",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "download": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Positive record ID in this environment."
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "default": "datas",
+          "description": "Binary field to save locally; default datas. Never returns base64."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "create": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "values": {
+          "oneOf": [
+            {
+              "type": "object",
+              "minProperties": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "minProperties": 1
+              },
+              "minItems": 1,
+              "maxItems": 1000
+            }
+          ],
+          "description": "One object for one record, or a list of up to 1000 objects. Values by technical field name. x2many fields take Odoo commands: 0 create, 1 update, 4 link. Commands 2/3/5/6 are not allowed on create.",
+          "examples": [
+            {
+              "name": "Ejemplo"
+            },
+            {
+              "category_id": [
+                [
+                  4,
+                  7,
+                  0
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "write": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "description": "1–1000 unique positive IDs from this environment; IDs are not shared across databases."
+        },
+        "values": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Values by technical field name. x2many fields take Odoo commands: 0 create, 1 update, 2 delete, 3 unlink, 4 link, 5 clear, 6 replace. Commands 2/3/5/6 need individual approval. A relational delete allows one record and one command per request.",
+          "examples": [
+            {
+              "name": "Ejemplo"
+            },
+            {
+              "category_id": [
+                [
+                  4,
+                  7,
+                  0
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "ids",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "unlink": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "minItems": 1,
+          "maxItems": 1000,
+          "uniqueItems": true,
+          "description": "1–1000 unique positive IDs from this environment. One human approval covers all of them; deletion cannot be undone."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "call": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs."
+        },
+        "context": {
+          "type": "object",
+          "default": {},
+          "description": "Odoo context merged over the global and environment context, e.g. allowed_company_ids. Grants no extra rights.",
+          "examples": [
+            {
+              "lang": "es_ES",
+              "allowed_company_ids": [
+                1
+              ]
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Technical model name, e.g. res.partner. Find it with models."
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Public Odoo method. Prefer a dedicated tool when one exists. Unknown methods are treated as writes and follow the environment mode."
+        },
+        "args": {
+          "type": "array",
+          "default": [],
+          "description": "Positional method arguments for XML-RPC or legacy JSON-RPC. JSON-2 requires []; use kwargs with the real parameter names.",
+          "examples": [
+            [
+              [
+                42
+              ]
+            ]
+          ]
+        },
+        "kwargs": {
+          "type": "object",
+          "default": {},
+          "description": "Named arguments of the Odoo method, not of this tool. On JSON-2 use ids, vals or vals_list per the signature. Do not repeat positional arguments or both context and kwargs.context.",
+          "examples": [
+            {
+              "ids": [
+                42
+              ]
+            },
+            {
+              "ids": [
+                42
+              ],
+              "vals": {
+                "name": "Nuevo nombre"
+              }
+            }
+          ]
+        },
+        "to_file": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save only the requested page or scope to a managed local file and return its descriptor. Does not fetch every page or accept client paths."
+        }
+      },
+      "required": [
+        "env",
+        "model",
+        "method"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

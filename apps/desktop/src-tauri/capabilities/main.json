@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Admin IPC for the local Odx window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-close"
+  ]
+}
