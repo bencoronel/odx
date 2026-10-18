@@ -1064,7 +1064,7 @@ pub async fn untrusted_tls_server() -> (u16, Arc<AtomicUsize>) {
         pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
     };
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()));
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert.cert.der().clone()], key)
