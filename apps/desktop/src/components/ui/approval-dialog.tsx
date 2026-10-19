@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Icon } from "@/Icon";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "@/appError";
+import { usePreventUnload } from "@/windowState";
 
 type ApprovalDialogProps = {
   open: boolean;
@@ -31,6 +32,7 @@ export function ApprovalDialog({
   onOpenChange,
   onConfirm,
 }: ApprovalDialogProps) {
+  usePreventUnload(open || busy);
   const { t } = useTranslation();
   const [error, setError] = useState<ErrorState>("");
   useEffect(() => { if (open) setError(""); }, [open]);

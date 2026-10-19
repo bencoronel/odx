@@ -7,6 +7,7 @@ import { Icon } from "./Icon";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { preventUnloadUntil, usePreventUnload } from "./windowState";
 
 /** Returning the backend placeholder preserves sensitive header values. */
 export const HEADER_MASK = "••••••••••••";
@@ -52,7 +53,17 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
     return () => { active = false; mounted.current = false; };
   }, [environmentId, headerMode]);
   const inherited = headerMode ? combine(defaults, settings?.inherited ?? []) : settings?.inherited ?? [];
-  const displayed = rows ?? (!environmentId && headerMode ? combine(inherited, settings?.entries ?? []) : settings?.entries ?? []);
+  const baseline = !environmentId && headerMode ? combine(inherited, settings?.entries ?? []) : settings?.entries ?? [];
+  const displayed = rows ?? baseline;
+  /** Rows as stored: global headers omit unchanged defaults. */
+  const stored = (edited: HeaderEntry[], entries: HeaderEntry[]) => edited.map((h) => ({ ...h, name: h.name.trim() }))
+    .filter((h) => h.name !== "" || h.value !== "").filter((h) => {
+      if (environmentId || !headerMode) return true;
+      const base = inherited.find((b) => b.name.toLowerCase() === h.name.toLowerCase());
+      return entries.some((s) => s.name.toLowerCase() === h.name.toLowerCase()) || !base || h.value !== base.value || h.enabled !== base.enabled;
+    });
+  usePreventUnload(saveStatus !== "" || confirm !== null || (rows !== null && settings !== null
+    && JSON.stringify(stored(rows, settings.entries)) !== JSON.stringify(settings.entries)));
   const hiddenCount = (headerMode ? 2 : 0) + inherited.length;
   const last = displayed.at(-1);
   const tableRows = !last || last.name.trim() ? [...displayed, emptyHeader()] : displayed;
@@ -78,11 +89,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
       setError({ code: headerMode ? "validation.headers.name_required" : "validation.context.key_required" });
       return;
     }
-    const headers = next.filter((h) => h.name !== "" || h.value !== "").filter((h) => {
-      if (environmentId || !headerMode) return true;
-      const base = inherited.find((b) => b.name.toLowerCase() === h.name.toLowerCase());
-      return settings.entries.some((s) => s.name.toLowerCase() === h.name.toLowerCase()) || !base || h.value !== base.value || h.enabled !== base.enabled;
-    });
+    const headers = stored(next, settings.entries);
     const signature = JSON.stringify(headers);
     if (signature === lastQueued.current || (lastQueued.current === null && signature === JSON.stringify(settings.entries))) return;
     if (pendingCount > 0) { setConfirm({ headers, signature }); return; }
@@ -92,7 +99,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
     lastQueued.current = signature;
     const revision = version.current;
     setSaveStatus("common.saving"); setError("");
-    pending.current = pending.current.then(async () => {
+    pending.current = preventUnloadUntil(pending.current.then(async () => {
       try {
         if (headerMode) await ipc.saveHeaders(headers, environmentId);
         else await ipc.saveContext(headers.map((entry) => ({ ...entry, value: parseContextValue(entry.value) })), environmentId);
@@ -105,7 +112,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
         if (lastQueued.current === signature) lastQueued.current = null;
         if (mounted.current && revision === version.current) { setError(normalizeAppError(reason)); setSaveStatus(""); }
       }
-    });
+    }));
   };
   return <form className="panel" aria-label={headerMode ? (environmentId ? t("settingsTable.environmentHeaders") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.environmentContext") : t("settingsTable.globalContext"))} autoComplete="off" onSubmit={(event) => { event.preventDefault(); save(displayed); }}>
     <header className="panel-header"><span className="row gap-2">{environmentId ? <PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle> : <><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></>}

@@ -10,6 +10,7 @@ import { ipc, type Settings, type SettingsView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
+import { usePreventUnload } from "./windowState";
 
 export type Theme = "light" | "dark";
 
@@ -109,6 +110,8 @@ function LimitsPanel() {
   const [message, setMessage] = useState<SettingsMessage | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  usePreventUnload(saving || confirming || (draft !== null && view !== null
+    && JSON.stringify(draft) !== JSON.stringify(toDraft(view.settings))));
   useEffect(() => {
     ipc.settings().then((v) => { setView(v); setDraft(toDraft(v.settings)); }).catch((e) => setLoadError(normalizeAppError(e)));
   }, []);

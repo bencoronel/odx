@@ -20,6 +20,7 @@ import ServiceStatusBar from "./ServiceStatus";
 import DesktopNotices from "./DesktopNotices";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { discardRestoredWindowState, hasWindowState, useWindowState, usePreventUnload, useWindowLifecycle } from "./windowState";
 
 function initialPage(): Page {
   try {
@@ -45,7 +46,7 @@ export default function App() {
   const [error, setError] = useState<ErrorState>("");
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [page, setPage] = useState<Page>(initialPage);
-  const [shellVisited, setShellVisited] = useState(() => initialPage() === "shell");
+  const [shellVisited, setShellVisited] = useState(() => initialPage() === "shell" || hasWindowState("shell.tabs"));
 
   useEffect(() => { if (page === "shell") setShellVisited(true); }, [page]);
 
@@ -68,13 +69,15 @@ export default function App() {
   const [clients, setClients] = useState<Client[]>([]);
   const [services, setServices] = useState<ServiceStatus | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [writableOnly, setWritableOnly] = useState(false);
+  const [writableOnly, setWritableOnly] = useWindowState("app.writableOnly", false);
   const [shellTarget, setShellTarget] = useState<string | null>(null);
   const [decision, setDecision] = useState<{ approval: Pending; approve: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [creatingEnvironment, setCreatingEnvironment] = useState(false);
   const [modeDecision, setModeDecision] = useState<{ environment: Environment; mode: "temporary" | "permanent" } | null>(null);
   const [minutes, setMinutes] = useState("60");
+  useWindowLifecycle((error) => setError(normalizeAppError(error)));
+  usePreventUnload(status === "loading" || busy || creatingEnvironment || decision !== null || modeDecision !== null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -92,6 +95,7 @@ export default function App() {
       setServices(serviceStatus);
       setRefreshKey((k) => k + 1);
     } else {
+      discardRestoredWindowState();
       setEnvs([]);
       setPending([]);
       setClients([]);

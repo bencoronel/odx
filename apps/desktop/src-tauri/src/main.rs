@@ -90,16 +90,20 @@ fn main() {
             desktop::show_main(app)
         }))
         .manage(desktop.clone())
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                desktop::on_close_requested(window, api);
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                desktop::on_close_requested(window, api)
             }
+            tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                desktop::on_destroyed(window.app_handle())
+            }
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                desktop::remember_main_bounds(window)
+            }
+            _ => {}
         })
         .setup(move |app| {
-            #[cfg(target_os = "linux")]
-            desktop::disable_trackpad_zoom(app);
-            #[cfg(target_os = "linux")]
-            desktop::enable_clipboard_access(app);
+            desktop::configure_main(app.handle());
             desktop::setup_tray(app, &desktop);
             desktop::probe_notifications(app.handle().clone());
             let data_dir = if cfg!(debug_assertions) {
@@ -135,6 +139,10 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::desktop_ready,
+            commands::desktop_restore,
+            commands::desktop_suspend,
+            commands::desktop_cancel_suspend,
             commands::context_get,
             commands::context_set,
             commands::headers_get,
@@ -178,8 +186,8 @@ fn main() {
         .build(context)
         .expect("Odx failed")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { api, .. } = event
-                && desktop::hold_exit(app)
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event
+                && desktop::hold_exit(app, code)
             {
                 api.prevent_exit();
             }

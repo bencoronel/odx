@@ -7,6 +7,7 @@ import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { formatNumber } from "./i18n/format";
 import { ScopeFields, Snippet, scopeChanged, scopeOf, scopeValid, type SaveClient } from "./clientParts";
 import { relativeTime, useNow } from "./time";
+import { usePreventUnload } from "./windowState";
 
 export default function McpLocalPage({ clients, services, envs, busy, update }: {
   clients: Client[];
@@ -50,6 +51,7 @@ function Permissions({ local, envs, busy, save }: {
   const [error, setError] = useState<ErrorState>("");
   const changed = scopeChanged(scope, local);
   const locked = busy || saving;
+  usePreventUnload(changed || locked);
   return <form className="panel" aria-label={t("mcpLocal.permissions")} onSubmit={async (event) => {
     event.preventDefault();
     if (locked || !changed || !scopeValid(scope)) return;

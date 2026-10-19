@@ -118,7 +118,8 @@ pub async fn vault_change_password(
         .map_err(|_| AppError::new("app.password_change_failed"))
 }
 #[tauri::command]
-pub async fn vault_lock(core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+pub async fn vault_lock(app: tauri::AppHandle, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+    crate::desktop::clear_window_state(&app);
     core.lock().await;
     Ok(())
 }
@@ -488,4 +489,41 @@ mod error_contract_tests {
         assert_eq!(error.outcome, Some("uncertain"));
         assert!(error.detail.is_none());
     }
+}
+
+#[tauri::command]
+pub async fn desktop_restore(
+    app: tauri::AppHandle,
+    core: State<'_, Arc<Core>>,
+) -> Result<Option<String>, AppError> {
+    Ok(crate::desktop::restore_window_state(
+        &app,
+        core.status().await == "unlocked",
+    ))
+}
+#[tauri::command]
+pub async fn desktop_suspend(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    core: State<'_, Arc<Core>>,
+    ticket: u64,
+    snapshot: String,
+) -> Result<bool, AppError> {
+    crate::desktop::suspend_main(
+        &app,
+        &window,
+        ticket,
+        snapshot,
+        core.status().await == "unlocked",
+    )
+    .map_err(AppError::from)
+}
+#[tauri::command]
+pub fn desktop_cancel_suspend(app: tauri::AppHandle, ticket: u64) {
+    crate::desktop::cancel_suspend(&app, ticket);
+}
+
+#[tauri::command]
+pub fn desktop_ready(app: tauri::AppHandle) -> Option<u64> {
+    crate::desktop::pending_suspend(&app)
 }

@@ -14,6 +14,7 @@ import { formatRemaining, useNow } from "./time";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { formatDateTime } from "./i18n/format";
+import { useWindowState, usePreventUnload } from "./windowState";
 
 export default function EnvironmentsPage({ envs, pending = [], refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode }: {
   envs: Environment[];
@@ -33,8 +34,8 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   changeMode: (env: Environment, mode: WriteMode) => void;
 }) {
   const { t } = useTranslation();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
+  const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", null);
+  const [filter, setFilter] = useWindowState("environments.filter", "");
   const [rechecking, setRechecking] = useState(false);
   async function recheckAll() {
     setRechecking(true);
@@ -215,6 +216,7 @@ function ConnectionPanel({ env, busy, pendingCount, update }: { env: Environment
   const [confirming, setConfirming] = useState(false);
   const [collapsed, setCollapsed] = useCollapsed("connection");
   const [error, setError] = useState<ErrorState>("");
+  usePreventUnload(values !== null || busy);
   useEffect(() => {
     let active = true;
     ipc.environmentProxy(env.id).then((view) => { if (active) setProxyView(view); }).catch((reason) => { if (active) setError(normalizeAppError(reason)); });

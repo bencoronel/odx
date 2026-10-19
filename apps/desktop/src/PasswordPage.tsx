@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "./Icon";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
+import { usePreventUnload } from "./windowState";
 
 type PasswordMessage = { translationKey: "passwordPage.mismatch" | "passwordPage.updated" } | AppError;
 
@@ -12,6 +13,7 @@ export default function PasswordPage({ change, busy }: { change: (current: strin
   const [repeat, setRepeat] = useState("");
   const [message, setMessage] = useState<PasswordMessage | "">("");
   const [failed, setFailed] = useState(false);
+  usePreventUnload(busy || current !== "" || next !== "" || repeat !== "");
 
   return <form className="panel-body form-grid" onSubmit={async (event) => {
     event.preventDefault();

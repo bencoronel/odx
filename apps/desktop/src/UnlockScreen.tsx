@@ -3,6 +3,7 @@ import { Icon } from "./Icon";
 import { useTranslation } from "react-i18next";
 import { formatAppError, type ErrorState } from "./appError";
 import { LanguageSelect } from "./LanguageSelector";
+import { usePreventUnload } from "./windowState";
 
 export default function UnlockScreen({ status, busy, error, retry, submit }: {
   status: string;
@@ -15,6 +16,7 @@ export default function UnlockScreen({ status, busy, error, retry, submit }: {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  usePreventUnload(busy || password !== "" || confirm);
   const creating = status === "absent";
   const loading = status === "loading";
   const errorMessage = error ? formatAppError(error) : "";

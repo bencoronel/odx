@@ -9,6 +9,7 @@ import CopyButton from "./CopyButton";
 import { useTranslation } from "react-i18next";
 import { formatDateTime, formatNumber } from "./i18n/format";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
+import { useWindowState, usePreventUnload } from "./windowState";
 
 const MAX_LINES = 400;
 
@@ -78,9 +79,18 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
   envs: Environment[]; connectTo?: string | null; onConnectHandled?: () => void; visible?: boolean;
 }) {
   const { t } = useTranslation();
-  const [tabs, setTabs] = useState(() => [newTab()]);
-  const [activeId, setActiveId] = useState(tabs[0].id);
+  const [tabs, setTabs] = useWindowState("shell.tabs", () => [newTab()], (tabs) => tabs.map((tab) => ({
+    ...tab, busy: false, session: { ...tab.session, history: null, models: {}, fields: {} },
+  })));
+  // Restored entries keep their ids; new entries must not reuse them.
+  const seeded = useRef(false);
+  if (!seeded.current) {
+    seeded.current = true;
+    for (const tab of tabs) for (const entry of tab.session.entries) nextId = Math.max(nextId, entry.id + 1);
+  }
+  const [activeId, setActiveId] = useWindowState("shell.activeId", tabs[0].id);
   const [renaming, setRenaming] = useState<{ id: string; value: string; width: number } | null>(null);
+  usePreventUnload(tabs.some((tab) => tab.busy) || renaming !== null);
   const refreshTabs = () => setTabs((current) => [...current]);
   const select = (id: string) => setActiveId(id);
   const add = () => {
@@ -160,11 +170,12 @@ function ShellSession({ tab, envs, active, onChange, connectTo, onConnectHandled
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [session, setSession] = useState<Session>(tab.session);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useWindowState(`shell.${tab.id}.input`, "");
   const [cursor, setCursor] = useState<number | null>(null);
   const [busy, setBusyState] = useState(false);
   const setBusy = (value: boolean) => { if (!mounted.current) return; tab.busy = value; setBusyState(value); onChange(); };
-  const [confirming, setConfirming] = useState<Pending | null>(null);
+  const [confirming, setConfirming] = useWindowState<Pending | null>(`shell.${tab.id}.confirming`, null);
+  usePreventUnload(busy);
   const [menu, setMenu] = useState<Menu | null>(null);
   const menuList = useRef<HTMLUListElement>(null);
   const out = useRef<HTMLDivElement>(null);

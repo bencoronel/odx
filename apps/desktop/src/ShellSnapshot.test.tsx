@@ -1,0 +1,54 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import ShellPage from "./ShellPage";
+import { ipc, type Environment } from "./ipc";
+import { captureWindowState, restoreWindowState } from "./windowState";
+
+let snapshot: string | null = null;
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command) => command === "desktop_restore" ? snapshot : null) }));
+vi.mock("./ipc", () => ({ ipc: { shellHistory: vi.fn(async () => []), shellHistoryAdd: vi.fn(async () => undefined), check: vi.fn(async () => ({ status: "ok", latency_ms: 1 })), shell: vi.fn() } }));
+afterEach(cleanup);
+const command = (line: string) => {
+  const input = screen.getByRole("textbox", { name: "Command" });
+  fireEvent.change(input, { target: { value: line } });
+  fireEvent.keyDown(input, { key: "Enter" });
+};
+it("restores tabs, results, context, draft input and unconfirmed writes without replaying operations", async () => {
+  snapshot = null;
+  await restoreWindowState();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.method === "write" && !call.confirmed) throw { code: "confirmation_required" };
+    return { data: call.model === "ir.model" ? [{ model: "res.partner" }] : [{ id: 1, name: "Ada" }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+  });
+  const envs: Environment[] = [{ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true }];
+  const view = render(<ShellPage envs={envs} />);
+  command("\\c A");
+  await waitFor(() => expect(screen.getByText(/^Connected to A/)).toBeTruthy());
+  command('\\context {"lang":"es_ES"}');
+  command("read res.partner 1");
+  await waitFor(() => expect(screen.getByText("Ada", { exact: true })).toBeTruthy());
+  command("write res.partner [1] {'name':'Grace'}");
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Command" }), { target: { value: "unfinished command" } });
+  snapshot = JSON.stringify(captureWindowState());
+  const saved = JSON.parse(snapshot)["shell.tabs"][0].session;
+  expect(saved.context).toEqual({ lang: "es_ES" });
+  expect(saved.models).toEqual({});
+  expect(saved.fields).toEqual({});
+  expect(saved.history).toBeNull();
+  const calls = vi.mocked(ipc.shell).mock.calls.length;
+  view.unmount();
+  await restoreWindowState();
+  render(<ShellPage envs={envs} />);
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe("unfinished command");
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  expect(screen.getByText("Send to A? [y/N]")).toBeTruthy();
+  expect(within(screen.getByRole("tabpanel")).getByText("Ada", { exact: true })).toBeTruthy();
+  command("n");
+  command("\\context");
+  expect(screen.getByText('{"lang":"es_ES"}', { exact: true })).toBeTruthy();
+  expect(vi.mocked(ipc.shell).mock.calls).toHaveLength(calls);
+});

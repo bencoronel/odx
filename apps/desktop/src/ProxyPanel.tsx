@@ -5,6 +5,7 @@ import Select from "./Select";
 import { ipc, type ProxyInput, type ProxyView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type AppError, type ErrorState } from "./appError";
+import { usePreventUnload } from "./windowState";
 
 /** Returning the backend placeholder preserves saved credentials. */
 export const PROXY_MASK = "••••••••••••";
@@ -82,6 +83,8 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
   const [message, setMessage] = useState<ProxyMessage | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  usePreventUnload(saving || confirming || (stored !== undefined
+    && JSON.stringify(draft) !== JSON.stringify(stored ? draftFromView(stored) : null)));
   const reset = (view: ProxyView | null) => { setStored(view); setDraft(view ? draftFromView(view) : null); };
   useEffect(() => { ipc.proxy().then(reset).catch((e) => setLoadError(normalizeAppError(e))); }, []);
   if (loadError) return <section className="panel"><header className="panel-header"><h3>{t("proxy.title")}</h3></header>
