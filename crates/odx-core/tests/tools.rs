@@ -66,10 +66,14 @@ async fn reads_respect_grant_validate_before_sending_and_page() {
     let f = fixture().await;
     let (reader, _) = client(&f, &[&f.a], &[Capability::OdooRead]).await;
 
+    f.core
+        .set_environment_tags(&f.a, &["Cliente A".into(), "staging".into()])
+        .await
+        .unwrap();
     let envs = f.core.run_tool(&reader, "envs", json!({})).await.unwrap();
     assert_eq!(
         envs.data,
-        json!([{"name":"A","protocol":"legacy_jsonrpc","write_mode":"read_only","context":{"lang":"es_ES"}}])
+        json!([{"name":"A","protocol":"legacy_jsonrpc","write_mode":"read_only","context":{"lang":"es_ES"},"tags":["Cliente A","staging"]}])
     );
     assert!(
         !envs.data.to_string().contains("fixture-secret")

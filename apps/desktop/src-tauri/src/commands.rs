@@ -375,6 +375,30 @@ pub async fn environment_check(
     core.check_environment(&id).await.map_err(AppError::from)
 }
 #[tauri::command]
+pub async fn environment_check_draft(
+    draft: EnvironmentDraft,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::HealthReport, AppError> {
+    core.check_draft(draft).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn environment_databases(
+    url: String,
+    core: State<'_, Arc<Core>>,
+) -> Result<Vec<String>, AppError> {
+    core.list_databases(&url).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn environment_tags_set(
+    id: String,
+    tags: Vec<String>,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::EnvironmentView, AppError> {
+    core.set_environment_tags(&id, &tags)
+        .await
+        .map_err(AppError::from)
+}
+#[tauri::command]
 pub async fn clients_list(
     core: State<'_, Arc<Core>>,
 ) -> Result<Vec<odx_core::ClientView>, AppError> {

@@ -37,7 +37,7 @@ it("loads the next page by cursor and discards a page that arrives after the fil
 
 const envs = ["A", "B"].map((name) => ({
   id: `env-${name}`, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only" as const, has_secret: true,
+  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only" as const, has_secret: true, tags: [],
 }));
 const at = (env: string, model: string): ActivityEvent => ({
   ...event(model), request_id: `${env}:${model}`, environment_id: `env-${env}`, environment_name: env, operation: `read:${model}`,

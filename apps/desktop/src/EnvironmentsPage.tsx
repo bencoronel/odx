@@ -1,6 +1,6 @@
 import PanelTitle, { useCollapsed } from "./PanelTitle";
 import SettingsTable from "./SettingsTable";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ipc, type Environment, type EnvironmentDraft, type EnvironmentProxyInput, type EnvironmentProxyView, type Pending, type ProxyMode, type WriteMode } from "./ipc";
 import { ProxyFields, ProxyKindSelect, draftFromView, emptyProxy, proxyError, proxyInput, withKind, type ProxyDraft } from "./ProxyPanel";
 import EnvironmentForm, { ProtocolSelect, connectionComplete, protocolLabels, urlError, type ConnectionValues, type Protocol } from "./EnvironmentForm";
@@ -15,6 +15,8 @@ import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { formatDateTime } from "./i18n/format";
 import { useWindowState, usePreventUnload } from "./windowState";
+import TagEditor, { sameTag, uniqueTags } from "./TagEditor";
+import EnvironmentFilters from "./EnvironmentFilters";
 
 export default function EnvironmentsPage({ envs, pending = [], refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode }: {
   envs: Environment[];
@@ -24,7 +26,7 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   busy: boolean;
   creating: boolean;
   setCreating: (creating: boolean) => void;
-  save: (draft: EnvironmentDraft) => Promise<Environment>;
+  save: (draft: EnvironmentDraft, tags: string[]) => Promise<Environment>;
   update: (id: string, draft: EnvironmentDraft) => Promise<Environment>;
   remove: (id: string) => Promise<boolean>;
   clone: (id: string, name: string) => Promise<Environment>;
@@ -34,8 +36,14 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   changeMode: (env: Environment, mode: WriteMode) => void;
 }) {
   const { t } = useTranslation();
+  const [listWidth, setListWidth] = useListWidth();
   const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", null);
   const [filter, setFilter] = useWindowState("environments.filter", "");
+  const [tagFilter, setTagFilter] = useWindowState<string[]>("environments.tags", []);
+  // Tags differing only in case are one tag, shown with the first spelling.
+  const allTags = useMemo(() => uniqueTags(envs.flatMap((env) => env.tags)).sort((a, b) => a.localeCompare(b)), [envs]);
+  // Drop selected tags that no environment uses anymore.
+  const activeTags = useMemo(() => tagFilter.filter((tag) => allTags.some((other) => sameTag(other, tag))), [tagFilter, allTags]);
   const [rechecking, setRechecking] = useState(false);
   async function recheckAll() {
     setRechecking(true);
@@ -45,12 +53,38 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
     const q = filter.trim().toLowerCase();
     return envs
       .filter((env) => !writableOnly || env.write_mode === "temporary" || env.write_mode === "permanent")
-      .filter((env) => !q || [env.name, env.url, env.database, env.login].some((v) => v.toLowerCase().includes(q)));
-  }, [envs, filter, writableOnly]);
-  // Keep the detail selection within the filtered list.
-  const pool = visible.length ? visible : envs;
-  const selected = pool.find((env) => env.id === selectedId) ?? pool[0];
+      .filter((env) => activeTags.every((tag) => env.tags.some((other) => sameTag(other, tag))))
+      .filter((env) => !q || [env.name, env.url, env.database, env.login, ...env.tags].some((v) => v.toLowerCase().includes(q)))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [envs, filter, writableOnly, activeTags]);
+  const filtered = !!filter.trim() || activeTags.length > 0 || writableOnly;
+  function clearFilters() { setFilter(""); setTagFilter([]); setWritableOnly(false); }
+  // Filtering never replaces the chosen environment, which would discard its unsaved edits.
+  const selected = envs.find((env) => env.id === selectedId) ?? visible[0];
+  useEffect(() => { if (selected && selected.id !== selectedId) setSelectedId(selected.id); }, [selected, selectedId, setSelectedId]);
   function select(id: string) { setCreating(false); setSelectedId(id); }
+  const search = useRef<HTMLInputElement>(null);
+
+  // Ctrl+F or / focuses the search; Ctrl+N starts a new environment.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.altKey || event.shiftKey || document.querySelector('[role="alertdialog"]')) return;
+      const command = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      const typing = event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]");
+      if ((command && key === "f") || (!command && key === "/" && !typing)) {
+        if (!search.current) return;
+        event.preventDefault();
+        search.current.focus();
+        search.current.select();
+      } else if (command && key === "n") {
+        event.preventDefault();
+        if (!busy && !creating) setCreating(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, creating, setCreating]);
 
   if (envs.length === 0 && !creating) return <div className="empty">
     <span className="empty-icon"><Icon name="server" /></span>
@@ -61,32 +95,54 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
     </div>
   </div>;
 
-  return <div className="split">
+  return <div className="split" style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
     <aside className="list-pane" aria-label={t("environments.listLabel")}>
+      <ListResizer width={listWidth} setWidth={setListWidth} />
       <div className="list-toolbar">
         <div className="row gap-2">
-          <label className="search grow"><Icon name="search" /><input type="search" placeholder={t("environments.filterPlaceholder")} aria-label={t("environments.filterLabel")} value={filter} onChange={(e) => setFilter(e.target.value)} /></label>
+          <label className="search grow"><Icon name="search" /><input ref={search} type="search" aria-keyshortcuts="Control+F /" placeholder={t("environments.filterPlaceholder")} aria-label={t("environments.filterLabel")} value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && filter) { e.preventDefault(); setFilter(""); } }} />{!filter && <kbd className="search-kbd" aria-hidden="true">/</kbd>}</label>
+          <EnvironmentFilters envs={envs} tags={activeTags} setTags={setTagFilter} writableOnly={writableOnly} setWritableOnly={setWritableOnly} />
           <button type="button" className="btn sm icon-only" disabled={rechecking} onClick={() => void recheckAll()} aria-label={t("environments.checkAll")} data-tip={t("environments.checkAllHint")}><Icon name="refresh" className={rechecking ? "spin" : undefined} /></button>
-          <button type="button" className="btn primary sm icon-only" disabled={busy || creating} onClick={() => setCreating(true)} aria-label={t("environments.newEnvironment")} data-tip={t("environments.newEnvironment")}><Icon name="plus" /></button>
+          <button type="button" className="btn primary sm icon-only" disabled={busy || creating} onClick={() => setCreating(true)} aria-label={t("environments.newEnvironment")} aria-keyshortcuts="Control+N" data-tip={`${t("environments.newEnvironment")} · Ctrl+N`}><Icon name="plus" /></button>
         </div>
-        {writableOnly && <button type="button" className="chip chip-tone tone-warn filter-chip" onClick={() => setWritableOnly(false)} aria-label={t("environments.removeWriteFilter")}><Icon name="pencil" />{t("environments.freeWrites")}<Icon name="x" /></button>}
+        {filtered && <div className="active-filters">
+          {activeTags.map((tag) => <button key={tag} type="button" className="chip filter-chip" aria-label={t("environments.removeTagFilter", { tag })} onClick={() => setTagFilter(activeTags.filter((x) => x !== tag))}>{tag}<Icon name="x" /></button>)}
+          {writableOnly && <button type="button" className="chip chip-tone tone-warn filter-chip" onClick={() => setWritableOnly(false)} aria-label={t("environments.removeWriteFilter")}><Icon name="pencil" />{t("environments.freeWrites")}<Icon name="x" /></button>}
+          <div className="filter-summary"><span role="status">{t("environments.filterCount", { shown: visible.length, total: envs.length })}</span>
+            <button type="button" className="btn sm ghost" onClick={clearFilters}>{t("environments.clearFilters")}</button></div>
+        </div>}
       </div>
-      <ul className="env-list" role="listbox" aria-label={t("environments.environments")}>
-        {visible.map((env) => <li key={env.id} role="option" aria-selected={!creating && env.id === selected?.id}
-          tabIndex={0}
+      <ul className="env-list" role="listbox" aria-label={t("environments.environments")} onKeyDown={(e) => {
+        if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+        const options = [...e.currentTarget.querySelectorAll<HTMLElement>("[role=option]")];
+        const next = options[options.indexOf(document.activeElement as HTMLElement) + (e.key === "ArrowDown" ? 1 : -1)];
+        if (!next) return;
+        e.preventDefault();
+        next.focus();
+        select(next.dataset.id!);
+      }}>
+        {visible.map((env, index) => <li key={env.id} role="option" data-id={env.id} aria-selected={!creating && env.id === selected?.id}
+          // One tab stop; arrows move within the list.
+          tabIndex={env.id === selected?.id || (index === 0 && !visible.some((v) => v.id === selected?.id)) ? 0 : -1}
           onClick={() => select(env.id)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(env.id); } }}
         >
           <span className="env-avatar"><EnvIcon env={env} /><span className={`status-dot tone-${modeTone[env.write_mode]}`} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} /></span>
-          <span className="env-list-text"><strong>{env.name}</strong><small>{env.database}</small></span>
+          <span className="env-list-text"><strong>{env.name}</strong><small>{hostOf(env.url)} · {env.database}</small>
+            {env.tags.length > 0 && <span className="env-list-tags">
+              {env.tags.slice(0, LIST_TAGS).map((tag) => <span key={tag} className={`chip${activeTags.some((active) => sameTag(active, tag)) ? " match" : ""}`}>{tag}</span>)}
+              {env.tags.length > LIST_TAGS && <span className="chip" data-tip={env.tags.slice(LIST_TAGS).join(", ")}>+{env.tags.length - LIST_TAGS}</span>}
+            </span>}
+          </span>
           <HealthDot env={env} />
         </li>)}
-        {visible.length === 0 && <li className="list-empty">{t("environments.noMatches")}</li>}
+        {visible.length === 0 && <li className="list-empty">{t("environments.noMatches")}
+          {filtered && <button type="button" className="btn sm" onClick={clearFilters}>{t("environments.clearFilters")}</button>}</li>}
       </ul>
     </aside>
     <section className="detail-pane">
-      {creating ? <EnvironmentForm busy={busy} cancel={() => setCreating(false)} save={async (draft) => { setSelectedId((await save(draft)).id); }} />
-        : selected && <EnvironmentDetail key={selected.id} env={selected} busy={busy} pendingCount={pending.filter((p) => p.environment_id === selected.id).length} envNames={envs.map((e) => e.name)}
+      {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} cancel={() => setCreating(false)} save={async (draft, tags) => { setSelectedId((await save(draft, tags)).id); }} />
+        : selected && <EnvironmentDetail key={selected.id} env={selected} busy={busy} pendingCount={pending.filter((p) => p.environment_id === selected.id).length} envNames={envs.map((e) => e.name)} allTags={allTags}
           refresh={refresh}
           openShell={() => openShell(selected)}
           clone={async (name) => { setSelectedId((await clone(selected.id, name)).id); }}
@@ -97,17 +153,66 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   </div>;
 }
 
+const LIST_TAGS = 3;
+const LIST_WIDTH = { min: 220, max: 520, initial: 300 };
+const listWidthKey = "odx.environments.listWidth";
+const clampWidth = (width: number) => Math.round(Math.min(LIST_WIDTH.max, Math.max(LIST_WIDTH.min, width)));
+
+/** List width, remembered on this computer. */
+function useListWidth(): [number, (width: number, persist?: boolean) => void] {
+  const [width, set] = useState(() => {
+    try { const stored = Number(localStorage.getItem(listWidthKey)); return stored ? clampWidth(stored) : LIST_WIDTH.initial; } catch { return LIST_WIDTH.initial; }
+  });
+  return [width, (next, persist = true) => {
+    const value = clampWidth(next);
+    set(value);
+    if (persist) try { localStorage.setItem(listWidthKey, String(value)); } catch { /* Optional preference. */ }
+  }];
+}
+
+/** Drag, arrow keys or double-click (reset) to resize the list. */
+function ListResizer({ width, setWidth }: { width: number; setWidth: (width: number, persist?: boolean) => void }) {
+  const { t } = useTranslation();
+  return <div className="list-resizer" role="separator" aria-orientation="vertical" tabIndex={0}
+    aria-label={t("environments.resizeList")} aria-valuemin={LIST_WIDTH.min} aria-valuemax={LIST_WIDTH.max} aria-valuenow={width}
+    onPointerDown={(e) => {
+      e.preventDefault();
+      const handle = e.currentTarget;
+      const start = e.clientX - width;
+      handle.setPointerCapture(e.pointerId);
+      let last = width;
+      // Save once on release, not on every pointer move.
+      const move = (event: PointerEvent) => { last = event.clientX - start; setWidth(last, false); };
+      const stop = () => { setWidth(last); handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", stop); handle.removeEventListener("pointercancel", stop); };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", stop);
+      handle.addEventListener("pointercancel", stop);
+    }}
+    onDoubleClick={() => setWidth(LIST_WIDTH.initial)}
+    onKeyDown={(e) => {
+      const step = e.shiftKey ? 64 : 16;
+      if (e.key === "ArrowLeft") setWidth(width - step);
+      else if (e.key === "ArrowRight") setWidth(width + step);
+      else if (e.key === "Home") setWidth(LIST_WIDTH.min);
+      else if (e.key === "End") setWidth(LIST_WIDTH.max);
+      else return;
+      e.preventDefault();
+    }} />;
+}
+const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
+
 /** Build a saved environment draft; an empty credential preserves it. Context is edited separately and ignored on update. */
 function draftFrom(env: Environment, changes: Partial<EnvironmentDraft>): EnvironmentDraft {
   return { name: env.name, url: env.url, database: env.database, login: env.login, secret: "", protocol: env.protocol as EnvironmentDraft["protocol"], context: env.context, ...changes };
 }
 
-function EnvironmentDetail({ env, pendingCount, refresh, busy, envNames, update, remove, clone, openShell, changeMode }: {
+function EnvironmentDetail({ env, pendingCount, refresh, busy, envNames, allTags, update, remove, clone, openShell, changeMode }: {
   env: Environment;
   pendingCount: number;
   refresh: () => Promise<void>;
   busy: boolean;
   envNames: string[];
+  allTags: string[];
   clone: (name: string) => Promise<void>;
   openShell: () => void;
   update: (draft: EnvironmentDraft) => Promise<void>;
@@ -119,6 +224,15 @@ function EnvironmentDetail({ env, pendingCount, refresh, busy, envNames, update,
   const now = useNow(Number.isFinite(until));
   const [deleting, setDeleting] = useState(false);
   const [cloneName, setCloneName] = useState<string | null>(null);
+  const [tagError, setTagError] = useState<ErrorState>("");
+  // Edits build on the latest local tags, not on props that update only after the save round trip.
+  const [tags, setTags] = useState(env.tags);
+  useEffect(() => setTags(env.tags), [env.tags]);
+  const saveTags = (next: string[]) => {
+    setTags(next);
+    setTagError("");
+    ipc.setTags(env.id, next).then(refresh).catch((reason) => { setTags(env.tags); setTagError(normalizeAppError(reason)); });
+  };
   const suggestedName = () => {
     let name = t("environments.copyName", { name: env.name });
     for (let i = 2; envNames.includes(name); i++) name = t("environments.copyNameNumbered", { name: env.name, index: i });
@@ -132,11 +246,13 @@ function EnvironmentDetail({ env, pendingCount, refresh, busy, envNames, update,
         <h2 className="row gap-2 min-w-0"><span className="truncate">{env.name}</span>
           <button type="button" className="icon-btn sm open-link" onClick={() => void ipc.openUrl(env.id).catch(() => undefined)} data-tip={t("environments.openBrowserTip", { url: env.url })} aria-label={t("environments.openBrowser")}><Icon name="external" /></button>
         </h2>
+        <TagEditor tags={tags} suggestions={allTags} disabled={busy} collapsed onChange={saveTags} />
+        {tagError && <small className="hint text-danger" role="alert">{formatAppError(tagError)}</small>}
       </div>
       <HealthChip env={env} />
       <button className="btn sm icon-only" disabled={busy} onClick={openShell} data-tip={t("environments.openShell")} aria-label={t("environments.openShell")}><Icon name="terminal" /></button>
       <button className="btn sm icon-only" disabled={busy} onClick={() => setCloneName(suggestedName())} data-tip={t("environments.cloneHint")} aria-label={t("environments.cloneEnvironment")}><Icon name="copy" /></button>
-      <button className="btn sm danger-ghost" disabled={busy} onClick={() => setDeleting(true)}><Icon name="trash" />{t("common.delete")}</button>
+      <button className="btn sm icon-only danger-ghost" disabled={busy} onClick={() => setDeleting(true)} data-tip={t("environments.deleteEnvironment")} aria-label={t("common.delete")}><Icon name="trash" /></button>
     </header>
 
     <section className="panel">

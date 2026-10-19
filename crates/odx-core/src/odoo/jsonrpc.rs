@@ -374,6 +374,26 @@ impl OdooClient {
             .and_then(Value::as_str)
             .map(|v| v.chars().take(64).collect()))
     }
+    /// `db.list` over JSON-RPC, falling back to XML-RPC where `/jsonrpc` is missing.
+    pub async fn list_databases(&self, env: &Environment) -> Result<Vec<String>> {
+        let value = match self.rpc(env, "db", "list", json!([])).await {
+            Err(OdxError::HttpStatus { status: 404 | 405 }) => {
+                xmlrpc::call(self, env, "db", "list", &[], MAX_RESPONSE)
+                    .await?
+                    .0
+            }
+            other => other?,
+        };
+        let names = value
+            .as_array()
+            .ok_or_else(|| OdxError::Upstream("invalid database list".into()))?;
+        Ok(names
+            .iter()
+            .filter_map(Value::as_str)
+            .take(500)
+            .map(str::to_owned)
+            .collect())
+    }
     /// Discover using version/authentication probes only. Only 404/405, or a redirect from the credential-less `/web/version` probe (Odoo ≤18), allow another endpoint; JSON-2 401 requires successful RPC authentication with the same credential before accepting legacy RPC.
     pub(crate) async fn detect_protocol<F, Fut>(
         &self,

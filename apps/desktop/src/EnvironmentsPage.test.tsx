@@ -2,13 +2,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, it, vi } from "vitest";
 import EnvironmentsPage from "./EnvironmentsPage";
 import { ipc, type Environment } from "./ipc";
-vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", proxy: null, inherited: null }), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", proxy: null, inherited: null }), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("./HealthChip", () => ({ HealthChip: () => null, HealthDot: () => null, checkHealth: vi.fn(), forgetHealth: vi.fn() }));
 afterEach(() => {
   cleanup();
   for (const key of ["connection", "context", "headers"]) localStorage.removeItem(`odx.collapsed.${key}`);
 });
-const env: Environment = { id: "fixture", name: "Fixture", url: "https://example.test", database: "fixture-db", login: "fixture-user", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true };
+const env: Environment = { id: "fixture", name: "Fixture", url: "https://example.test", database: "fixture-db", login: "fixture-user", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [] };
 function page() {
   return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} writableOnly={false} setWritableOnly={vi.fn()} changeMode={vi.fn()} />;
 }
@@ -221,4 +221,132 @@ it("asks before saving the connection when the environment has pending requests"
   expect(update).not.toHaveBeenCalled();
   fireEvent.click(within(confirm).getByRole("button", { name: "Save and revoke" }));
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+});
+
+it("keeps the environment being edited when the filter excludes it", () => {
+  localStorage.setItem("odx.collapsed.connection", "0");
+  const other: Environment = { ...env, id: "other", name: "Other", database: "other-db" };
+  render(withProps({ envs: [env, other] }));
+  fireEvent.click(within(screen.getByRole("form", { name: "Connection" })).getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "other" } });
+  expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
+  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "nothing" } });
+  expect(screen.getByText("No matches")).toBeTruthy();
+  expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
+});
+
+it("filters by tags and edits the selected environment's tags", async () => {
+  const a: Environment = { ...env, id: "a", name: "Alpha", tags: ["prod", "Cliente A"] };
+  const b: Environment = { ...env, id: "b", name: "Beta", tags: ["staging", "Cliente A"] };
+  const refresh = vi.fn().mockResolvedValue(undefined);
+  render(withProps({ envs: [a, b], refresh }));
+  const list = screen.getByRole("listbox", { name: "Environments" });
+  const filterButton = screen.getByRole("button", { name: "Filters" });
+  fireEvent.click(filterButton);
+  const panel = screen.getByRole("dialog", { name: "Filters" });
+  const tagBoxes = within(within(panel).getByRole("list", { name: "Filter by tag" })).getAllByRole("checkbox");
+  expect(tagBoxes.map((box) => box.closest("label")!.textContent)).toEqual(["Cliente A2", "prod1", "staging1"]);
+  fireEvent.click(within(panel).getByRole("checkbox", { name: /Cliente A/ }));
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  fireEvent.click(within(panel).getByRole("checkbox", { name: /staging/ }));
+  expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([expect.stringContaining("Beta")]);
+  expect(filterButton.textContent).toContain("2");
+  // Escape closes the panel; active filters stay removable from the toolbar.
+  fireEvent.keyDown(panel, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter staging" }));
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: "Remove filter Cliente A" })).toBeNull();
+  // Text search also matches tags.
+  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "staging" } });
+  expect(within(list).getAllByRole("option")).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole("button", { name: "Remove tag prod" }));
+  await waitFor(() => expect(ipc.setTags).toHaveBeenCalledWith("a", ["Cliente A"]));
+  await waitFor(() => expect(refresh).toHaveBeenCalled());
+});
+
+it("summarizes and clears filters, shows host and tags, and moves with arrow keys", () => {
+  const setWritableOnly = vi.fn();
+  const envs: Environment[] = ["Gamma", "Alpha", "Beta"].map((name) => ({ ...env, id: name, name, url: `https://${name.toLowerCase()}.example.test`, tags: name === "Beta" ? ["a", "b", "c", "d"] : [] }));
+  render(withProps({ envs, setWritableOnly }));
+  const list = screen.getByRole("listbox", { name: "Environments" });
+  const options = () => within(list).getAllByRole("option");
+  expect(options().map((o) => o.querySelector("strong")!.textContent)).toEqual(["Alpha", "Beta", "Gamma"]);
+  expect(options()[1].textContent).toContain("beta.example.test · fixture-db");
+  expect(options()[1].textContent).toContain("+1");
+  expect(options().map((o) => o.tabIndex)).toEqual([0, -1, -1]);
+  options()[0].focus();
+  fireEvent.keyDown(options()[0], { key: "ArrowDown" });
+  expect(document.activeElement).toBe(options()[1]);
+  expect(options()[1].getAttribute("aria-selected")).toBe("true");
+
+  const search = screen.getByRole("searchbox", { name: "Filter environments" });
+  fireEvent.change(search, { target: { value: "zzz" } });
+  expect(screen.getByRole("status").textContent).toContain("0 of 3 environments");
+  fireEvent.click(within(list).getByRole("button", { name: "Clear filters" }));
+  expect((search as HTMLInputElement).value).toBe("");
+  expect(setWritableOnly).toHaveBeenCalledWith(false);
+  fireEvent.change(search, { target: { value: "gam" } });
+  fireEvent.keyDown(search, { key: "Escape" });
+  expect((search as HTMLInputElement).value).toBe("");
+});
+
+it("resizes the list with the keyboard, clamps and remembers the width", () => {
+  localStorage.removeItem("odx.environments.listWidth");
+  render(withProps({}));
+  const handle = screen.getByRole("separator", { name: "Resize environment list" });
+  expect(handle.getAttribute("aria-valuenow")).toBe("300");
+  fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
+  expect(handle.getAttribute("aria-valuenow")).toBe("364");
+  fireEvent.keyDown(handle, { key: "End" });
+  expect(handle.getAttribute("aria-valuenow")).toBe("520");
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  expect(handle.getAttribute("aria-valuenow")).toBe("520");
+  expect(localStorage.getItem("odx.environments.listWidth")).toBe("520");
+  cleanup();
+  render(withProps({}));
+  expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("520");
+  fireEvent.doubleClick(screen.getByRole("separator"));
+  expect(screen.getByRole("separator").getAttribute("aria-valuenow")).toBe("300");
+  localStorage.removeItem("odx.environments.listWidth");
+});
+
+it("focuses the search with Ctrl+F or / and starts a new environment with Ctrl+N", () => {
+  const setCreating = vi.fn();
+  render(withProps({ setCreating }));
+  const search = screen.getByRole("searchbox", { name: "Filter environments" });
+  fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+  expect(document.activeElement).toBe(search);
+  search.blur();
+  fireEvent.keyDown(document.body, { key: "/" });
+  expect(document.activeElement).toBe(search);
+  // While typing, / is just a character.
+  fireEvent.change(search, { target: { value: "a" } });
+  const event = new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
+  search.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+  fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+  expect(setCreating).toHaveBeenCalledWith(true);
+});
+
+it("keeps quick tag edits and treats tags differing in case as one", async () => {
+  const a: Environment = { ...env, id: "a", name: "Alpha", tags: ["Prod", "x", "y"] };
+  const b: Environment = { ...env, id: "b", name: "Beta", tags: ["prod"] };
+  vi.mocked(ipc.setTags).mockClear();
+  // Saves never finish, so props keep the old tags.
+  vi.mocked(ipc.setTags).mockReturnValue(new Promise(() => {}));
+  render(withProps({ envs: [a, b] }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove tag x" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove tag y" }));
+  expect(vi.mocked(ipc.setTags).mock.calls.at(-1)).toEqual(["a", ["Prod"]]);
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  const box = screen.getByRole("checkbox", { name: /Prod/ });
+  expect(box.closest("label")!.textContent).toBe("Prod2");
+  fireEvent.click(box);
+  expect(within(screen.getByRole("listbox", { name: "Environments" })).getAllByRole("option")).toHaveLength(2);
+  vi.mocked(ipc.setTags).mockResolvedValue(undefined as never);
 });

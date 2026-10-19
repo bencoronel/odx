@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));
 const envs: Environment[] = ["A", "B"].map((name) => ({
   id: name, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true,
+  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [],
 }));
 beforeEach(() => {
   vi.resetAllMocks();

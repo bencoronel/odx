@@ -44,6 +44,8 @@ pub struct Environment {
     pub write_mode: WriteMode,
     #[serde(default)]
     pub write_until: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub revision: u64,
     #[serde(skip)]
     pub(crate) secret: crate::security::Secret,
@@ -62,6 +64,7 @@ impl std::fmt::Debug for Environment {
             .field("context", &self.context)
             .field("write_mode", &self.write_mode)
             .field("write_until", &self.write_until)
+            .field("tags", &self.tags)
             .field("revision", &self.revision)
             .field("secret", &"[redacted]")
             .field("proxy", &self.proxy)
@@ -128,21 +131,7 @@ impl EnvironmentDraft {
                 "context must be a JSON object",
             ));
         }
-        let url = Url::parse(&self.url).map_err(|_| {
-            OdxError::validation("validation.environment.url_invalid", "invalid URL")
-        })?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(OdxError::validation(
-                "validation.environment.url_restricted",
-                "URL must use HTTP(S) without user, password, query or fragment",
-            ));
-        }
+        validate_url(&self.url)?;
         if serde_json::to_vec(&self.context)?.len() > 1_048_576 {
             return Err(OdxError::validation(
                 "validation.context.too_large",
@@ -168,11 +157,56 @@ impl EnvironmentDraft {
             context: self.context.clone(),
             write_mode: WriteMode::ReadOnly,
             write_until: None,
+            tags: Vec::new(),
             revision: 1,
             secret,
             proxy: Default::default(),
         })
     }
+}
+
+/// Odoo base URL: HTTP(S) with a host and no credentials, query or fragment.
+pub fn validate_url(url: &str) -> Result<()> {
+    let url = Url::parse(url)
+        .map_err(|_| OdxError::validation("validation.environment.url_invalid", "invalid URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(OdxError::validation(
+            "validation.environment.url_restricted",
+            "URL must use HTTP(S) without user, password, query or fragment",
+        ));
+    }
+    Ok(())
+}
+
+pub const MAX_TAGS: usize = 20;
+pub const MAX_TAG_CHARS: usize = 32;
+/// Trimmed, nonempty tags without case-insensitive duplicates, keeping first spelling and order.
+pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        if tag.chars().count() > MAX_TAG_CHARS {
+            return Err(OdxError::validation(
+                "validation.environment.tag_too_long",
+                "tags are limited to 32 characters",
+            ));
+        }
+        if !out.iter().any(|t| t.to_lowercase() == tag.to_lowercase()) {
+            out.push(tag.to_owned());
+        }
+    }
+    if out.len() > MAX_TAGS {
+        return Err(OdxError::validation(
+            "validation.environment.too_many_tags",
+            "an environment can have at most 20 tags",
+        ));
+    }
+    Ok(out)
 }
 
 impl Drop for EnvironmentDraft {
@@ -322,6 +356,8 @@ struct StoredEnvironment {
     write_mode: WriteMode,
     #[serde(default)]
     write_until: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    tags: Vec<String>,
     revision: u64,
     secret: crate::security::Secret,
     #[serde(default)]
@@ -343,6 +379,7 @@ impl From<&Environment> for StoredEnvironment {
             context: value.context.clone(),
             write_mode: value.write_mode,
             write_until: value.write_until,
+            tags: value.tags.clone(),
             revision: value.revision,
             secret: value.secret.clone(),
             proxy: value.proxy.clone(),
@@ -365,6 +402,7 @@ impl From<StoredEnvironment> for Environment {
             context: value.context,
             write_mode: value.write_mode,
             write_until: value.write_until,
+            tags: value.tags,
             revision: value.revision,
             secret: value.secret,
             proxy: value.proxy,
@@ -434,6 +472,7 @@ impl Default for Environment {
             context: empty_object(),
             write_mode: WriteMode::ReadOnly,
             write_until: None,
+            tags: Vec::new(),
             revision: 0,
             secret: Default::default(),
             proxy: Default::default(),

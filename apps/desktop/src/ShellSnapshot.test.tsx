@@ -21,7 +21,7 @@ it("restores tabs, results, context, draft input and unconfirmed writes without 
     if (call.method === "write" && !call.confirmed) throw { code: "confirmation_required" };
     return { data: call.model === "ir.model" ? [{ model: "res.partner" }] : [{ id: 1, name: "Ada" }], write: false, upstream_ms: 1, upstream_bytes: 2 };
   });
-  const envs: Environment[] = [{ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true }];
+  const envs: Environment[] = [{ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [] }];
   const view = render(<ShellPage envs={envs} />);
   command("\\c A");
   await waitFor(() => expect(screen.getByText(/^Connected to A/)).toBeTruthy());

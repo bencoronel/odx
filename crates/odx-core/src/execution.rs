@@ -35,6 +35,8 @@ pub struct EnvironmentView {
     pub write_mode: WriteMode,
     pub write_until: Option<chrono::DateTime<Utc>>,
     pub has_secret: bool,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 impl EnvironmentView {
     /// View with the effective mode at the vault expiry clock's `now`.
@@ -51,6 +53,7 @@ impl EnvironmentView {
             write_mode: e.effective_write_mode(now),
             write_until: e.write_until,
             has_secret: !e.secret.is_empty(),
+            tags: e.tags.clone(),
         }
     }
 }
@@ -523,6 +526,7 @@ impl Core {
         updated.disabled_context = old.disabled_context.clone();
         updated.headers = old.headers.clone();
         updated.proxy = old.proxy.clone();
+        updated.tags = old.tags.clone();
         updated.id = old.id.clone();
         updated.revision = old.revision + 1;
         updated.write_mode = old.write_mode;
@@ -577,6 +581,25 @@ impl Core {
         })?;
         self.environment_changed(s, &[id.to_owned()]).await;
         Ok(())
+    }
+    /// Tags only organize the list; they keep the revision and pending approvals.
+    pub async fn set_environment_tags(&self, id: &str, tags: &[String]) -> Result<EnvironmentView> {
+        let tags = crate::config::normalize_tags(tags)?;
+        let mut s = self.inner.lock().await;
+        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        let now = v.now();
+        let mut view = None;
+        v.update(|data| {
+            let env = data
+                .environments
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or(OdxError::EnvironmentNotFound)?;
+            env.tags = tags;
+            view = Some(EnvironmentView::new(env, now));
+            Ok(())
+        })?;
+        view.ok_or(OdxError::EnvironmentNotFound)
     }
     pub async fn clone_environment(&self, id: &str, new_name: &str) -> Result<EnvironmentView> {
         if new_name.trim().is_empty() {
@@ -1005,6 +1028,58 @@ impl Core {
         let permits = self.limits.acquire(&env.id).await?;
         self.assert_environment_current(&env.id, env.revision, session)
             .await?;
+        let report = self.health(&env, resolved, started).await;
+        drop(permits);
+        Ok(report)
+    }
+    /// Check an unsaved draft like a new environment (global headers and proxy) without persisting anything.
+    pub async fn check_draft(&self, draft: EnvironmentDraft) -> Result<HealthReport> {
+        let env = self.draft_connection(draft.into_environment()?).await?;
+        let started = std::time::Instant::now();
+        let permits = self.limits.acquire(&env.id).await?;
+        let resolved = match env.protocol {
+            crate::config::Protocol::Auto => self
+                .odoo
+                .detect_protocol(&env, || async { Ok(()) })
+                .await
+                .map(|protocol| Environment {
+                    protocol,
+                    ..env.clone()
+                }),
+            _ => Ok(env.clone()),
+        };
+        let report = self.health(&env, resolved, started).await;
+        drop(permits);
+        self.odoo.invalidate_environment(&env.id).await;
+        Ok(report)
+    }
+    /// Databases listed by an Odoo server, unauthenticated; servers with `list_db = False` refuse.
+    pub async fn list_databases(&self, url: &str) -> Result<Vec<String>> {
+        crate::config::validate_url(url)?;
+        let env = self
+            .draft_connection(Environment {
+                id: Uuid::new_v4().to_string(),
+                url: url.trim_end_matches('/').into(),
+                ..Default::default()
+            })
+            .await?;
+        let _permits = self.limits.acquire(&env.id).await?;
+        self.odoo.list_databases(&env).await
+    }
+    /// Apply global headers and the inherited proxy to an environment that is not in the vault.
+    async fn draft_connection(&self, mut env: Environment) -> Result<Environment> {
+        let s = self.inner.lock().await;
+        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+        env.headers = crate::headers::merge(&data.global_headers, &[]);
+        env.proxy = data.effective_proxy(&env);
+        Ok(env)
+    }
+    async fn health(
+        &self,
+        env: &Environment,
+        resolved: Result<Environment>,
+        started: std::time::Instant,
+    ) -> HealthReport {
         let version = match &resolved {
             Ok(env) => self.odoo.version(env).await,
             Err(_) => Ok(None),
@@ -1032,7 +1107,7 @@ impl Core {
             error_code: error.as_ref().map(|e| e.code().to_owned()),
             error_params: error.as_ref().map(OdxError::ui_params),
         };
-        let result = match resolved {
+        match resolved {
             Err(error @ OdxError::AuthenticationRejected) => {
                 report("auth_failed", None, Some(error))
             }
@@ -1044,9 +1119,7 @@ impl Core {
                     Err(error) => report("auth_failed", server_version, Some(error)),
                 },
             },
-        };
-        drop(permits);
-        Ok(result)
+        }
     }
     /// Resolve transport before argument validation. Persist configuration only, without changing revision or permissions.
     pub(crate) async fn resolve_protocol(

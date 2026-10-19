@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 export type IconName = "server" | "check" | "clients" | "activity" | "settings" | "lock" | "unlock" | "sun" | "moon" | "refresh" | "arrow" | "shield"
-  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown";
+  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown" | "filter";
 
 const paths: Record<IconName, string> = {
   server: "M4 4h16v6H4z M4 14h16v6H4z M8 7h.01 M8 17h.01",
@@ -19,6 +19,7 @@ const paths: Record<IconName, string> = {
   plus: "M12 5v14 M5 12h14",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14 M20 20l-4-4",
   x: "M6 6l12 12 M18 6L6 18",
+  filter: "M4 5h16l-6 7.5V19l-4 1.5v-8z",
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 7v5l3 2",
   database: "M12 8c4.4 0 8-1.3 8-3s-3.6-3-8-3-8 1.3-8 3 3.6 3 8 3 M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1",

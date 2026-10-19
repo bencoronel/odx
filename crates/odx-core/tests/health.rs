@@ -81,3 +81,78 @@ async fn health_check_reports_reachability_and_credentials_without_leaking_secre
     core.lock().await;
     assert!(core.check_environment(&ok.id).await.is_err());
 }
+
+#[tokio::test]
+async fn draft_check_and_database_list_persist_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sim = support::simulator().await;
+    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+    core.create("fictional master password").await.unwrap();
+
+    assert_eq!(
+        core.list_databases(&format!("{}/", sim.url)).await.unwrap(),
+        ["base-a", "base-b"]
+    );
+    assert!(core.list_databases("ftp://example.test").await.is_err());
+    // Servers without /jsonrpc answer over XML-RPC.
+    let xml_only = support::protocol_simulator_with_status(17, Some(404), None).await;
+    assert_eq!(
+        core.list_databases(&xml_only.url).await.unwrap(),
+        ["base-a", "base-b"]
+    );
+    assert!(xml_only.requests.lock().unwrap()[0].contains("<methodName>list</methodName>"));
+    let report = core
+        .check_draft(draft("Draft", &sim.url, "fixture-secret"))
+        .await
+        .unwrap();
+    assert_eq!(report.status, "ok");
+    let report = core
+        .check_draft(draft("Draft", &sim.url, "wrong-fixture-secret"))
+        .await
+        .unwrap();
+    assert_eq!(report.status, "auth_failed");
+    assert!(core.environments().await.unwrap().is_empty());
+    assert_eq!(sim.counts.queries(), 0);
+}
+
+#[tokio::test]
+async fn tags_are_normalized_and_persisted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sim = support::simulator().await;
+    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+    core.create("fictional master password").await.unwrap();
+    let env = core
+        .save_environment(draft("Tagged", &sim.url, "fixture-secret"))
+        .await
+        .unwrap();
+    let tags = [" Cliente A ", "prod", "cliente a", ""].map(String::from);
+    let view = core.set_environment_tags(&env.id, &tags).await.unwrap();
+    assert_eq!(view.tags, ["Cliente A", "prod"]);
+    assert!(
+        core.set_environment_tags(&env.id, &["x".repeat(33)])
+            .await
+            .is_err()
+    );
+    assert!(
+        core.set_environment_tags(&env.id, &(0..21).map(|i| i.to_string()).collect::<Vec<_>>())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        core.environments().await.unwrap()[0].tags,
+        ["Cliente A", "prod"]
+    );
+    // Connection edits keep tags.
+    let updated = core
+        .update_environment(&env.id, draft("Renamed", &sim.url, ""))
+        .await
+        .unwrap();
+    assert_eq!(updated.tags, ["Cliente A", "prod"]);
+    // Tags survive locking and reopening the vault.
+    core.lock().await;
+    core.unlock("fictional master password").await.unwrap();
+    assert_eq!(
+        core.environments().await.unwrap()[0].tags,
+        ["Cliente A", "prod"]
+    );
+}

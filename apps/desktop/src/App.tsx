@@ -198,9 +198,11 @@ export default function App() {
         busy={busy}
         creating={creatingEnvironment}
         setCreating={setCreatingEnvironment}
-        save={(draft) => mutate(async () => {
+        save={(draft, tags) => mutate(async () => {
           const created = await ipc.saveEnvironment(draft);
           setCreatingEnvironment(false);
+          // The environment already exists; report a tag failure without reopening the form.
+          if (tags.length) await ipc.setTags(created.id, tags).catch((reason) => setError(normalizeAppError(reason)));
           return created;
         })}
         update={(id, draft) => mutate(() => ipc.updateEnvironment(id, draft))}

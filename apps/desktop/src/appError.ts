@@ -80,6 +80,8 @@ const codeKeys: Record<string, string> = {
   "validation.environment.temporary_deadline_required": "errors.validation.environmentTemporaryDeadlineRequired",
   "validation.environment.url_invalid": "errors.validation.environmentUrlInvalid",
   "validation.environment.url_restricted": "errors.validation.environmentUrlRestricted",
+  "validation.environment.tag_too_long": "errors.validation.environmentTagTooLong",
+  "validation.environment.too_many_tags": "errors.validation.environmentTooManyTags",
   "validation.environment.favicon_url_not_allowed": "errors.validation.environmentFaviconUrlNotAllowed",
   "validation.environment.api_key_header_invalid": "errors.validation.environmentApiKeyHeaderInvalid",
   "validation.environment.database_header_invalid": "errors.validation.environmentDatabaseHeaderInvalid",

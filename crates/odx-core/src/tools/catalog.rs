@@ -74,7 +74,7 @@ fn describe(name: &str) -> (&'static str, &'static str, bool, bool) {
     match name {
         "envs" => (
             "Environments",
-            "Odoo environments granted to this client and their write modes. Makes no Odoo calls.",
+            "Odoo environments granted to this client, with their write modes and tags. Makes no Odoo calls.",
             true,
             false,
         ),
@@ -704,6 +704,7 @@ impl Core {
                     "protocol": if e.protocol == crate::config::Protocol::Auto { e.detected_protocol.unwrap_or(e.protocol) } else { e.protocol },
                     "write_mode": e.effective_write_mode(now),
                     "context": e.context,
+                    "tags": e.tags,
                 })
             })
             .collect();

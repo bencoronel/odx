@@ -239,7 +239,15 @@
     "keepSecretPlaceholder": "Leave blank to keep the saved credential.",
     "savedCredential": "Saved credential",
     "savedCredentialHint": "Credential saved\nEncrypted in the vault and never shown",
-    "noCredential": "No credential"
+    "noCredential": "No credential",
+    "testConnection": "Test connection",
+    "loadDatabases": "Load databases from the server",
+    "databasesHint": "Type the name or load them from the server.",
+    "databasesHidden": "The server does not list its databases; type the name.",
+    "testNeeds": "Fill in URL, database, user and API key to test.",
+    "testOk": "Connected · Odoo {{version}} · {{latency}} ms",
+    "databasesFound_one": "The server has 1 database; pick it or type another.",
+    "databasesFound_other": "The server has {{count}} databases; pick one or type another."
   },
   "settingsPage": {
     "general": "General",
@@ -480,7 +488,18 @@
     "directProxyHint": "Direct\nDoes not use the global proxy",
     "proxyDirect": "Direct",
     "proxyOwn": "Custom · {{url}}",
-    "proxyInherit": "Inherit · {{proxy}}"
+    "proxyInherit": "Inherit · {{proxy}}",
+    "tags": "Tags",
+    "addTag": "Add tag",
+    "removeTag": "Remove tag {{tag}}",
+    "tagFilter": "Filter by tag",
+    "resizeList": "Resize environment list",
+    "filters": "Filters",
+    "searchTags": "Search tags",
+    "noTagsYet": "No tags yet. Add them from an environment’s details.",
+    "removeTagFilter": "Remove filter {{tag}}",
+    "clearFilters": "Clear filters",
+    "filterCount": "{{shown}} of {{total}} environments"
   },
   "headerInput": {
     "suggestionsFor": "Suggestions for {{field}}",
@@ -842,7 +861,9 @@
       "vaultAlreadyUnlocked": "The vault is already unlocked.",
       "vaultPasswordEmpty": "The password cannot be empty.",
       "vaultProtectedMemoryUnavailable": "Protected memory could not be allocated. Check the locked-memory limit (RLIMIT_MEMLOCK).",
-      "vaultVersionUnsupported": "This vault version is not supported."
+      "vaultVersionUnsupported": "This vault version is not supported.",
+      "environmentTagTooLong": "Tags are limited to 32 characters.",
+      "environmentTooManyTags": "An environment can have at most 20 tags."
     },
     "codes": {
       "locked": "The vault is locked.",

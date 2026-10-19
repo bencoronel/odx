@@ -21,27 +21,31 @@ type Props = Omit<ComponentProps<"input">, "value" | "onChange" | "onBlur"> & {
   suggestions: string[];
   disabledSuggestions?: string[];
   caseSensitive?: boolean;
+  /** List every suggestion while the value is empty, opening on focus. */
+  showAll?: boolean;
   onChange: (value: string) => void;
+  /** Receives a chosen suggestion instead of `onChange`. */
+  onPick?: (value: string) => void;
   onBlur: () => void;
 };
-export default function HeaderInput({ value, suggestions, disabledSuggestions = [], caseSensitive = false, onChange, onBlur, ...props }: Props) {
+export default function HeaderInput({ value, suggestions, disabledSuggestions = [], caseSensitive = false, showAll = false, onChange, onPick, onBlur, ...props }: Props) {
   const { t } = useTranslation();
   const id = useId();
   const menu = useRef<HTMLUListElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  const matches = value.trim() ? suggestions.filter((s) => s.toLowerCase().includes(value.toLowerCase()) && (caseSensitive ? s !== value : s.toLowerCase() !== value.toLowerCase())) : [];
+  const matches = value.trim() ? suggestions.filter((s) => s.toLowerCase().includes(value.toLowerCase()) && (caseSensitive ? s !== value : s.toLowerCase() !== value.toLowerCase())) : showAll ? suggestions : [];
   const disabled = (suggestion: string) => disabledSuggestions.includes(suggestion.toLowerCase());
   const selectable = matches.map((s, i) => disabled(s) ? -1 : i).filter((i) => i >= 0);
   const expanded = open && matches.length > 0;
   useEffect(() => {
     if (expanded && active >= 0) menu.current?.children[active]?.scrollIntoView?.({ block: "nearest" });
   }, [expanded, active]);
-  const choose = (suggestion: string) => { if (disabled(suggestion)) return; onChange(suggestion); setOpen(false); setActive(-1); };
+  const choose = (suggestion: string) => { if (disabled(suggestion)) return; (onPick ?? onChange)(suggestion); setOpen(false); setActive(-1); };
   return <div className="header-input">
     <input {...props} value={value} role="combobox" aria-autocomplete="list" aria-expanded={expanded}
       aria-controls={expanded ? id : undefined} aria-activedescendant={expanded && active >= 0 && active < matches.length ? `${id}-${active}` : undefined}
-      onFocus={() => { setOpen(false); setActive(-1); }}
+      onFocus={() => { setOpen(showAll); setActive(-1); }}
       onChange={(e) => { onChange(e.target.value); setOpen(true); setActive(-1); }}
       onBlur={() => { setOpen(false); setActive(-1); onBlur(); }}
       onKeyDown={(e) => {

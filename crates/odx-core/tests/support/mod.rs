@@ -192,7 +192,9 @@ async fn jsonrpc(
     let method = p["method"].as_str().unwrap_or("");
     let service = p["service"].as_str().unwrap_or("");
     let a = p["args"].as_array().cloned().unwrap_or_default();
-    let result = if service == "common" && method == "login" {
+    let result = if service == "db" && method == "list" {
+        json!(["base-a", "base-b"])
+    } else if service == "common" && method == "login" {
         counts.logins.fetch_add(1, Ordering::SeqCst);
         if counts.pause_next_login.swap(false, Ordering::SeqCst) {
             counts.login_started.notify_one();

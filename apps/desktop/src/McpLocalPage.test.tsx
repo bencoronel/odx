@@ -16,7 +16,7 @@ const profile: Client = {
 };
 const envs: Environment[] = ["A", "B"].map((name) => ({
   id: `env-${name}`, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true,
+  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [],
 }));
 function Page(props: Partial<Parameters<typeof McpLocalPage>[0]>) {
   return <McpLocalPage clients={[]} services={services} envs={envs} busy={false} update={vi.fn()} {...props} />;

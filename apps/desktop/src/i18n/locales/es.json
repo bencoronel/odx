@@ -239,7 +239,15 @@
     "keepSecretPlaceholder": "Sin cambios: déjalo vacío para conservarla.",
     "savedCredential": "Credencial guardada",
     "savedCredentialHint": "Credencial guardada\nCifrada en el almacén; nunca se muestra",
-    "noCredential": "Sin credencial"
+    "noCredential": "Sin credencial",
+    "testConnection": "Probar conexión",
+    "loadDatabases": "Cargar bases de datos del servidor",
+    "databasesHint": "Escribe el nombre o cárgalas del servidor.",
+    "databasesHidden": "El servidor no publica sus bases de datos; escribe el nombre.",
+    "testNeeds": "Rellena URL, base de datos, usuario y API key para probar.",
+    "testOk": "Conexión correcta · Odoo {{version}} · {{latency}} ms",
+    "databasesFound_one": "El servidor tiene 1 base de datos; puedes elegirla o escribir otra.",
+    "databasesFound_other": "El servidor tiene {{count}} bases de datos; elige una o escribe otra."
   },
   "settingsPage": {
     "general": "General",
@@ -480,7 +488,18 @@
     "directProxyHint": "Directo\nNo usa el proxy general",
     "proxyDirect": "Directo",
     "proxyOwn": "Propio · {{url}}",
-    "proxyInherit": "Heredar · {{proxy}}"
+    "proxyInherit": "Heredar · {{proxy}}",
+    "tags": "Etiquetas",
+    "addTag": "Añadir etiqueta",
+    "removeTag": "Quitar etiqueta {{tag}}",
+    "tagFilter": "Filtrar por etiqueta",
+    "resizeList": "Redimensionar lista de entornos",
+    "filters": "Filtros",
+    "searchTags": "Buscar etiquetas",
+    "noTagsYet": "Aún no hay etiquetas. Añádelas desde el detalle de un entorno.",
+    "removeTagFilter": "Quitar filtro {{tag}}",
+    "clearFilters": "Limpiar filtros",
+    "filterCount": "{{shown}} de {{total}} entornos"
   },
   "headerInput": {
     "suggestionsFor": "Sugerencias para {{field}}",
@@ -842,7 +861,9 @@
       "vaultAlreadyUnlocked": "El almacén ya está desbloqueado.",
       "vaultPasswordEmpty": "La contraseña no puede estar vacía.",
       "vaultProtectedMemoryUnavailable": "No se pudo reservar memoria protegida. Revisa el límite de memoria bloqueable (RLIMIT_MEMLOCK).",
-      "vaultVersionUnsupported": "Esta versión del almacén no es compatible."
+      "vaultVersionUnsupported": "Esta versión del almacén no es compatible.",
+      "environmentTagTooLong": "Las etiquetas tienen como máximo 32 caracteres.",
+      "environmentTooManyTags": "Un entorno puede tener como máximo 20 etiquetas."
     },
     "codes": {
       "locked": "El almacén está bloqueado.",
