@@ -86,11 +86,17 @@ function snapshot(tabs: ShellTab[], activeId: string): string {
   }
   return JSON.stringify(saved);
 }
+/** An untouched tab: default name, no environment and only informational lines. */
+const pristine = (tab: Pick<ShellTab, "defaultName"> & { session?: Partial<Pick<Session, "env" | "entries">> }) =>
+  tab.defaultName && !tab.session?.env && (tab.session?.entries ?? []).every((e) => e.kind === "info");
 function restore(data: string, note: string): { tabs: ShellTab[]; activeId: string } | null {
   try {
     const saved = JSON.parse(data) as SavedSessions;
-    if (saved?.version !== 1 || !Array.isArray(saved.tabs) || !saved.tabs.length) return null;
-    const tabs = saved.tabs.map((tab): ShellTab => {
+    if (saved?.version !== 1 || !Array.isArray(saved.tabs)) return null;
+    // Untouched tabs are not a session worth announcing; with only those, start fresh.
+    const used = saved.tabs.filter((tab) => !pristine(tab));
+    if (!used.length) return null;
+    const tabs = used.map((tab): ShellTab => {
       const entries = Array.isArray(tab.session?.entries) ? tab.session.entries : [];
       for (const entry of entries) nextId = Math.max(nextId, entry.id + 1);
       return {
@@ -170,7 +176,6 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
       const restored = restore(data, t("shell.sessionRestored", { date: formatDateTime(new Date(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) }));
       if (!restored) return;
       // Keep anything typed while the vault was being read.
-      const pristine = (tab: ShellTab) => !tab.session.env && tab.session.entries.every((e) => e.kind === "info");
       setTabs((current) => [...restored.tabs, ...current.filter((tab) => !pristine(tab))]);
       setActiveId(restored.activeId);
     }).catch(() => undefined).finally(() => { if (!cancelled) setLoaded(true); });

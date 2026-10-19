@@ -555,6 +555,23 @@ it("restores saved tabs with their output and reconnects each one when it is fir
   expect(saved).not.toMatch(/Session restored|Connected to|\\\\c [AB]/);
 });
 
+it("does not announce a restored session when only untouched tabs were saved", async () => {
+  const untouched = { id: "t9", name: "", defaultName: true, session: { entries: [{ id: 90, kind: "info", text: "", translationKey: "shell.initial" }], context: {}, expanded: false, timing: true } };
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t9", tabs: [untouched, { ...untouched, id: "t8" }] }));
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(within(panel()).queryByText(/Session restored/)).toBeNull();
+  // A saved session with work still restores, without its untouched tabs.
+  cleanup();
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t9", tabs: [untouched, savedTab("t2", null, "whoami")] }));
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(within(panel()).getByText(/Session restored/)).toBeTruthy());
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(within(panel()).getByText("out of whoami")).toBeTruthy();
+});
+
 it("reports a restored environment that no longer exists and leaves the tab disconnected", async () => {
   vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t1", tabs: [savedTab("t1", "Gone", "whoami")] }));
   render(<ShellPage envs={envs} />);
