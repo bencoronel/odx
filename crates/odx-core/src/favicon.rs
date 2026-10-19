@@ -20,21 +20,14 @@ pub struct FaviconImage {
 }
 
 impl Core {
+    /// Fetch a same-origin icon using only non-sensitive configured headers.
     pub async fn favicon_image(&self, id: &str, url: &str) -> Result<FaviconImage> {
         let (env, session) = {
             let state = self.inner.lock().await;
             let data = state.vault.as_ref().ok_or(OdxError::Locked)?.data();
-            let env = data
-                .environments
-                .iter()
-                .find(|e| e.id == id)
-                .cloned()
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            // Use the configured proxy without headers or credentials.
-            let env = crate::config::Environment {
-                proxy: data.effective_proxy(&env),
-                ..env
-            };
+            let mut env = data.connection_environment(id)?;
+            env.headers
+                .retain(|h| !crate::headers::is_sensitive(&h.name));
             (env, state.session)
         };
         let _permit = FAVICON_PERMITS
@@ -49,22 +42,14 @@ impl Core {
         Ok(image)
     }
 
-    /// Public display metadata without vault keys, cookies or headers.
+    /// Public display metadata using only non-sensitive configured headers.
     pub async fn favicon_page(&self, id: &str) -> Result<FaviconPage> {
         let (env, session) = {
             let state = self.inner.lock().await;
             let data = state.vault.as_ref().ok_or(OdxError::Locked)?.data();
-            let env = data
-                .environments
-                .iter()
-                .find(|e| e.id == id)
-                .cloned()
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            // Use the configured proxy without headers or credentials.
-            let env = crate::config::Environment {
-                proxy: data.effective_proxy(&env),
-                ..env
-            };
+            let mut env = data.connection_environment(id)?;
+            env.headers
+                .retain(|h| !crate::headers::is_sensitive(&h.name));
             (env, state.session)
         };
         let _permit = FAVICON_PERMITS

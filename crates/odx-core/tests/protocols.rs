@@ -76,6 +76,86 @@ fn calls(out: &ToolOutput) -> u64 {
 }
 
 #[tokio::test]
+async fn every_protocol_and_detection_send_default_or_configured_user_agent() {
+    use axum::{Router, body::Body, http::Request, response::IntoResponse};
+    let app = Router::new().fallback(|request: Request<Body>| async move {
+        let path = request.uri().path().to_owned();
+        let expected = if path.starts_with("/custom/") {
+            "fixture-local-agent"
+        } else {
+            concat!("Odx/", env!("CARGO_PKG_VERSION"))
+        };
+        assert_eq!(request.headers()["user-agent"], expected);
+        let body = axum::body::to_bytes(request.into_body(), 4096).await.unwrap();
+        let login = String::from_utf8_lossy(&body).contains("login");
+        if path.ends_with("/web/version") {
+            axum::Json(json!({"version": "19.0"})).into_response()
+        } else if path.ends_with("/context_get") {
+            axum::Json(json!({"uid": 11})).into_response()
+        } else if path.contains("/xmlrpc/") && login {
+            "<methodResponse><params><param><value><int>11</int></value></param></params></methodResponse>".into_response()
+        } else if path.contains("/xmlrpc/") {
+            "<methodResponse><params><param><value><struct><member><name>server_version</name><value><string>19.0</string></value></member></struct></value></param></params></methodResponse>".into_response()
+        } else if login {
+            axum::Json(json!({"result": 11})).into_response()
+        } else {
+            axum::Json(json!({"result": {"server_version": "19.0"}})).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for protocol in PROTOCOLS.into_iter().chain([Protocol::Auto]) {
+        let tmp = tempfile::tempdir().unwrap();
+        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+        core.create("fictional master password").await.unwrap();
+        let mut draft = EnvironmentDraft {
+            name: "A".into(),
+            url: format!("{url}/default"),
+            database: "base-a".into(),
+            login: "fixture-user".into(),
+            secret: "fixture-secret".into(),
+            protocol,
+            context: json!({}),
+        };
+        let env = core.save_environment(draft.clone()).await.unwrap();
+        assert_eq!(
+            core.check_environment(&env.id).await.unwrap().status,
+            "ok",
+            "{protocol:?}"
+        );
+        core.set_headers(
+            None,
+            vec![HeaderEntry {
+                name: "User-Agent".into(),
+                value: "fixture-global-agent".into(),
+                enabled: true,
+            }],
+        )
+        .await
+        .unwrap();
+        core.set_headers(
+            Some(&env.id),
+            vec![HeaderEntry {
+                name: "user-AGENT".into(),
+                value: "fixture-local-agent".into(),
+                enabled: true,
+            }],
+        )
+        .await
+        .unwrap();
+        draft.url = format!("{url}/custom");
+        core.update_environment(&env.id, draft).await.unwrap();
+        assert_eq!(
+            core.check_environment(&env.id).await.unwrap().status,
+            "ok",
+            "{protocol:?}"
+        );
+    }
+    task.abort();
+}
+
+#[tokio::test]
 async fn automatic_protocol_is_detected_and_persisted_without_business_queries() {
     for major in 16..=19 {
         let f = fixture(major, Protocol::Auto, "fixture-secret").await;

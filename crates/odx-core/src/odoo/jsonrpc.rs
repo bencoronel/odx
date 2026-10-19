@@ -69,6 +69,7 @@ impl OdooClient {
             return Ok(client.clone());
         }
         let builder = Client::builder()
+            .user_agent(concat!("Odx/", env!("CARGO_PKG_VERSION")))
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(5))
@@ -245,6 +246,7 @@ impl OdooClient {
                 .http(env)?
                 .get(url.clone())
                 .header(reqwest::header::ACCEPT, accept)
+                .headers(crate::headers::request_headers(&env.headers)?)
                 .timeout(remaining)
                 .send()
                 .await

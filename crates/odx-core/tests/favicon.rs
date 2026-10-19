@@ -9,6 +9,21 @@ use odx_core::{Core, EnvironmentDraft, Protocol, headers::HeaderEntry};
 use serde_json::json;
 use std::collections::HashMap;
 
+fn assert_public_headers(headers: &HeaderMap) {
+    assert_eq!(headers["user-agent"], "fixture-local-agent");
+    assert_eq!(headers["accept-language"], "es-ES");
+    assert_eq!(headers["x-request-id"], "fixture-inherited");
+    for name in [
+        "authorization",
+        "cookie",
+        "x-secret",
+        "x-local-secret",
+        "cache-control",
+    ] {
+        assert!(!headers.contains_key(name), "{name}");
+    }
+}
+
 #[tokio::test]
 async fn discovers_public_metadata_with_bounded_redirects_without_vault_credentials() {
     let app = Router::new()
@@ -17,9 +32,7 @@ async fn discovers_public_metadata_with_bounded_redirects_without_vault_credenti
             get(
                 |Query(query): Query<HashMap<String, String>>, headers: HeaderMap| async move {
                     assert_eq!(query.get("db").map(String::as_str), Some("fixture-db"));
-                    assert!(!headers.contains_key("authorization"));
-                    assert!(!headers.contains_key("cookie"));
-                    assert!(!headers.contains_key("x-secret"));
+                    assert_public_headers(&headers);
                     Redirect::to("/web/login")
                 },
             ),
@@ -27,8 +40,7 @@ async fn discovers_public_metadata_with_bounded_redirects_without_vault_credenti
         .route(
             "/web/login",
             get(|headers: HeaderMap| async move {
-                assert!(!headers.contains_key("authorization"));
-                assert!(!headers.contains_key("cookie"));
+                assert_public_headers(&headers);
                 Html("<link rel=\"shortcut icon\" href=\"/web/image/website/2/favicon\">")
             }),
         )
@@ -36,9 +48,7 @@ async fn discovers_public_metadata_with_bounded_redirects_without_vault_credenti
         .route(
             "/icon",
             get(|headers: HeaderMap| async move {
-                assert!(!headers.contains_key("authorization"));
-                assert!(!headers.contains_key("cookie"));
-                assert!(!headers.contains_key("x-secret"));
+                assert_public_headers(&headers);
                 ([("content-type", "image/png")], vec![1_u8, 2, 3])
             }),
         )
@@ -69,6 +79,21 @@ async fn discovers_public_metadata_with_bounded_redirects_without_vault_credenti
     core.set_headers(
         None,
         vec![
+            HeaderEntry {
+                name: "User-Agent".into(),
+                value: "fixture-global-agent".into(),
+                enabled: true,
+            },
+            HeaderEntry {
+                name: "X-Request-Id".into(),
+                value: "fixture-inherited".into(),
+                enabled: true,
+            },
+            HeaderEntry {
+                name: "Cache-Control".into(),
+                value: "no-cache".into(),
+                enabled: false,
+            },
             HeaderEntry {
                 name: "Authorization".into(),
                 value: "Bearer fixture".into(),
@@ -101,6 +126,28 @@ async fn discovers_public_metadata_with_bounded_redirects_without_vault_credenti
         .save_environment(draft(url.clone(), "Fixture"))
         .await
         .unwrap();
+    core.set_headers(
+        Some(&env.id),
+        vec![
+            HeaderEntry {
+                name: "user-AGENT".into(),
+                value: "fixture-local-agent".into(),
+                enabled: true,
+            },
+            HeaderEntry {
+                name: "Accept-Language".into(),
+                value: "es-ES".into(),
+                enabled: true,
+            },
+            HeaderEntry {
+                name: "X-Local-Secret".into(),
+                value: "fixture-secret".into(),
+                enabled: true,
+            },
+        ],
+    )
+    .await
+    .unwrap();
     let page = core.favicon_page(&env.id).await.unwrap();
     assert_eq!(page.url, format!("{url}/web/login"));
     assert!(page.html.contains("/web/image/website/2/favicon"));

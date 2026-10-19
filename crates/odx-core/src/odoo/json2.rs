@@ -6,7 +6,7 @@ use crate::{
     config::{Environment, Protocol},
     error::{OdxError, Result},
 };
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, USER_AGENT};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
@@ -230,7 +230,6 @@ async fn post(
     let response = client
         .http(env)?
         .post(url)
-        .header(USER_AGENT, concat!("Odx/", env!("CARGO_PKG_VERSION")))
         .header(CONTENT_TYPE, "application/json; charset=utf-8")
         .headers(headers)
         .header(AUTHORIZATION, authorization)

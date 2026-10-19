@@ -50,7 +50,10 @@ async fn headers_reach_every_upstream_path_and_remain_private_and_encrypted() {
     for headers in sim.counts.headers() {
         assert_eq!(headers["accept"], "*/*");
         assert_eq!(headers["content-type"], "application/json");
-        assert!(!headers.contains_key("user-agent"));
+        assert_eq!(
+            headers["user-agent"],
+            concat!("Odx/", env!("CARGO_PKG_VERSION"))
+        );
     }
     core.set_headers(
         None,
