@@ -5,7 +5,7 @@ import App from "./App";
 import { ipc, type Environment } from "./ipc";
 
 vi.mock("./ipc", () => ({ ipc: {
-  shellHistory: vi.fn(), shellHistoryAdd: vi.fn(), check: vi.fn(), shell: vi.fn(),
+  shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), shellHistoryAdd: vi.fn(), check: vi.fn(), shell: vi.fn(), shellExport: vi.fn(), openUrl: vi.fn(),
   status: vi.fn(), environments: vi.fn(), approvals: vi.fn(), clients: vi.fn(), serviceStatus: vi.fn(), lock: vi.fn(), unlock: vi.fn(),
 } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }));
@@ -249,4 +249,354 @@ it("numbers history the same in the current tab and in a new tab loaded from the
   await waitFor(() => { command("!2"); expect(input()).toBe("\\timing"); });
   command("!3");
   expect(input()).toBe("\\context");
+});
+
+const answer = (data: (call: Parameters<typeof ipc.shell>[0]) => unknown) => vi.mocked(ipc.shell).mockImplementation(async (call) => ({ data: call.model === "ir.model" ? [] : data(call), write: false, upstream_ms: 3, upstream_bytes: 4 }));
+const connectA = async () => {
+  command("\\c A");
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+};
+
+it("answers uhg with read calls only, looking the user up by the environment login", async () => {
+  answer((call) => {
+    if (call.model === "ir.model.data") return [{ model: "res.groups", res_id: 4 }];
+    if (call.method === "fields_get") return { groups_id: { type: "many2many" } };
+    if (call.method === "search_count") return 1;
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("uhg base.group_system");
+  await waitFor(() => expect(within(panel()).getByText("yes")).toBeTruthy());
+  const calls = vi.mocked(ipc.shell).mock.calls.map(([c]) => c).filter((c) => c.model !== "ir.model");
+  expect(calls.every((c) => !c.confirmed)).toBe(true);
+  expect(calls.at(-1)).toMatchObject({ model: "res.users", method: "search_count", args: [[["login", "=", "fixture"], ["groups_id", "in", [4]]]] });
+  expect(within(panel()).getByText(/9 ms/)).toBeTruthy();
+});
+
+it("shows metadata with XML IDs and reports a missing group as an error", async () => {
+  answer((call) => {
+    if (call.method === "read") return [{ id: 7, create_uid: [2, "Admin"], create_date: "2026-01-01 10:00:00", write_uid: [2, "Admin"], write_date: "2026-02-01 10:00:00" }];
+    if (call.method === "get_external_id") return { 7: "base.partner_admin" };
+    return [];
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("metadata res.partner 7");
+  await waitFor(() => expect(within(panel()).getByText("base.partner_admin")).toBeTruthy());
+  command("uhg base.missing");
+  await waitFor(() => expect(within(panel()).getByText("No group with XML ID base.missing")).toBeTruthy());
+});
+
+it("renders read_group with groupby columns and the count, sorts by header and toggles each table", async () => {
+  answer(() => [
+    { country_id: [1, "Spain"], __count: 2, __domain: [] },
+    { country_id: false, __count: 9, __domain: [] },
+    { country_id: [2, "France"], __count: 5, __domain: [] },
+  ]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("read_group res.partner country_id");
+  await waitFor(() => expect(within(panel()).getByText("Spain (1)")).toBeTruthy());
+  const table = within(panel()).getByRole("table");
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["country_id", "count"]);
+  const firstColumn = () => within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+  fireEvent.click(within(table).getByRole("button", { name: "Sort by country_id" }));
+  expect(firstColumn()).toEqual(["France (2)", "Spain (1)", "false"]);
+  fireEvent.click(within(table).getByRole("button", { name: "Sort by country_id" }));
+  expect(firstColumn()).toEqual(["Spain (1)", "France (2)", "false"]);
+  fireEvent.click(within(panel()).getByRole("button", { name: "Expand table" }));
+  expect(within(panel()).getAllByRole("table")).toHaveLength(3);
+  fireEvent.click(within(panel()).getByRole("button", { name: "Collapse table" }));
+  expect(within(panel()).getAllByRole("table")).toHaveLength(1);
+});
+
+it("shows elapsed time while a call runs and drops a read discarded with Ctrl+C", async () => {
+  let finish!: (result: Awaited<ReturnType<typeof ipc.shell>>) => void;
+  vi.mocked(ipc.shell).mockImplementation((call) => call.model === "ir.model"
+    ? Promise.resolve({ data: [], write: false, upstream_ms: 1, upstream_bytes: 2 })
+    : new Promise((resolve) => { finish = resolve; }));
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("count res.partner");
+  expect(within(panel()).getByText(/Ctrl\+C discards/)).toBeTruthy();
+  const input = screen.getByRole("textbox", { name: "Command" });
+  fireEvent.keyDown(input, { key: "c", ctrlKey: true });
+  expect(within(panel()).getByText(/^Discarded\./)).toBeTruthy();
+  expect(within(panel()).queryByText(/Ctrl\+C discards/)).toBeNull();
+  finish({ data: 4242, write: false, upstream_ms: 1, upstream_bytes: 2 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(within(panel()).queryByText("4242")).toBeNull();
+});
+
+it("follows ids and many2one cells as visible read commands and inspects long values", async () => {
+  answer((call) => {
+    if (call.method === "fields_get") return { country_id: { relation: "res.country" } };
+    if (call.model === "res.country") return [{ id: 68, name: "Spain" }];
+    return [{ id: 7, country_id: [68, "Spain"], comment: "x".repeat(120) }];
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f country_id,comment");
+  fireEvent.click(await within(panel()).findByRole("button", { name: "Spain (68)" }));
+  const typed = (line: string) => [...panel().querySelectorAll(".term-cmd")].some((l) => l.textContent?.includes(line));
+  await waitFor(() => expect(typed("read res.country 68 -f *")).toBe(true));
+  expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ model: "res.country", method: "read", args: [[68]], kwargs: {} });
+  fireEvent.click(within(panel()).getAllByRole("button", { name: "7" })[0]);
+  await waitFor(() => expect(typed("read res.partner 7 -f *")).toBe(true));
+  fireEvent.click(within(panel()).getAllByRole("button", { name: /^x{80}…$/ })[0]);
+  const dialog = within(panel()).getByRole("dialog", { name: "res.partner 7 · comment" });
+  expect(dialog.textContent).toContain("x".repeat(120));
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Command" }), { key: "Escape" });
+  expect(within(panel()).queryByRole("dialog")).toBeNull();
+});
+
+it("inserts newlines with Shift+Enter, submits multi-line commands and flags syntax errors after a pause", async () => {
+  answer(() => [{ id: 1, name: "Ada" }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: "search res.partner" } });
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(input.value).toBe("search res.partner");
+  fireEvent.change(input, { target: { value: "search res.partner\n  -d [('name','=','Ada')]" } });
+  expect(input.rows).toBe(2);
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "search_read", kwargs: { domain: [["name", "=", "Ada"]] } }));
+  // Mid-value input (open quote or bracket) gets no hint.
+  fireEvent.change(input, { target: { value: "search res.partner -d [('name','=','" } });
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  expect(panel().querySelector(".term-hint")).toBeNull();
+  fireEvent.change(input, { target: { value: "search res.partner -d {'name': 1}" } });
+  await waitFor(() => expect(panel().querySelector(".term-hint")?.textContent).toMatch(/list/i), { timeout: 2000 });
+  // A lone first word is left to the highlighter.
+  fireEvent.change(input, { target: { value: "\\" } });
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  expect(panel().querySelector(".term-hint")).toBeNull();
+});
+
+it("suggests the newest matching history command and accepts it with the right arrow", async () => {
+  vi.mocked(ipc.shellHistory).mockResolvedValue([
+    { at: "2026-10-19T10:00:00Z", command: "search res.partner -l 5" },
+    { at: "2026-10-19T10:01:00Z", command: "search res.users -l 1" },
+  ]);
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: "search res." } });
+  await waitFor(() => expect(panel().querySelector(".term-ghost")?.textContent).toBe("users -l 1"));
+  input.setSelectionRange(input.value.length, input.value.length);
+  fireEvent.keyDown(input, { key: "ArrowRight" });
+  expect(input.value).toBe("search res.users -l 1");
+  expect(panel().querySelector(".term-ghost")).toBeNull();
+});
+
+it("re-runs and folds commands from the output", async () => {
+  answer(() => 42);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("count res.partner");
+  await waitFor(() => expect(within(panel()).getByText("42")).toBeTruthy());
+  // Hovering the result shows the command's actions: both live in one block.
+  expect(within(panel()).getByText("42").closest(".term-group")?.contains(within(panel()).getAllByRole("button", { name: "Run again" }).at(-1)!)).toBe(true);
+  fireEvent.click(within(panel()).getAllByRole("button", { name: "Fold output" }).at(-1)!);
+  expect(within(panel()).queryByText("42")).toBeNull();
+  expect(within(panel()).getByRole("button", { name: /lines? hidden/ })).toBeTruthy();
+  fireEvent.click(within(panel()).getByRole("button", { name: "Unfold output" }));
+  expect(within(panel()).getByText("42")).toBeTruthy();
+  fireEvent.click(within(panel()).getAllByRole("button", { name: "Run again" }).at(-1)!);
+  await waitFor(() => expect(within(panel()).getAllByText("42")).toHaveLength(2));
+});
+
+it("finds text in the output with Ctrl+F and zooms the font with Ctrl +/-", async () => {
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  command("\\l");
+  const input = screen.getByRole("textbox", { name: "Command" });
+  fireEvent.keyDown(input, { key: "f", ctrlKey: true });
+  const find = within(panel()).getByRole("textbox", { name: "Search output" });
+  fireEvent.change(find, { target: { value: "https://" } });
+  await waitFor(() => expect(within(panel()).getByText("1 of 2")).toBeTruthy());
+  fireEvent.keyDown(find, { key: "Enter" });
+  expect(within(panel()).getByText("2 of 2")).toBeTruthy();
+  fireEvent.keyDown(find, { key: "Escape" });
+  expect(within(panel()).queryByRole("search")).toBeNull();
+  const term = panel().querySelector(".term") as HTMLElement;
+  const before = parseInt(term.style.fontSize);
+  fireEvent.keyDown(input, { key: "+", ctrlKey: true });
+  expect(parseInt(term.style.fontSize)).toBe(before + 1);
+  fireEvent.keyDown(input, { key: "0", ctrlKey: true });
+  expect(parseInt(term.style.fontSize)).toBe(12);
+});
+
+it("chains the previous result's ids with $_ and refuses it without a result", async () => {
+  requireConfirmation(["search_read"]);
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.method === "search_read") return { data: [{ id: 3 }, { id: 5 }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (!call.confirmed) throw { code: "confirmation_required", message: "", outcome: "not_sent" };
+    return { data: true, write: true, upstream_ms: 1, upstream_bytes: 2 };
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("write res.partner $_ {'active': False}");
+  expect(within(panel()).getByText("$_ needs a previous result with records")).toBeTruthy();
+  command("search res.partner -f *");
+  await waitFor(() => expect(within(panel()).getByText("2 rows", { exact: false })).toBeTruthy());
+  expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0].kwargs).not.toHaveProperty("fields");
+  command("write res.partner $_ {'active': False}");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "write", args: [[3, 5], { active: false }] }));
+});
+
+it("opens records in Odoo with Ctrl+click and saves tables to Downloads", async () => {
+  vi.mocked(ipc.openUrl).mockResolvedValue(undefined);
+  vi.mocked(ipc.shellExport).mockResolvedValue("/home/u/Downloads/odx-res.partner.csv");
+  answer((call) => call.method === "fields_get" ? { country_id: { relation: "res.country" } } : [{ id: 7, name: "Ada, \"the\" first", country_id: [68, "Spain"] }, { id: 8, name: "=HYPERLINK(\"x\")", country_id: false }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f name,country_id");
+  fireEvent.click(await within(panel()).findByRole("button", { name: "Spain (68)" }), { ctrlKey: true });
+  await waitFor(() => expect(ipc.openUrl).toHaveBeenCalledWith("A", { model: "res.country", id: 68 }));
+  fireEvent.click(within(panel()).getByRole("button", { name: "More formats" }));
+  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Save as CSV in Downloads" }));
+  await waitFor(() => expect(within(panel()).getByText("Saved to /home/u/Downloads/odx-res.partner.csv")).toBeTruthy());
+  const [name, content] = vi.mocked(ipc.shellExport).mock.calls[0];
+  expect(name).toMatch(/^odx-res\.partner-\d{8}-\d{6}\.csv$/);
+  // Values a spreadsheet would run as formulas get a leading apostrophe.
+  expect(content).toBe('\uFEFFid,name,country_id\r\n7,"Ada, ""the"" first",Spain (68)\r\n8,"\'=HYPERLINK(""x"")",false');
+});
+
+it("shows Odoo's message and folds the rest of long errors", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    throw { code: "upstream.remote", detail: "ValidationError: Email is required\nline 2\nline 3", outcome: "failed" };
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("read res.partner 1");
+  const summary = await within(panel()).findByText("Show 2 more lines");
+  expect(summary.closest(".term-line")?.textContent).toContain("ValidationError: Email is required");
+  expect(summary.closest("details")?.open).toBe(false);
+});
+
+it("copies tables as JSON and Markdown from the formats menu", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  answer(() => [{ id: 7, name: "Ada | Lovelace" }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner");
+  const more = await within(panel()).findByRole("button", { name: "More formats" });
+  fireEvent.click(more);
+  // The editor takes focus on mouseup; the menu must survive it.
+  fireEvent.mouseUp(within(panel()).getByRole("menuitem", { name: "Copy as JSON" }));
+  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Copy as JSON" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(JSON.stringify([{ id: 7, name: "Ada | Lovelace" }], null, 2)));
+  fireEvent.click(more);
+  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Copy as Markdown" }));
+  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("| id | name |\n| --- | --- |\n| 7 | Ada \\| Lovelace |"));
+  fireEvent.click(more);
+  fireEvent.mouseDown(document.body);
+  expect(within(panel()).queryByRole("menu")).toBeNull();
+});
+
+it("navigates tables with the keyboard and keeps their actions in the footer", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  answer((call) => call.method === "read" ? [{ id: 8, name: "Grace" }] : [{ id: 7, name: "Ada" }, { id: 8, name: "Grace" }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner");
+  await within(panel()).findByText("Grace");
+  const input = screen.getByRole("textbox", { name: "Command" });
+  expect(panel().querySelector(".term-foot")?.contains(within(panel()).getByRole("button", { name: "Expand table" }))).toBe(true);
+  fireEvent.keyDown(input, { key: "ArrowUp", ctrlKey: true });
+  const table = panel().querySelector<HTMLElement>(".term-scroll")!;
+  expect(document.activeElement).toBe(table);
+  const active = () => table.querySelector("[data-active]")?.textContent;
+  expect(active()).toBe("7");
+  fireEvent.keyDown(table, { key: "ArrowDown" });
+  fireEvent.keyDown(table, { key: "ArrowRight" });
+  expect(active()).toBe("Grace");
+  fireEvent.keyDown(table, { key: "c" });
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("Grace"));
+  fireEvent.keyDown(table, { key: "Home" });
+  expect(active()).toBe("8");
+  fireEvent.keyDown(table, { key: "Enter" });
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "read", args: [[8]] }));
+  const first = panel().querySelector<HTMLElement>(".term-scroll")!;
+  first.focus();
+  fireEvent.keyDown(first, { key: "Escape" });
+  expect(document.activeElement).toBe(input);
+});
+
+const savedTab = (id: string, env: string | null, line: string) => ({
+  id, name: "", defaultName: true,
+  session: { entries: [{ id: Number(id.slice(1)) * 10, kind: "input", prompt: "odoo>", text: line, command: true }, { id: Number(id.slice(1)) * 10 + 1, kind: "text", text: `out of ${line}` }],
+    env: env ? { id: env, name: env } : undefined, context: {}, expanded: false, timing: true },
+});
+
+it("restores saved tabs with their output and reconnects each one when it is first shown", async () => {
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t2", tabs: [savedTab("t1", "A", "count res.partner"), savedTab("t2", "B", "whoami")] }));
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
+  expect(within(panel()).getByText("out of whoami")).toBeTruthy();
+  expect(within(panel()).getByText(/Session restored/)).toBeTruthy();
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  expect(ipc.check).toHaveBeenCalledTimes(1);
+  expect(ipc.check).toHaveBeenCalledWith("B");
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  expect(within(panel()).getByText("out of count res.partner")).toBeTruthy();
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  expect(ipc.check).toHaveBeenCalledTimes(2);
+  // The restore note and the automatic reconnection are shown but not saved, so restarts do not pile them up.
+  vi.mocked(ipc.saveShellSessions).mockClear();
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 3000 });
+  const saved = vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0];
+  expect(saved).toContain("out of whoami");
+  expect(saved).not.toMatch(/Session restored|Connected to|\\\\c [AB]/);
+});
+
+it("reports a restored environment that no longer exists and leaves the tab disconnected", async () => {
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t1", tabs: [savedTab("t1", "Gone", "whoami")] }));
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(within(panel()).getByText(/Gone no longer exists/)).toBeTruthy());
+  expect(ipc.check).not.toHaveBeenCalled();
+  expect(panel().querySelector(".term-input .term-prompt")?.textContent).toBe("odoo>");
+});
+
+it("saves sessions to the vault only after loading them, without pending confirmations", async () => {
+  let load!: (data: string | null) => void;
+  vi.mocked(ipc.shellSessions).mockReturnValue(new Promise((resolve) => { load = resolve; }));
+  requireConfirmation(["search_read"]);
+  render(<ShellPage envs={envs} />);
+  command("\\c A");
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  expect(ipc.saveShellSessions).not.toHaveBeenCalled();
+  load(null);
+  command("unlink res.partner 5");
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 3000 });
+  const saved = JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0]);
+  expect(saved.tabs[0].session.env).toEqual({ id: "A", name: "A" });
+  expect(JSON.stringify(saved)).toContain("unlink res.partner 5");
+  expect(JSON.stringify(saved)).not.toContain("confirming");
+});
+
+it("warns when $_ holds ids of another model and does not flag $_ as a syntax error", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.model === "ir.model.data") return { data: [{ id: 2, module: "base", name: "main_company", model: "res.company", res_id: 1 }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (!call.confirmed) throw { code: "confirmation_required", message: "", outcome: "not_sent" };
+    return { data: true, write: true, upstream_ms: 1, upstream_bytes: 2 };
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("ref base.main_company");
+  await within(panel()).findByText("main_company");
+  const input = screen.getByRole("textbox", { name: "Command" });
+  fireEvent.change(input, { target: { value: "write res.company $_ {'name': 'X'}" } });
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  expect(panel().querySelector(".term-hint")).toBeNull();
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(within(panel()).getByText(/\$_ holds ir\.model\.data ids, not res\.company ids/)).toBeTruthy());
+  expect(within(panel()).getByText(/^write res\.company \[\[2\]/)).toBeTruthy();
 });

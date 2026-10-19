@@ -2,8 +2,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { useTranslation } from "react-i18next";
 
-export default function CopyButton({ text, label, ariaLabel, className = "btn sm", tip }: {
+export default function CopyButton({ text, label, ariaLabel, className = "btn sm", tip, iconOnly = false }: {
   text: string | (() => string);
+  /** Icon buttons keep the label for screen readers only. */
+  iconOnly?: boolean;
   label?: string;
   ariaLabel?: string;
   className?: string;
@@ -36,7 +38,7 @@ export default function CopyButton({ text, label, ariaLabel, className = "btn sm
       aria-label={ariaLabel ?? (state === "copied" ? t("common.copied") : buttonLabel)} aria-describedby={state === "error" ? errorId : undefined}
       onClick={(event) => { event.stopPropagation(); void copy(); }}>
       <Icon name={state === "copied" ? "check" : state === "error" ? "alert" : "copy"} />
-      {state === "copied" ? t("common.copied") : buttonLabel}
+      {!iconOnly && (state === "copied" ? t("common.copied") : buttonLabel)}
     </button>
     <span className="sr-only" role="status">{state === "copied" ? t("common.copiedToClipboard") : ""}</span>
     {state === "error" && <span id={errorId} className="copy-error" role="alert">{t("common.copyError")}</span>}

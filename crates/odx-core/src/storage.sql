@@ -19,4 +19,6 @@ CREATE TRIGGER audit_added AFTER INSERT ON audit_events BEGIN UPDATE metadata SE
 CREATE TRIGGER audit_removed AFTER DELETE ON audit_events BEGIN UPDATE metadata SET history_bytes=history_bytes-old.bytes WHERE id=1; END;
 -- Shell history: one row per command, bounded on insert.
 CREATE TABLE shell_history (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, environment TEXT, command TEXT NOT NULL);
-PRAGMA user_version=3;
+-- Shell tabs and their output, restored after a restart; opaque JSON owned by the desktop.
+CREATE TABLE shell_sessions (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
+PRAGMA user_version=4;

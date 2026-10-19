@@ -89,14 +89,14 @@ impl Database {
     pub fn open(path: &Path, password: &str) -> Result<Self> {
         let mut connection = Self::connection(path, password)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(1..=3).contains(&version) {
+        if !(1..=4).contains(&version) {
             return Err(OdxError::validation(
                 "validation.vault.version_unsupported",
                 "unsupported storage version",
             ));
         }
-        if version < 3 {
-            // Migrate v1→v2→v3 atomically; failure preserves the original database.
+        if version < 4 {
+            // Migrate v1→v2→v3→v4 atomically; failure preserves the original database.
             let tx = connection.transaction()?;
             if version == 1 {
                 // v1 also counted activity projections; recalculate using audit_events only.
@@ -105,7 +105,10 @@ impl Database {
                     UPDATE metadata SET history_bytes=(SELECT COALESCE(SUM(bytes),0) FROM audit_events) WHERE id=1;",
                 )?;
             }
-            migrate_v3(&tx)?;
+            if version < 3 {
+                migrate_v3(&tx)?;
+            }
+            migrate_v4(&tx)?;
             tx.commit()?;
         }
         Ok(Self {
@@ -221,6 +224,15 @@ impl Database {
         }
         Ok(())
     }
+}
+
+/// v3→v4: persisted Shell sessions.
+fn migrate_v4(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE shell_sessions (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
+        PRAGMA user_version=4;",
+    )?;
+    Ok(())
 }
 
 /// v2→v3: reference audit payloads instead of copying them; move Shell history to its own table.
@@ -424,7 +436,7 @@ PRAGMA user_version=2;
     }
 
     #[test]
-    fn v1_and_v2_databases_migrate_to_v3_without_losing_events_or_shell_history() {
+    fn v1_and_v2_databases_migrate_to_current_without_losing_events_or_shell_history() {
         for version in [1, 2] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("vault.sqlite3");
@@ -441,7 +453,7 @@ PRAGMA user_version=2;
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .unwrap();
-                assert_eq!((version, events), (3, 3));
+                assert_eq!((version, events), (4, 3));
                 let payload_column: i64 = connection
                     .query_row(
                         "SELECT count(*) FROM pragma_table_info('activity') WHERE name='payload'",

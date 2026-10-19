@@ -6,7 +6,7 @@ import { ipc, type Service, type ServiceStatus as Services } from "./ipc";
 
 vi.mock("./ipc", () => ({ ipc: {
   status: vi.fn(), environments: vi.fn(), approvals: vi.fn(), clients: vi.fn(), serviceStatus: vi.fn(), lock: vi.fn(), decide: vi.fn(),
-  activity: vi.fn(), settings: vi.fn(), proxy: vi.fn(), headers: vi.fn(), context: vi.fn(), shellHistory: vi.fn(), check: vi.fn(), faviconPage: vi.fn(), faviconImage: vi.fn(),
+  activity: vi.fn(), settings: vi.fn(), proxy: vi.fn(), headers: vi.fn(), context: vi.fn(), shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), check: vi.fn(), faviconPage: vi.fn(), faviconImage: vi.fn(),
 } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }));
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));

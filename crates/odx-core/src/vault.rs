@@ -13,6 +13,9 @@ use zeroize::{Zeroize, Zeroizing};
 /// Serialize in-process create, migrate and open operations sharing temporary/destination paths.
 static OPENING: Mutex<()> = Mutex::new(());
 
+/// Saved Shell output stays well under the 16 MiB configuration limit.
+const MAX_SHELL_SESSIONS: usize = 8 * 1024 * 1024;
+
 pub struct Vault {
     pub(crate) database: Arc<Database>,
     pub(crate) data: VaultData,
@@ -194,6 +197,38 @@ impl Vault {
                 .transaction(|tx| crate::shell::add_history(tx, command, environment))
         })
     }
+    /// Saved Shell tabs as the desktop serialized them; `None` before the first save.
+    pub(crate) fn shell_sessions(&self) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        crate::database::blocking(|| {
+            let data = self
+                .database
+                .lock()?
+                .query_row("SELECT data FROM shell_sessions WHERE id=1", [], |r| {
+                    r.get::<_, Vec<u8>>(0)
+                })
+                .optional()?;
+            data.map(|bytes| String::from_utf8(bytes).map_err(|_| OdxError::Persistence))
+                .transpose()
+        })
+    }
+    pub(crate) fn shell_sessions_save(&self, data: &str) -> Result<()> {
+        if data.len() > MAX_SHELL_SESSIONS {
+            return Err(OdxError::validation(
+                "validation.shell.sessions_too_large",
+                "shell sessions exceed 8 MiB",
+            ));
+        }
+        crate::database::blocking(|| {
+            self.database.transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO shell_sessions(id,data) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                    [data.as_bytes()],
+                )?;
+                Ok(())
+            })
+        })
+    }
     pub(crate) fn shell_history_clear(&self) -> Result<()> {
         crate::database::blocking(|| {
             self.database.transaction(|tx| {
@@ -234,6 +269,42 @@ mod tests {
     };
     use chrono::Utc;
     use serde_json::json;
+
+    #[test]
+    fn shell_sessions_survive_reopening_and_reject_oversized_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.sqlite3");
+        let vault = Vault::create(&path, "fictional password").unwrap();
+        assert_eq!(vault.shell_sessions().unwrap(), None);
+        vault.shell_sessions_save(r#"{"tabs":[1]}"#).unwrap();
+        vault.shell_sessions_save(r#"{"tabs":[2]}"#).unwrap();
+        let big = format!("\"{}\"", "x".repeat(MAX_SHELL_SESSIONS));
+        assert!(vault.shell_sessions_save(&big).is_err());
+        drop(vault);
+        let vault = Vault::unlock(&path, "fictional password").unwrap();
+        assert_eq!(
+            vault.shell_sessions().unwrap().as_deref(),
+            Some(r#"{"tabs":[2]}"#)
+        );
+    }
+
+    #[test]
+    fn v3_databases_gain_the_shell_sessions_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.sqlite3");
+        drop(Vault::create(&path, "fictional password").unwrap());
+        {
+            let database = crate::database::Database::open(&path, "fictional password").unwrap();
+            database
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TABLE shell_sessions; PRAGMA user_version=3;")
+                .unwrap();
+        }
+        let vault = Vault::unlock(&path, "fictional password").unwrap();
+        vault.shell_sessions_save("[]").unwrap();
+        assert_eq!(vault.shell_sessions().unwrap().as_deref(), Some("[]"));
+    }
 
     #[test]
     fn unlock_adds_a_missing_stdio_profile_only_once() {

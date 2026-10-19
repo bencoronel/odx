@@ -51,3 +51,48 @@ describe("commands", () => {
     expect(parse("name res.partner Ada -l 5")).toMatchObject({ display: "names", page: { limit: 5, offset: 0 }, call: { method: "name_search", kwargs: { limit: 6 } } });
   });
 });
+
+describe("OdooTerminal-style commands", () => {
+  it("parses read_group with every groupby at once", () => {
+    expect(parse(`read_group sale.order partner_id,state -d [('amount_total','>',0)] -f amount_total:sum -l 10 --order "partner_id desc"`)).toMatchObject({
+      display: "groups", page: { limit: 10, offset: 0 },
+      call: { model: "sale.order", method: "read_group", kwargs: { domain: [["amount_total", ">", 0]], fields: ["amount_total:sum"], groupby: ["partner_id", "state"], lazy: false, limit: 11, orderby: "partner_id desc" } },
+    });
+    expect(parse("read_group res.partner country_id")).toMatchObject({ call: { kwargs: { fields: [], groupby: ["country_id"], limit: 81 } } });
+    expect(() => parse("read_group res.partner")).toThrow(/groupby/);
+  });
+  it("resolves XML IDs and validates their format", () => {
+    expect(parse("ref base.main_company")).toMatchObject({ display: "rows", call: { model: "ir.model.data", method: "search_read", kwargs: { domain: [["module", "=", "base"], ["name", "=", "main_company"]] } } });
+    expect(() => parse("ref main_company")).toThrow(/XML ID/);
+    expect(parse("uhg base.group_system")).toEqual({ kind: "has_group", group: "base.group_system" });
+    expect(() => parse("uhg")).toThrow(/XML ID/);
+  });
+  it("parses user and metadata commands", () => {
+    expect(parse("whoami")).toEqual({ kind: "whoami" });
+    expect(() => parse("whoami admin")).toThrow(CommandError);
+    expect(parse("metadata res.partner 1,2")).toEqual({ kind: "metadata", model: "res.partner", ids: [1, 2] });
+    expect(parse("cam sale.order")).toEqual({ kind: "access", model: "sale.order" });
+    expect(() => parse("cam")).toThrow(/model/i);
+  });
+});
+
+it("reads every field with -f *", () => {
+  expect(parse("read res.partner 7 -f *")).toMatchObject({ call: { method: "read", args: [[7]], kwargs: {} } });
+});
+
+it("substitutes $_ outside strings only", async () => {
+  const { substitute } = await import("./commands");
+  expect(substitute("unlink res.partner $_", [1, 2])).toBe("unlink res.partner [1,2]");
+  expect(substitute("search res.partner -d [('id','in',$_)]", [4])).toBe("search res.partner -d [('id','in',[4])]");
+  expect(substitute("write res.partner 1 {'name': '$_'}", undefined)).toBe("write res.partner 1 {'name': '$_'}");
+  expect(() => substitute("unlink res.partner $_", [])).toThrow(/no records/);
+  expect(parse("search res.partner -f *")).toMatchObject({ call: { kwargs: { domain: [], limit: 21 } } });
+});
+
+it("detects input that is still being typed", async () => {
+  const { unfinished } = await import("./commands");
+  expect(unfinished("search res.partner -d [('name','=','")).toBe(true);
+  expect(unfinished("search res.partner -d [('name'")).toBe(true);
+  expect(unfinished("write res.partner 1 {'name': 'a)b'}")).toBe(false);
+  expect(unfinished("search res.partner -d [('name','=','x')]")).toBe(false);
+});

@@ -544,24 +544,48 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .shell-tab:hover .shell-tab-close:disabled { opacity: .45; }
 .shell-panel:not([hidden]) { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .term { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-sm); overflow: hidden; cursor: text; }
-.term-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px 4px; line-height: 1.55; }
+.term-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px 4px; line-height: 1.55; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .term-line { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .term-line.info { color: var(--text-3); }
 .term-line.error { color: var(--danger); }
 .term-line.warn { color: var(--warn); }
 .term-line.ok { color: var(--ok); }
 .term-prompt { color: var(--accent-text); font-weight: 600; white-space: nowrap; }
-.term-block { position: relative; margin: 2px 0 6px; overflow-x: auto; }
-.term-copy { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text-3); font: inherit; font-size: var(--fs-xs); cursor: pointer; opacity: 0; transition: opacity .12s; }
-.term-copy .icon { width: 11px; height: 11px; }
-.term-block:hover .term-copy, .term-copy:focus-visible { opacity: 1; }
+.term-block { position: relative; margin: 4px 0 8px; max-width: 100%; width: fit-content; min-width: min(100%, 420px); }
+/* Tall tables scroll inside the block so the header stays visible; the id column is pinned sideways. */
+.term-scroll { max-height: min(60vh, 560px); overflow: auto; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; scroll-padding-top: 2em; }
+.term-scroll[data-pinned] { scroll-padding-left: 6ch; }
+.term-scroll:focus { outline: none; }
+.term-scroll:focus-visible { border-color: var(--accent); }
+.term-foot { display: flex; align-items: center; gap: 12px; min-height: 24px; padding-top: 2px; color: var(--text-3); }
+.term-foot-info { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-foot-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; user-select: none; }
+.term-copy { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text-3); font: inherit; font-size: var(--fs-xs); cursor: pointer; opacity: .55; transition: opacity .12s, color .12s; }
+.term-copy .icon { width: 12px; height: 12px; }
+.term-block:hover .term-copy, .term-block:focus-within .term-copy, .term-copy:focus-visible { opacity: 1; }
 .term-copy:hover { color: var(--text); }
-.term-table { border-collapse: collapse; font-size: var(--fs-sm); }
-.term-table th { padding: 1px 14px 1px 0; text-align: left; font-weight: 600; color: var(--text-2); border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
-.term-table td { padding: 1px 14px 1px 0; white-space: nowrap; color: var(--text); vertical-align: top; }
+.term-table { border-collapse: separate; border-spacing: 0; font-size: inherit; min-width: 100%; }
+.term-table th, .term-table td { padding: 3px 14px 3px 0; white-space: nowrap; vertical-align: top; }
+.term-table th:first-child, .term-table td:first-child { padding-left: 10px; }
+.term-table th { text-align: left; font-weight: 600; color: var(--text-2); }
+.term-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--border-strong); }
+.term-table td { color: var(--text); border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.term-table tbody tr:last-child td { border-bottom: 0; }
+.term-table tbody tr:hover td { background: var(--hover); }
+/* Pinned cells need an opaque background so scrolled cells pass beneath them. */
+.term-table .pin { position: sticky; left: 0; z-index: 1; background: var(--surface-2); box-shadow: inset -1px 0 0 var(--border); }
+.term-table thead th.pin { z-index: 3; background: var(--surface); }
+.term-table tbody tr:hover td.pin { background: color-mix(in srgb, var(--hover) 100%, var(--surface-2)); }
+.term-scroll:focus .term-table td[data-active] { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.term-sort { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.term-sort:hover { color: var(--text); }
+.term-sort .icon { width: 11px; height: 11px; opacity: 0; }
+.term-sort:hover .icon { opacity: .45; }
+.term-sort .icon.on { opacity: 1; color: var(--accent-text); }
 .term-table td.dim { color: var(--text-3); }
 .term-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.term-table.expanded { margin-bottom: 4px; }
+.term-table.expanded { min-width: 0; margin: 6px 0; }
+.term-table.expanded td { border: 0; }
 .term-table.expanded td.num { text-align: left; }
 .term-table.expanded th { border: 0; color: var(--text-3); font-weight: 400; }
 .term-table.expanded tr:first-child th { color: var(--text-2); }
@@ -578,14 +602,51 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .context-menu kbd { border: 0; background: none; padding: 0; color: var(--text-3); font-size: var(--fs-xs); }
 .context-menu hr { margin: 3px 4px; border: 0; border-top: 1px solid var(--border); }
 .term-menu-detail { min-width: 0; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font); font-size: var(--fs-xs); }
-.term-input { display: flex; align-items: center; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--border); cursor: text; }
+.term-input { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 6px 14px 8px; border-top: 1px solid var(--border); cursor: text; }
 .term-input.confirm .term-prompt { color: var(--warn); }
-.term-editor { position: relative; flex: 1; min-width: 0; display: block; height: 24px; }
-.term-highlight { position: absolute; inset: 0; overflow: hidden; white-space: pre; line-height: 24px; color: var(--text); pointer-events: none; }
-.term-input input.highlighted { color: transparent; caret-color: var(--text); }
-.term-input input.highlighted::selection { background: var(--accent-soft); color: transparent; }
-.term-input input { position: relative; width: 100%; line-height: 24px; height: 24px; padding: 0; border: 0; background: transparent; font: inherit; color: var(--text); box-shadow: none !important; }
-.term-input input:focus { outline: none; }
+.term-input .term-prompt { line-height: 1.9em; }
+.term-editor { position: relative; flex: 1; min-width: 0; display: block; min-height: 1.9em; }
+.term-highlight { position: absolute; inset: 0; overflow: hidden; white-space: pre; line-height: 1.9em; color: var(--text); pointer-events: none; }
+.term-input textarea.highlighted { color: transparent; caret-color: var(--text); }
+.term-input textarea.highlighted::selection { background: var(--accent-soft); color: transparent; }
+/* No visible scrollbars: they would shift the text away from the highlight layer. */
+.term-input textarea { position: relative; display: block; width: 100%; min-height: 1.9em; line-height: 1.9em; padding: 0; border: 0; background: transparent; font: inherit; color: var(--text); white-space: pre; overflow: auto; resize: none; scrollbar-width: none; box-shadow: none !important; }
+.term-input textarea::-webkit-scrollbar { display: none; }
+.term-input textarea:focus { outline: none; }
+.term-ghost { color: var(--text-3); opacity: .7; }
+.term-cmd { position: relative; padding-right: 96px; }
+.term-cmd-actions { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 6px; opacity: 0; transition: opacity .12s; user-select: none; }
+.term-group:hover .term-cmd-actions, .term-cmd-actions:focus-within { opacity: 1; }
+.term-cmd-actions .icon-btn { width: 22px; height: 22px; flex: 0 0 auto; }
+.term-cmd-actions .icon { width: 12px; height: 12px; }
+.term-folded { margin-left: 10px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text-3); font-family: var(--font); font-size: var(--fs-xs); cursor: pointer; user-select: none; }
+.term-folded:hover { color: var(--text); }
+.term-find { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--border); font-family: var(--font); font-size: var(--fs-sm); cursor: auto; }
+.term-find > .icon { width: 13px; height: 13px; color: var(--text-3); }
+.term-find input { flex: 1; min-width: 0; height: 24px; padding: 0 6px; }
+.term-find-count { min-width: 64px; color: var(--text-3); font-size: var(--fs-xs); text-align: right; }
+::highlight(term-find) { background-color: var(--warn-soft); }
+::highlight(term-find-current) { background-color: var(--warn); color: var(--surface); }
+.term-table-menu { position: relative; display: inline-flex; }
+.term-table-actions { left: auto; right: 0; top: auto; bottom: calc(100% + 4px); min-width: 210px; display: grid; }
+.term-table-actions button { height: 24px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text); font-family: var(--font); font-size: var(--fs-xs); text-align: left; cursor: pointer; }
+.term-table-actions button:hover, .term-table-actions button:focus-visible { background: var(--accent-soft); }
+.term-table-menu .term-copy[aria-expanded="true"] { opacity: 1; }
+.term-error-title { color: var(--text-3); }
+.term-error-more summary { color: var(--text-3); cursor: pointer; user-select: none; }
+.term-error-more summary:hover { color: var(--text); }
+/* Floats over the last output line so the editor never moves. */
+.term-hint { position: absolute; right: 10px; bottom: calc(100% + 4px); z-index: 4; max-width: min(70%, 520px); padding: 2px 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: var(--r-sm); background: var(--surface); color: var(--warn); font-family: var(--font); font-size: var(--fs-xs); white-space: nowrap; text-overflow: ellipsis; box-shadow: var(--shadow-sm); pointer-events: none; }
+.term-running .icon { width: 12px; height: 12px; vertical-align: -1px; }
+.term-link, .term-more { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: inherit; cursor: pointer; }
+.term-link { color: var(--accent-text); text-underline-offset: 2px; }
+.term-link:hover { text-decoration: underline; }
+.term-more:hover { text-decoration: underline dotted; }
+.term-inspect { position: absolute; top: 8px; right: 8px; bottom: 52px; z-index: 6; display: flex; flex-direction: column; width: min(560px, calc(100% - 16px)); border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); cursor: auto; }
+.term-inspect-head { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
+.term-inspect-head .term-copy { opacity: 1; }
+.term-inspect-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 600; }
+.term-inspect-body { flex: 1; min-height: 0; margin: 0; padding: 10px 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .term-search { display: flex; align-items: baseline; gap: 12px; padding: 0 14px 8px; white-space: pre; overflow: hidden; }
 .term-search-match { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .term-search-meta { margin-left: auto; color: var(--text-3); font-family: var(--font); font-size: var(--fs-xs); white-space: nowrap; }

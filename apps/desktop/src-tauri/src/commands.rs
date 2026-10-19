@@ -159,9 +159,24 @@ pub async fn shell_history_add(
 pub async fn shell_history_clear(core: State<'_, Arc<Core>>) -> Result<(), AppError> {
     core.shell_history_clear().await.map_err(AppError::from)
 }
+/// Shell tabs saved in the vault; `None` before the first save.
+#[tauri::command]
+pub async fn shell_sessions_load(core: State<'_, Arc<Core>>) -> Result<Option<String>, AppError> {
+    core.shell_sessions().await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn shell_sessions_save(data: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+    core.shell_sessions_save(&data)
+        .await
+        .map_err(AppError::from)
+}
 /// Open the saved environment URL by ID. Arbitrary URLs and credentials are excluded.
 #[tauri::command]
-pub async fn environment_open_url(id: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+pub async fn environment_open_url(
+    id: String,
+    record: Option<RecordRef>,
+    core: State<'_, Arc<Core>>,
+) -> Result<(), AppError> {
     let url = core
         .environments()
         .await
@@ -173,6 +188,12 @@ pub async fn environment_open_url(id: String, core: State<'_, Arc<Core>>) -> Res
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(AppError::new("app.invalid_input"));
     }
+    let url = match record {
+        Some(r) => {
+            record_url(&url, &r.model, r.id).ok_or_else(|| AppError::new("app.invalid_input"))?
+        }
+        None => url,
+    };
     let mut child = std::process::Command::new("xdg-open")
         .arg(&url)
         .stdin(std::process::Stdio::null())
@@ -184,6 +205,118 @@ pub async fn environment_open_url(id: String, core: State<'_, Arc<Core>>) -> Res
     tauri::async_runtime::spawn_blocking(move || child.wait());
     Ok(())
 }
+/// A record to open in the Odoo web client.
+#[derive(Debug, serde::Deserialize)]
+pub struct RecordRef {
+    model: String,
+    id: u64,
+}
+
+/// The legacy `/web#` form URL works in Odoo 16 to 19 (newer versions redirect it).
+fn record_url(base: &str, model: &str, id: u64) -> Option<String> {
+    let valid = !model.is_empty()
+        && model.len() <= 128
+        && !model.starts_with('.')
+        && !model.ends_with('.')
+        && model
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.');
+    (valid && id > 0).then(|| {
+        format!(
+            "{}/web#id={id}&model={model}&view_type=form",
+            base.trim_end_matches('/')
+        )
+    })
+}
+
+const MAX_EXPORT: usize = 16 * 1024 * 1024;
+
+/// Plain file names only (no paths), with a known extension.
+fn export_name(name: &str) -> Option<(&str, &str)> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let valid = !stem.is_empty()
+        && stem.len() <= 100
+        && !stem.starts_with('.')
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (valid && matches!(ext, "csv" | "json")).then_some((stem, ext))
+}
+
+/// XDG download directory from user-dirs.dirs, else ~/Downloads, else home.
+fn downloads_dir(home: &std::path::Path, config: &std::path::Path) -> std::path::PathBuf {
+    let configured = std::fs::read_to_string(config.join("user-dirs.dirs"))
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let value = line
+                    .trim()
+                    .strip_prefix("XDG_DOWNLOAD_DIR=")?
+                    .trim_matches('"');
+                Some(match value.strip_prefix("$HOME") {
+                    Some(rest) => home.join(rest.trim_start_matches('/')),
+                    None => std::path::PathBuf::from(value),
+                })
+            })
+        });
+    [configured, Some(home.join("Downloads"))]
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.is_dir())
+        .unwrap_or_else(|| home.to_owned())
+}
+
+/// Create `stem.ext`, or `stem-1.ext`… when taken; never overwrite.
+fn write_new(
+    dir: &std::path::Path,
+    stem: &str,
+    ext: &str,
+    content: &[u8],
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    for n in 0..100 {
+        let file = if n == 0 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem}-{n}.{ext}")
+        };
+        let path = dir.join(file);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => return f.write_all(content).map(|()| path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::ErrorKind::AlreadyExists.into())
+}
+
+/// Save shell output to the downloads folder without overwriting; returns the path.
+#[tauri::command]
+pub async fn shell_export(name: String, content: String) -> Result<String, AppError> {
+    let (stem, ext) = export_name(&name).ok_or_else(|| AppError::new("app.invalid_input"))?;
+    if content.len() > MAX_EXPORT {
+        return Err(AppError::new("app.invalid_input"));
+    }
+    let home = std::path::PathBuf::from(
+        std::env::var_os("HOME").ok_or_else(|| AppError::new("system.operation_failed"))?,
+    );
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let path = write_new(
+        &downloads_dir(&home, &config),
+        stem,
+        ext,
+        content.as_bytes(),
+    )
+    .map_err(|_| AppError::new("system.operation_failed"))?;
+    Ok(path.display().to_string())
+}
+
 #[tauri::command]
 pub async fn service_status(
     services: Services<'_>,
@@ -426,6 +559,85 @@ pub async fn settings_save(
     core: State<'_, Arc<Core>>,
 ) -> Result<odx_core::SettingsView, AppError> {
     core.save_settings(settings).await.map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod shell_file_tests {
+    use super::*;
+
+    #[test]
+    fn record_urls_accept_only_model_names_and_positive_ids() {
+        assert_eq!(
+            record_url("https://odoo.test/", "res.partner", 7).as_deref(),
+            Some("https://odoo.test/web#id=7&model=res.partner&view_type=form")
+        );
+        for model in ["", "Res.Partner", "res.partner&x=1", ".res", "res/../x"] {
+            assert!(
+                record_url("https://odoo.test", model, 7).is_none(),
+                "{model}"
+            );
+        }
+        assert!(record_url("https://odoo.test", "res.partner", 0).is_none());
+    }
+
+    /// Temporary home removed when the test ends.
+    struct Home(std::path::PathBuf);
+    impl Home {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn exports_go_to_the_xdg_download_dir_and_never_overwrite() {
+        let root = std::env::temp_dir().join(format!("odx-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let home = Home(root);
+        let config = home.path().join(".config");
+        std::fs::create_dir_all(home.path().join("Descargas")).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("user-dirs.dirs"),
+            "XDG_DESKTOP_DIR=\"$HOME/Escritorio\"\nXDG_DOWNLOAD_DIR=\"$HOME/Descargas\"\n",
+        )
+        .unwrap();
+        let dir = downloads_dir(home.path(), &config);
+        assert_eq!(dir, home.path().join("Descargas"));
+        let first = write_new(&dir, "odx", "csv", b"one").unwrap();
+        let second = write_new(&dir, "odx", "csv", b"two").unwrap();
+        assert_eq!(first, dir.join("odx.csv"));
+        assert_eq!(second, dir.join("odx-1.csv"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        // A configured folder that does not exist falls back to the home directory.
+        std::fs::remove_file(&first).unwrap();
+        std::fs::remove_file(&second).unwrap();
+        std::fs::remove_dir(home.path().join("Descargas")).unwrap();
+        assert_eq!(downloads_dir(home.path(), &config), home.path());
+    }
+
+    #[test]
+    fn export_names_are_plain_files_with_known_extensions() {
+        assert_eq!(
+            export_name("odx-res.partner-1.csv"),
+            Some(("odx-res.partner-1", "csv"))
+        );
+        for name in [
+            "../x.csv",
+            "a/b.json",
+            ".hidden.csv",
+            "x.exe",
+            "x",
+            "x.csv/",
+        ] {
+            assert!(export_name(name).is_none(), "{name}");
+        }
+    }
 }
 
 #[cfg(test)]

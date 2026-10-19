@@ -143,6 +143,17 @@ impl Core {
             .ok_or(OdxError::Locked)?
             .shell_history_add(command, environment)
     }
+    pub async fn shell_sessions(&self) -> crate::error::Result<Option<String>> {
+        let s = self.inner.lock().await;
+        s.vault.as_ref().ok_or(OdxError::Locked)?.shell_sessions()
+    }
+    pub async fn shell_sessions_save(&self, data: &str) -> crate::error::Result<()> {
+        let s = self.inner.lock().await;
+        s.vault
+            .as_ref()
+            .ok_or(OdxError::Locked)?
+            .shell_sessions_save(data)
+    }
     pub async fn shell_history_clear(&self) -> crate::error::Result<()> {
         let s = self.inner.lock().await;
         s.vault

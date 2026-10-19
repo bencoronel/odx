@@ -5,7 +5,7 @@ const KEYWORDS = new Set(["True", "False", "None", "true", "false", "null"]);
 const OPERATORS = new Set(["=", "!=", "<", ">", "<=", ">=", "in", "not in", "like", "ilike", "=like", "=ilike", "child_of", "parent_of", "&", "|", "!"]);
 
 /** Tokenize without losing spaces, strings, numbers, words or punctuation. */
-const PIECE = /(\s+)|('(?:\\.|[^'\\])*'?|"(?:\\.|[^"\\])*"?)|(-?\d+(?:\.\d+)?)|([A-Za-z_\\][\w.\\-]*|!(?:!|\d+)|-{1,2}[\w-]+)|([[\](){}:,])|(.)/g;
+const PIECE = /(\s+)|('(?:\\.|[^'\\])*'?|"(?:\\.|[^"\\])*"?)|(-?\d+(?:\.\d+)?)|(\$_(?!\w)|[A-Za-z_\\][\w.\\-]*|!(?:!|\d+)|-{1,2}[\w-]+)|([[\](){}:,])|(.)/g;
 
 /** Presentation only; commands.ts parses the command. */
 export function highlight(line: string): ReactNode[] {
@@ -27,7 +27,8 @@ export function highlight(line: string): ReactNode[] {
       if ("])}".includes(text)) depth = Math.max(0, depth - 1);
       cls = "hl-punct";
     } else if (ident) {
-      if (depth === 0 && word === 0) {
+      if (text === "$_") cls = "hl-kw";
+      else if (depth === 0 && word === 0) {
         verb = text;
         cls = META.includes(text) || VERBS.includes(text) || /^!(!|\d+)$/.test(text) ? "hl-cmd" : "hl-err";
       } else if (KEYWORDS.has(text)) cls = "hl-kw";

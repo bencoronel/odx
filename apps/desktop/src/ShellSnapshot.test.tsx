@@ -6,7 +6,7 @@ import { captureWindowState, restoreWindowState } from "./windowState";
 
 let snapshot: string | null = null;
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command) => command === "desktop_restore" ? snapshot : null) }));
-vi.mock("./ipc", () => ({ ipc: { shellHistory: vi.fn(async () => []), shellHistoryAdd: vi.fn(async () => undefined), check: vi.fn(async () => ({ status: "ok", latency_ms: 1 })), shell: vi.fn() } }));
+vi.mock("./ipc", () => ({ ipc: { shellHistory: vi.fn(async () => []), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), shellHistoryAdd: vi.fn(async () => undefined), check: vi.fn(async () => ({ status: "ok", latency_ms: 1 })), shell: vi.fn() } }));
 afterEach(cleanup);
 const command = (line: string) => {
   const input = screen.getByRole("textbox", { name: "Command" });

@@ -15,12 +15,16 @@ export type Command =
   | { kind: "clear" }
   | { kind: "next" }
   | { kind: "context"; value?: Record<string, unknown> | null }
-  | { kind: "call"; call: OdooCall; display: "rows" | "fields" | "models" | "names" | "value"; page?: { limit: number; offset: number }; filter?: string };
+  | { kind: "whoami" }
+  | { kind: "metadata"; model: string; ids: number[] }
+  | { kind: "access"; model: string }
+  | { kind: "has_group"; group: string }
+  | { kind: "call"; call: OdooCall; display: "rows" | "fields" | "models" | "names" | "groups" | "value"; page?: { limit: number; offset: number }; filter?: string };
 
-export const VERBS = ["search", "count", "read", "name", "create", "write", "unlink", "call", "help"];
+export const VERBS = ["search", "count", "read", "read_group", "name", "ref", "metadata", "whoami", "cam", "uhg", "create", "write", "unlink", "call", "help"];
 export const META = ["\\?", "\\l", "\\c", "\\q", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\context", "\\clear"];
 /** Verbs whose second token is a model, for autocomplete. */
-export const MODEL_VERBS = ["search", "count", "read", "name", "create", "write", "unlink", "call", "\\d"];
+export const MODEL_VERBS = ["search", "count", "read", "read_group", "name", "metadata", "cam", "create", "write", "unlink", "call", "\\d"];
 
 export class CommandError extends Error {}
 
@@ -51,6 +55,24 @@ export function tokenize(line: string): string[] {
   if (quote) throw new CommandError(i18n.t("shell.errors.unclosedQuote"));
   if (current) tokens.push(current);
   return tokens;
+}
+
+/** The line ends inside a string or bracket, so it is still being typed. */
+export function unfinished(line: string): boolean {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if ("[({".includes(c)) depth++;
+    else if ("])}".includes(c)) depth = Math.max(0, depth - 1);
+  }
+  return quote !== null || depth > 0;
 }
 
 /** Strip outer quotes (`'Ada'` → `Ada`). */
@@ -99,6 +121,12 @@ function fieldsOf(raw: string | undefined): string[] {
   if (!Array.isArray(list) || !list.length || !list.every((f) => typeof f === "string")) throw new CommandError(i18n.t("shell.errors.fieldsList"));
   return list as string[];
 }
+/** `module.name`, as ir.model.data stores it. */
+function xmlid(token: string | undefined, usage: string): [string, string] {
+  const m = token === undefined ? null : /^([A-Za-z0-9_]+)\.([A-Za-z0-9_.-]+)$/.exec(unquote(token));
+  if (!m) throw new CommandError(i18n.t("shell.errors.xmlid", { usage }));
+  return [m[1], m[2]];
+}
 function intOf(raw: string | undefined, fallback: number, name: string, max = 1000) {
   if (raw === undefined) return fallback;
   const n = Number(raw);
@@ -106,9 +134,36 @@ function intOf(raw: string | undefined, fallback: number, name: string, max = 10
   return n;
 }
 
-export function searchCall(m: string, domain: unknown[], fields: string[], limit: number, offset: number, order?: string): OdooCall {
-  const withId = fields.includes("id") ? fields : ["id", ...fields];
-  return { model: m, method: "search_read", args: [], kwargs: { domain, fields: withId, limit: limit + 1, offset, order: order ?? "id asc" } };
+/** `fields` undefined reads every field (`-f *`). */
+export function searchCall(m: string, domain: unknown[], fields: string[] | undefined, limit: number, offset: number, order?: string): OdooCall {
+  const kwargs: Record<string, unknown> = { domain, limit: limit + 1, offset, order: order ?? "id asc" };
+  if (fields) kwargs.fields = fields.includes("id") ? fields : ["id", ...fields];
+  return { model: m, method: "search_read", args: [], kwargs };
+}
+
+/** Replace `$_` outside strings with the previous result's ids. */
+export function substitute(line: string, previous: number[] | undefined): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      out += c;
+      if (c === "\\" && i + 1 < line.length) { out += line[++i]; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') { quote = c; out += c; continue; }
+    if (c === "$" && line[i + 1] === "_" && !/\w/.test(line[i + 2] ?? "")) {
+      if (!previous) throw new CommandError(i18n.t("shell.errors.noPreviousIds"));
+      if (!previous.length) throw new CommandError(i18n.t("shell.errors.emptyPreviousIds"));
+      out += `[${previous.join(",")}]`;
+      i++;
+      continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 export function parse(line: string): Command | null {
@@ -158,7 +213,8 @@ export function parse(line: string): Command | null {
       if (positional.length > 1) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: positional[1] }));
       const limit = intOf(opts.limit, 20, "-l");
       const offset = intOf(opts.offset, 0, "-o", Number.MAX_SAFE_INTEGER);
-      return { kind: "call", display: "rows", page: { limit, offset }, call: searchCall(m, domainOf(opts.domain), fieldsOf(opts.fields), limit, offset, opts.order === undefined ? undefined : unquote(opts.order)) };
+      const fields = opts.fields === "*" ? undefined : fieldsOf(opts.fields);
+      return { kind: "call", display: "rows", page: { limit, offset }, call: searchCall(m, domainOf(opts.domain), fields, limit, offset, opts.order === undefined ? undefined : unquote(opts.order)) };
     }
     case "count": {
       const { positional, opts } = options(rest, { "-d": "domain" });
@@ -168,8 +224,45 @@ export function parse(line: string): Command | null {
       const { positional, opts } = options(rest, { "-f": "fields" });
       const m = model(positional[0], i18n.t("shell.usage.read"));
       if (positional.length > 2) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: positional[2] }));
+      // -f * omits fields so Odoo returns every readable field.
+      if (opts.fields === "*") return { kind: "call", display: "rows", call: { model: m, method: "read", args: [ids(positional[1])], kwargs: {} } };
       const fields = fieldsOf(opts.fields);
       return { kind: "call", display: "rows", call: { model: m, method: "read", args: [ids(positional[1])], kwargs: { fields: fields.includes("id") ? fields : ["id", ...fields] } } };
+    }
+    case "read_group": {
+      const { positional, opts } = options(rest, { "-d": "domain", "-f": "fields", "-l": "limit", "--order": "order" });
+      const m = model(positional[0], i18n.t("shell.usage.readGroup"));
+      if (!positional[1]) throw new CommandError(i18n.t("shell.errors.missingGroupby", { usage: i18n.t("shell.usage.readGroup") }));
+      if (positional.length > 2) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: positional[2] }));
+      const groupby = positional[1].split(",").map((g) => g.trim()).filter(Boolean);
+      const aggregates = opts.fields === undefined ? [] : fieldsOf(opts.fields);
+      const limit = intOf(opts.limit, 80, "-l");
+      // lazy=false groups by every field at once and reports __count.
+      const kwargs: Record<string, unknown> = { domain: domainOf(opts.domain), fields: aggregates, groupby, lazy: false, limit: limit + 1 };
+      if (opts.order !== undefined) kwargs.orderby = unquote(opts.order);
+      return { kind: "call", display: "groups", page: { limit, offset: 0 }, call: { model: m, method: "read_group", args: [], kwargs } };
+    }
+    case "ref": {
+      if (rest.length > 1) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: rest[1] }));
+      const [module, name] = xmlid(rest[0], i18n.t("shell.usage.ref"));
+      return { kind: "call", display: "rows", call: { model: "ir.model.data", method: "search_read", args: [], kwargs: { domain: [["module", "=", module], ["name", "=", name]], fields: ["module", "name", "model", "res_id"], limit: 2, order: "id asc" } } };
+    }
+    case "whoami":
+      if (rest.length) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: rest[0] }));
+      return { kind: "whoami" };
+    case "metadata": {
+      const m = model(rest[0], i18n.t("shell.usage.metadata"));
+      if (rest.length > 2) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: rest[2] }));
+      return { kind: "metadata", model: m, ids: ids(rest[1]) };
+    }
+    case "cam": {
+      const m = model(rest[0], i18n.t("shell.usage.access"));
+      if (rest.length > 1) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: rest[1] }));
+      return { kind: "access", model: m };
+    }
+    case "uhg": {
+      if (rest.length > 1) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: rest[1] }));
+      return { kind: "has_group", group: xmlid(rest[0], i18n.t("shell.usage.hasGroup")).join(".") };
     }
     case "name": {
       const { positional, opts } = options(rest, { "-l": "limit" });

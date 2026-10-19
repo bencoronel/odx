@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 export type IconName = "server" | "check" | "clients" | "activity" | "settings" | "lock" | "unlock" | "sun" | "moon" | "refresh" | "arrow" | "shield"
-  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external";
+  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown";
 
 const paths: Record<IconName, string> = {
   server: "M4 4h16v6H4z M4 14h16v6H4z M8 7h.01 M8 17h.01",
@@ -36,6 +36,10 @@ const paths: Record<IconName, string> = {
   terminal: "M4 4h16v16H4z M8 9l3 3-3 3 M13 15h3",
   copy: "M9 9h11v11H9z M5 15H4V4h11v1",
   trash: "M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3",
+  table: "M4 5h16v14H4z M4 10h16 M4 15h16 M10 5v14",
+  rows: "M4 4h16v7H4z M4 13h16v7H4z M7 7.5h6 M7 16.5h6",
+  caretUp: "M7 14l5-5 5 5",
+  caretDown: "M7 10l5 5 5-5",
 };
 
 export function Icon({ name, className, style }: { name: IconName; className?: string; style?: CSSProperties }) {
