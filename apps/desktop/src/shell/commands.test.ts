@@ -96,3 +96,24 @@ it("detects input that is still being typed", async () => {
   expect(unfinished("write res.partner 1 {'name': 'a)b'}")).toBe(false);
   expect(unfinished("search res.partner -d [('name','=','x')]")).toBe(false);
 });
+
+it("parses \\prev, \\set, \\alias, \\grep and \\cols, and expands aliases and $name", async () => {
+  const { expandAlias, substitute } = await import("./commands");
+  expect(parse("\\prev")).toEqual({ kind: "prev" });
+  expect(parse("\\set vip")).toEqual({ kind: "set", name: "vip", remove: false });
+  expect(parse("\\set vip -")).toEqual({ kind: "set", name: "vip", remove: true });
+  expect(() => parse("\\set 1x")).toThrow(CommandError);
+  expect(parse("\\alias pc search res.partner  -d [('customer_rank','>',0)]")).toEqual({ kind: "alias", name: "pc", command: "search res.partner  -d [('customer_rank','>',0)]" });
+  expect(parse("\\alias pc -")).toEqual({ kind: "alias", name: "pc", command: null });
+  expect(() => parse("\\alias search count res.partner")).toThrow(CommandError);
+  expect(() => parse("\\alias pc frobnicate")).toThrow(CommandError);
+  expect(parse("\\grep 'Ada L'")).toEqual({ kind: "grep", q: "Ada L" });
+  expect(parse("\\cols id, name")).toEqual({ kind: "cols", columns: ["id", "name"], hide: false });
+  expect(() => parse("\\cols id,id")).toThrow(CommandError);
+  expect(parse("\\cols -email")).toEqual({ kind: "cols", columns: ["email"], hide: true });
+  expect(expandAlias("pc -l 5", { pc: "search res.partner" })).toBe("search res.partner -l 5");
+  expect(expandAlias("constructor", {})).toBe("constructor");
+  expect(substitute("unlink res.partner $vip", undefined, { vip: { ids: [7, 8] } })).toBe("unlink res.partner [7,8]");
+  expect(substitute("write res.partner 1 {'name': '$vip'}", undefined, {})).toBe("write res.partner 1 {'name': '$vip'}");
+  expect(() => substitute("unlink res.partner $vip", undefined, {})).toThrow(/vip/);
+});

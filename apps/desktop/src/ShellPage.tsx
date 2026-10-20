@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ipc, type Environment, type HistoryEntry, type ShellError } from "./ipc";
 import { highlight } from "./shell/highlight";
-import { CommandError, parse, searchCall, substitute, unfinished, type Command, type OdooCall } from "./shell/commands";
+import { CommandError, expandAlias, parse, searchCall, substitute, unfinished, type Command, type OdooCall } from "./shell/commands";
 import { completions, type Completion, type Field } from "./shell/complete";
 import { modeLabels } from "./ModeSelect";
 import { Icon } from "./Icon";
@@ -50,6 +50,8 @@ type Session = {
   fields: Record<string, Field[]>;
   /** Record ids of the latest result table and their model, for `$_`. */
   previous?: { model?: string; ids: number[] };
+  /** Ids saved with \\set, for `$name`. */
+  vars?: Record<string, { model?: string; ids: number[] }>;
 };
 type Menu = Completion & { index: number };
 
@@ -66,13 +68,14 @@ const fresh = (): Session => ({
 /** `reconnect`: restored from the vault; check the saved environment when the tab is first shown. */
 type ShellTab = { id: string; name: string; defaultName: boolean; session: Session; busy: boolean; reconnect?: boolean };
 
-/** Saved in the vault (encrypted) so tabs and output survive restarts. Pending confirmations are never saved. */
-type SavedSessions = { version: 1; activeId: string; tabs: { id: string; name: string; defaultName: boolean; session: Pick<Session, "entries" | "env" | "context" | "expanded" | "timing" | "last" | "previous"> }[] };
+/** Saved in the vault (encrypted) so tabs and output survive restarts. Pending confirmations are never saved.
+ * `aliases` are shared by every tab. */
+type SavedSessions = { version: 1; activeId: string; aliases?: Record<string, string>; tabs: { id: string; name: string; defaultName: boolean; session: Pick<Session, "entries" | "env" | "context" | "expanded" | "timing" | "last" | "previous" | "vars"> }[] };
 const SAVE_LIMIT = 7 * 1024 * 1024;
-function snapshot(tabs: ShellTab[], activeId: string): string {
-  const saved: SavedSessions = { version: 1, activeId, tabs: tabs.map((tab) => ({
+function snapshot(tabs: ShellTab[], activeId: string, aliases: Record<string, string>): string {
+  const saved: SavedSessions = { version: 1, activeId, aliases, tabs: tabs.map((tab) => ({
     id: tab.id, name: tab.name, defaultName: tab.defaultName,
-    session: { entries: tab.session.entries.filter((entry) => !("transient" in entry && entry.transient)), env: tab.session.env, context: tab.session.context, expanded: tab.session.expanded, timing: tab.session.timing, last: tab.session.last, previous: tab.session.previous },
+    session: { entries: tab.session.entries.filter((entry) => !("transient" in entry && entry.transient)), env: tab.session.env, context: tab.session.context, expanded: tab.session.expanded, timing: tab.session.timing, last: tab.session.last, previous: tab.session.previous, vars: tab.session.vars },
   })) };
   // Over the limit, drop the oldest output of the largest tab until it fits. The vault limits UTF-8 bytes, not characters.
   const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
@@ -106,6 +109,13 @@ function restore(data: string, note: string): { tabs: ShellTab[]; activeId: stri
     });
     return { tabs, activeId: tabs.some((tab) => tab.id === saved.activeId) ? saved.activeId : tabs[0].id };
   } catch { return null; }
+}
+/** Aliases survive even when every saved tab is untouched and the tabs start fresh. */
+function savedAliases(data: string): Record<string, string> {
+  try {
+    const aliases = (JSON.parse(data) as SavedSessions)?.aliases;
+    return aliases && typeof aliases === "object" ? Object.fromEntries(Object.entries(aliases).filter(([, command]) => typeof command === "string")) : {};
+  } catch { return {}; }
 }
 const newTab = (): ShellTab => ({ id: crypto.randomUUID(), name: "", defaultName: true, session: fresh(), busy: false });
 
@@ -164,6 +174,7 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     for (const tab of tabs) for (const entry of tab.session.entries) nextId = Math.max(nextId, entry.id + 1);
   }
   const [activeId, setActiveId] = useWindowState("shell.activeId", tabs[0].id);
+  const [aliases, setAliases] = useWindowState<Record<string, string>>("shell.aliases", {});
 
   // After a restart (no in-memory window state), load the tabs saved in the vault. Saving waits
   // for this load so an empty start never overwrites the saved sessions.
@@ -173,6 +184,7 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     let cancelled = false;
     void Promise.resolve(ipc.shellSessions()).then((data) => {
       if (cancelled || !data) return;
+      setAliases((current) => ({ ...savedAliases(data), ...current }));
       const restored = restore(data, t("shell.sessionRestored", { date: formatDateTime(new Date(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) }));
       if (!restored) return;
       // Keep anything typed while the vault was being read.
@@ -182,14 +194,14 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const state = useRef({ tabs, activeId });
-  state.current = { tabs, activeId };
+  const state = useRef({ tabs, activeId, aliases });
+  state.current = { tabs, activeId, aliases };
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [saveFailed, setSaveFailed] = useState(false);
   const save = () => {
     clearTimeout(saveTimer.current);
     saveTimer.current = undefined;
-    void Promise.resolve(ipc.saveShellSessions(snapshot(state.current.tabs, state.current.activeId)))
+    void Promise.resolve(ipc.saveShellSessions(snapshot(state.current.tabs, state.current.activeId, state.current.aliases)))
       .then(() => setSaveFailed(false)).catch(() => setSaveFailed(true));
   };
   const persist = () => {
@@ -197,7 +209,7 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(save, 800);
   };
-  useEffect(persist, [tabs, activeId, loaded]);
+  useEffect(persist, [tabs, activeId, aliases, loaded]);
   // Flush on quit or when the window goes away.
   useEffect(() => {
     const flush = () => { if (saveTimer.current !== undefined) save(); };
@@ -279,15 +291,17 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     {tabs.map((tab) => <div className="shell-panel" key={tab.id} role="tabpanel" id={`shell-panel-${tab.id}`}
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
       <ShellSession tab={tab} envs={envs} active={visible && activeId === tab.id} onChange={refreshTabs} onPersist={persist} saveFailed={saveFailed} fontSize={fontSize} setFontSize={setFontSize}
+        aliases={aliases} setAliases={setAliases}
         connectTo={activeId === tab.id ? connectTo : null} onConnectHandled={onConnectHandled} />
     </div>)}
   </div>;
 }
 
-function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, onConnectHandled, fontSize, setFontSize }: {
+function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, onConnectHandled, fontSize, setFontSize, aliases, setAliases }: {
   tab: ShellTab; envs: Environment[]; active: boolean; onChange: () => void; onPersist: () => void; saveFailed: boolean;
   connectTo?: string | null; onConnectHandled?: () => void;
   fontSize: number; setFontSize: (size: number) => void;
+  aliases: Record<string, string>; setAliases: (update: (aliases: Record<string, string>) => Record<string, string>) => void;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -359,7 +373,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
       // While the first word is being typed, the highlighter already marks unknown commands.
       // An open string or bracket means the user is mid-value; Enter still reports it.
       if (!/\s/.test(input.trim()) || unfinished(input)) return;
-      try { parse(substitute(input, tab.session.previous?.ids)); } catch (e) { if (e instanceof CommandError) setHint(e.message); }
+      try { parse(expand(input)); } catch (e) { if (e instanceof CommandError) setHint(e.message); }
     }, 700);
     return () => clearTimeout(timer);
   }, [input, confirming, search]);
@@ -395,6 +409,13 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
   const print = (...entries: NewEntry[]) => update((s) => ({ ...s, entries: [...s.entries, ...entries.map((e) => ({ ...e, id: nextId++ }) as Entry)].slice(-MAX_LINES) }));
   const text = (kind: "text" | "info" | "error" | "warn" | "ok", t: string) => print({ kind, text: t });
   const prompt = (s: Session) => s.env ? `odoo@${s.env.name}>` : "odoo>";
+  /** Alias, then `$_` and `$name`; \\alias keeps its command as typed. */
+  const expand = (line: string) => /^\s*\\alias(\s|$)/.test(line) ? line : substitute(expandAlias(line, aliases), tab.session.previous?.ids, tab.session.vars);
+  /** The latest table's record ids become `$_`. */
+  const remember = (table: Table) => {
+    const idColumn = table.columns.indexOf("id");
+    if (idColumn >= 0) update((s) => ({ ...s, previous: { model: table.model, ids: table.rows.map((row) => row[idColumn]).filter((id): id is number => typeof id === "number") } }));
+  };
 
   async function run(pending: Pending, confirmed: boolean) {
     const env = pending.env ?? tab.session.env;
@@ -486,8 +507,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     try {
       const { table, footer } = await work(rpc, env);
       if (!current()) return;
-      const idColumn = table.columns.indexOf("id");
-      if (idColumn >= 0) update((s) => ({ ...s, previous: { model: table.model, ids: table.rows.map((row) => row[idColumn]).filter((id): id is number => typeof id === "number") } }));
+      remember(table);
       const meta = tab.session.timing ? `${ms} ms · ${size(bytes)}` : "";
       print({ kind: "table", expanded: tab.session.expanded, table, footer: [footer, meta].filter(Boolean).join(" · ") || undefined });
     } catch (reason) {
@@ -685,11 +705,14 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     let command: Command | null;
     const previous = tab.session.previous;
     let expanded: string;
-    try { expanded = substitute(line, previous?.ids); command = parse(expanded); } catch (e) { return text("error", e instanceof CommandError ? e.message : String(e)); }
+    try { expanded = expand(line); command = parse(expanded); } catch (e) { return text("error", e instanceof CommandError ? e.message : String(e)); }
     if (!command) return;
-    // $_ from another model is usually a mistake (ref leaves ir.model.data ids), so say where the ids come from.
+    // Ids from another model are usually a mistake (ref leaves ir.model.data ids), so say where they come from.
     const target = command.kind === "call" ? command.call.model : command.kind === "metadata" ? command.model : undefined;
-    if (expanded !== line && previous?.model && target && target !== previous.model) text("warn", t("shell.previousFromModel", { model: previous.model, target }));
+    if (target && command.kind !== "alias") for (const name of new Set(Array.from(expandAlias(line, aliases).matchAll(/\$([A-Za-z_]\w*)/g), (m) => m[1]))) {
+      const source = name === "_" ? previous : tab.session.vars?.[name];
+      if (source?.model && source.model !== target) text("warn", t("shell.previousFromModel", { name: `$${name}`, model: source.model, target }));
+    }
     switch (command.kind) {
       case "help": return print({ kind: "text", text: "", translationKey: "shell.help" });
       case "clear": return update((s) => ({ ...s, entries: [] }));
@@ -734,6 +757,63 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
         const offset = last.page.offset + last.page.limit;
         const kw = last.call.kwargs as { domain: unknown[]; fields?: string[]; order?: string };
         return run({ ...last, page: { ...last.page, offset }, call: searchCall(last.call.model, kw.domain, kw.fields, last.page.limit, offset, kw.order) }, false);
+      }
+      case "prev": {
+        const last = tab.session.last;
+        if (!last?.page) return text("error", t("shell.noPreviousSearch"));
+        if (!last.page.offset) return text("info", t("shell.firstPage"));
+        const offset = Math.max(0, last.page.offset - last.page.limit);
+        const kw = last.call.kwargs as { domain: unknown[]; fields?: string[]; order?: string };
+        return run({ ...last, page: { ...last.page, offset }, call: searchCall(last.call.model, kw.domain, kw.fields, last.page.limit, offset, kw.order) }, false);
+      }
+      case "set": {
+        const vars = tab.session.vars ?? {};
+        const { name } = command;
+        if (!name) {
+          const rows = Object.entries(vars).map(([key, v]) => [`$${key}`, v.model ?? "", v.ids.length, v.ids.join(",")]);
+          if (!rows.length) return text("info", t("shell.noVariables"));
+          return print({ kind: "table", expanded: false, table: { columns: [t("shell.variable"), t("shell.model"), t("shell.records"), "ids"], rows } });
+        }
+        if (command.remove) {
+          update((s) => ({ ...s, vars: Object.fromEntries(Object.entries(vars).filter(([key]) => key !== name)) }));
+          return text("info", t("shell.variableRemoved", { name: `$${name}` }));
+        }
+        if (!previous?.ids.length) return text("error", t("shell.errors.noPreviousIds"));
+        update((s) => ({ ...s, vars: { ...vars, [name]: previous } }));
+        return text("ok", t("shell.variableSet", { name: `$${name}`, count: previous.ids.length, model: previous.model ?? "" }));
+      }
+      case "alias": {
+        const { name } = command;
+        if (!name) {
+          const rows = Object.entries(aliases).sort(([a], [b]) => a.localeCompare(b));
+          if (!rows.length) return text("info", t("shell.noAliases"));
+          return print({ kind: "table", expanded: false, table: { columns: ["alias", t("shell.columns.command")], rows, code: [1] } });
+        }
+        if (command.command === null) {
+          setAliases((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== name)));
+          return text("info", t("shell.aliasRemoved", { name }));
+        }
+        const body = command.command ?? "";
+        setAliases((current) => ({ ...current, [name]: body }));
+        return text("ok", t("shell.aliasSet", { name }));
+      }
+      case "grep": case "cols": {
+        const source = [...tab.session.entries].reverse().find((e): e is Extract<Entry, { kind: "table" }> => e.kind === "table");
+        if (!source) return text("error", t("shell.noTable"));
+        const { table } = source;
+        let next: Table;
+        if (command.kind === "grep") {
+          const q = command.q.toLowerCase();
+          next = { ...table, rows: table.rows.filter((row) => row.some((v) => cellText(v).toLowerCase().includes(q))) };
+        } else {
+          const missing = command.columns.filter((c) => !table.columns.includes(c));
+          if (missing.length) return text("error", t("shell.unknownColumns", { columns: missing.join(", "), available: table.columns.join(", ") }));
+          const keep = command.hide ? table.columns.filter((c) => !command.columns.includes(c)) : command.columns;
+          const at = keep.map((c) => table.columns.indexOf(c));
+          next = { ...table, columns: keep, rows: table.rows.map((row) => at.map((j) => row[j])), code: table.code?.map((j) => at.indexOf(j)).filter((j) => j >= 0) };
+        }
+        remember(next);
+        return print({ kind: "table", expanded: source.expanded, table: next, footer: t("shell.filtered", { shown: next.rows.length, count: table.rows.length }) });
       }
       case "whoami": return sequence(async (rpc, env) => {
         const user = await currentUser(rpc, env, ["login", "name", "company_id", "company_ids"]);
@@ -786,6 +866,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     models: sess.env ? sess.models[sess.env.id] : undefined,
     fields: (model: string) => (sess.env ? sess.fields[`${sess.env.id}:${model}`] : undefined),
     connected: !!sess.env,
+    aliases,
   });
 
   /** Load missing models or fields; report whether loading was needed. */
@@ -919,7 +1000,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
       <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={closeFind}><Icon name="x" /></button>
     </div>}
     <div className="term-out" ref={out} role="log" aria-live="polite" aria-label={t("shell.output")}>
-      <SessionActions.Provider value={{ rerun, fold, busy: busy || !!confirming }}>
+      <SessionActions.Provider value={{ rerun, fold, busy: busy || !!confirming, aliases: Object.keys(aliases) }}>
         <CellActions.Provider value={{ follow: (link, inOdoo) => void follow(link, inOdoo), inspect, exportTable: (table, format) => void exportTable(table, format) }}>
           {groups(visible(session.entries)).map((group) => <div key={group[0].entry.id} className="term-group">
             {group.map(({ entry, hidden }) => <Line key={entry.id} entry={entry} hidden={hidden} onToggle={() => update((s) => ({
@@ -948,7 +1029,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     <label className={`term-input ${confirming ? "confirm" : ""}`}>
       <span className="term-prompt">{current}</span>
       <span className="term-editor">
-        {!search && !confirming && <div className="term-highlight" ref={editorHighlight} aria-hidden="true">{highlight(input)}{ghost && <span className="term-ghost">{ghost}</span>}</div>}
+        {!search && !confirming && <div className="term-highlight" ref={editorHighlight} aria-hidden="true">{highlight(input, Object.keys(aliases))}{ghost && <span className="term-ghost">{ghost}</span>}</div>}
         <textarea ref={field} value={input} rows={Math.min(8, input.split("\n").length)} wrap="off" spellCheck={false} autoComplete="off" autoCorrect="off" aria-invalid={hint ? true : undefined} aria-label={t("shell.command")} aria-description={search ? t("shell.reverseSearchDescription") : undefined}
           className={search || confirming ? "" : "highlighted"}
           onChange={(e) => { setInput(e.target.value); setCursor(null); if (search) setSearch({ query: e.target.value, skip: 0 }); else refilter(e.target.value); }}
@@ -958,7 +1039,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
       {hint && !menu && <span className="term-hint" role="status">{hint}</span>}
       {saveFailed && !hint && <span className="term-hint" role="status">{t("shell.sessionsNotSaved")}</span>}
     </label>
-    {search && <div className="term-search" role="status">{match ? <><span className="term-search-match">{highlight(match.command)}</span><span className="term-search-meta">{match.environment ? `${match.environment} · ` : ""}{formatDateTime(new Date(match.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · {t("shell.searchHelp")}</span></> : <span className="term-search-meta">{t("shell.noHistoryMatches")}</span>}</div>}
+    {search && <div className="term-search" role="status">{match ? <><span className="term-search-match">{highlight(match.command, Object.keys(aliases))}</span><span className="term-search-meta">{match.environment ? `${match.environment} · ` : ""}{formatDateTime(new Date(match.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · {t("shell.searchHelp")}</span></> : <span className="term-search-meta">{t("shell.noHistoryMatches")}</span>}</div>}
   </div>;
 }
 
@@ -987,12 +1068,12 @@ function groups<T extends { entry: Entry }>(items: T[]): T[][] {
   return out;
 }
 
-const SessionActions = createContext<{ busy: boolean; rerun: (command: string) => void; fold: (id: number) => void } | null>(null);
+const SessionActions = createContext<{ busy: boolean; rerun: (command: string) => void; fold: (id: number) => void; aliases: string[] } | null>(null);
 
 function Line({ entry, hidden, onToggle }: { entry: Entry; hidden?: number; onToggle: () => void }): ReactNode {
   const { t } = useTranslation();
   const actions = useContext(SessionActions);
-  if (entry.kind === "input") return <div className="term-line term-cmd"><span className="term-prompt">{entry.prompt}</span> {highlight(entry.text)}
+  if (entry.kind === "input") return <div className="term-line term-cmd"><span className="term-prompt">{entry.prompt}</span> {highlight(entry.text, actions?.aliases)}
     {hidden !== undefined && <button type="button" className="term-folded" onClick={() => actions?.fold(entry.id)}>{t("shell.linesHidden", { count: hidden })}</button>}
     {entry.command && actions && <span className="term-cmd-actions">
       <button type="button" className="icon-btn sm" aria-label={t("shell.rerun")} data-tip={t("shell.rerun")} disabled={actions.busy} onClick={() => actions.rerun(entry.text)}><Icon name="refresh" /></button>
@@ -1019,6 +1100,7 @@ const empty = (v: unknown) => v === false || v === null || v === undefined || v 
 function TableBlock({ table, expanded, footer, onToggle }: { table: Table; expanded: boolean; footer?: string; onToggle: () => void }) {
   const { t } = useTranslation();
   const actions = useContext(CellActions);
+  const aliases = useContext(SessionActions)?.aliases;
   const [sort, setSort] = useState<{ column: number; desc: boolean } | null>(null);
   const [active, setActive] = useState<{ r: number; c: number } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1088,7 +1170,7 @@ function TableBlock({ table, expanded, footer, onToggle }: { table: Table; expan
             const pos = `${i}:${j}`;
             const on = active?.r === i && active.c === j;
             return table.code?.includes(j)
-              ? <td key={j} data-cell={pos} data-active={on || undefined}>{highlight(String(v))}</td>
+              ? <td key={j} data-cell={pos} data-active={on || undefined}>{highlight(String(v), aliases)}</td>
               : <Cell key={j} value={v} column={table.columns[j]} model={table.model} row={record(row)} pos={pos} active={on} pin={pinned && j === 0} />;
           })}</tr>)}</tbody></table>}
     </div>

@@ -14,6 +14,14 @@ export type Command =
   | { kind: "history"; q?: string; clear?: boolean }
   | { kind: "clear" }
   | { kind: "next" }
+  | { kind: "prev" }
+  /** `remove`: forget the variable; without a name, list them. */
+  | { kind: "set"; name?: string; remove?: boolean }
+  /** `command` null removes the alias; without a name, list them. */
+  | { kind: "alias"; name?: string; command?: string | null }
+  | { kind: "grep"; q: string }
+  /** `hide`: drop the listed columns instead of keeping them in that order. */
+  | { kind: "cols"; columns: string[]; hide: boolean }
   | { kind: "context"; value?: Record<string, unknown> | null }
   | { kind: "whoami" }
   | { kind: "metadata"; model: string; ids: number[] }
@@ -22,7 +30,7 @@ export type Command =
   | { kind: "call"; call: OdooCall; display: "rows" | "fields" | "models" | "names" | "groups" | "value"; page?: { limit: number; offset: number }; filter?: string };
 
 export const VERBS = ["search", "count", "read", "read_group", "name", "ref", "metadata", "whoami", "cam", "uhg", "create", "write", "unlink", "call", "help"];
-export const META = ["\\?", "\\l", "\\c", "\\q", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\context", "\\clear"];
+export const META = ["\\?", "\\l", "\\c", "\\q", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\prev", "\\set", "\\alias", "\\grep", "\\cols", "\\context", "\\clear"];
 /** Verbs whose second token is a model, for autocomplete. */
 export const MODEL_VERBS = ["search", "count", "read", "read_group", "name", "metadata", "cam", "create", "write", "unlink", "call", "\\d"];
 
@@ -141,8 +149,8 @@ export function searchCall(m: string, domain: unknown[], fields: string[] | unde
   return { model: m, method: "search_read", args: [], kwargs };
 }
 
-/** Replace `$_` outside strings with the previous result's ids. */
-export function substitute(line: string, previous: number[] | undefined): string {
+/** Replace `$_` (previous result) and `$name` (saved with \\set) outside strings with their ids. */
+export function substitute(line: string, previous: number[] | undefined, named: Record<string, { ids: number[] }> = {}): string {
   let out = "";
   let quote: string | null = null;
   for (let i = 0; i < line.length; i++) {
@@ -154,17 +162,31 @@ export function substitute(line: string, previous: number[] | undefined): string
       continue;
     }
     if (c === "'" || c === '"') { quote = c; out += c; continue; }
-    if (c === "$" && line[i + 1] === "_" && !/\w/.test(line[i + 2] ?? "")) {
+    const name = c === "$" ? /^\$([A-Za-z_]\w*)/.exec(line.slice(i))?.[1] : undefined;
+    if (name === "_") {
       if (!previous) throw new CommandError(i18n.t("shell.errors.noPreviousIds"));
       if (!previous.length) throw new CommandError(i18n.t("shell.errors.emptyPreviousIds"));
       out += `[${previous.join(",")}]`;
       i++;
       continue;
     }
+    if (name) {
+      if (!Object.hasOwn(named, name)) throw new CommandError(i18n.t("shell.errors.unknownVariable", { name }));
+      out += `[${named[name].ids.join(",")}]`;
+      i += name.length;
+      continue;
+    }
     out += c;
   }
   return out;
 }
+
+/** `pc -l 5` runs the command saved as `pc` followed by ` -l 5`. */
+export function expandAlias(line: string, aliases: Record<string, string>): string {
+  const m = /^\s*(\S+)([\s\S]*)$/.exec(line);
+  return m && Object.hasOwn(aliases, m[1]) ? aliases[m[1]] + m[2] : line;
+}
+const NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 
 export function parse(line: string): Command | null {
   const tokens = tokenize(line.trim());
@@ -182,6 +204,34 @@ export function parse(line: string): Command | null {
     }
     case "\\clear": return { kind: "clear" };
     case "\\next": return { kind: "next" };
+    case "\\prev": return { kind: "prev" };
+    case "\\set": {
+      if (!rest.length) return { kind: "set" };
+      if (!NAME.test(rest[0]) || rest.length > 2 || (rest[1] !== undefined && rest[1] !== "-")) throw new CommandError(i18n.t("shell.errors.setUsage"));
+      return { kind: "set", name: rest[0], remove: rest[1] === "-" };
+    }
+    case "\\alias": {
+      if (!rest.length) return { kind: "alias" };
+      const name = rest[0];
+      if (!NAME.test(name) || VERBS.includes(name)) throw new CommandError(i18n.t("shell.errors.aliasName", { name }));
+      if (rest.length === 2 && rest[1] === "-") return { kind: "alias", name, command: null };
+      // Keep the command as typed; it may end in an option the alias user completes.
+      const command = /^\s*\S+\s+\S+\s+([\s\S]+)$/.exec(line)?.[1].trim();
+      const verb = rest[1];
+      if (!command || !verb || !(VERBS.includes(verb) || META.includes(verb))) throw new CommandError(i18n.t("shell.errors.aliasUsage"));
+      return { kind: "alias", name, command };
+    }
+    case "\\grep": {
+      if (!rest.length) throw new CommandError(i18n.t("shell.errors.grepUsage"));
+      return { kind: "grep", q: rest.length === 1 ? unquote(rest[0]) : rest.join(" ") };
+    }
+    case "\\cols": {
+      const raw = rest.join(" ");
+      const hide = raw.startsWith("-");
+      const columns = (hide ? raw.slice(1) : raw).split(",").map((c) => unquote(c.trim())).filter(Boolean);
+      if (!columns.length || new Set(columns).size !== columns.length) throw new CommandError(i18n.t("shell.errors.colsUsage"));
+      return { kind: "cols", columns, hide };
+    }
     case "\\c": {
       if (!rest.length) throw new CommandError(i18n.t("shell.errors.connectUsage"));
       return { kind: "connect", env: unquote(rest.join(" ")) };

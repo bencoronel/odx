@@ -407,6 +407,42 @@ it("re-runs and folds commands from the output", async () => {
   await waitFor(() => expect(within(panel()).getAllByText("42")).toHaveLength(2));
 });
 
+it("filters and reshapes the last table, saves ids as $name, pages back and runs aliases", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => call.method === "search_read"
+    ? { data: [{ id: 3, name: "Ada", email: "ada@x" }, { id: 5, name: "Bob", email: "bob@x" }], write: false, upstream_ms: 1, upstream_bytes: 2 }
+    : { data: true, write: false, upstream_ms: 1, upstream_bytes: 2 });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("\\grep ada");
+  expect(within(panel()).getByText("No table on screen to filter")).toBeTruthy();
+  command("\\alias pp search res.partner -f name,email");
+  command("pp -o 2 -l 2");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0].kwargs).toMatchObject({ offset: 2, limit: 3, fields: ["id", "name", "email"] }));
+  await waitFor(() => expect(within(panel()).getByText("2 rows", { exact: false })).toBeTruthy());
+  command("\\grep ada");
+  expect(within(panel()).getByText("(1 of 2 rows)")).toBeTruthy();
+  command("\\set ada");
+  command("\\cols email,id");
+  const tables = within(panel()).getAllByRole("table");
+  expect(within(tables.at(-1)!).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["email", "id"]);
+  command("\\cols nope");
+  expect(within(panel()).getByText(/Unknown columns: nope/)).toBeTruthy();
+  command("\\prev");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0].kwargs).toMatchObject({ offset: 0 }));
+  command("call res.partner check $ada");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "check", args: [3] }));
+});
+
+it("restores aliases from the vault even when no saved tab was used", async () => {
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "x", aliases: { pp: "search res.partner" }, tabs: [] }));
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("pp -l 1");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ model: "res.partner", method: "search_read" }));
+  command("\\alias pq count res.partner");
+  await waitFor(() => expect(JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)?.[0] ?? "{}").aliases).toEqual({ pp: "search res.partner", pq: "count res.partner" }), { timeout: 2000 });
+});
+
 it("finds text in the output with Ctrl+F and zooms the font with Ctrl +/-", async () => {
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());

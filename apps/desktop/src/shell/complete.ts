@@ -9,6 +9,8 @@ export type CompletionContext = {
   models?: string[];
   fields: (model: string) => Field[] | undefined;
   connected: boolean;
+  /** Saved aliases (name → command), offered as commands. */
+  aliases?: Record<string, string>;
 };
 export type Completion = {
   /** Start position of text replaced on acceptance. */
@@ -43,6 +45,11 @@ export const COMMANDS: { name: string; detail: string; translateDetail: true }[]
   { name: "\\timing", detail: "timing", translateDetail: true },
   { name: "\\history", detail: "history", translateDetail: true },
   { name: "\\next", detail: "next", translateDetail: true },
+  { name: "\\prev", detail: "prev", translateDetail: true },
+  { name: "\\grep", detail: "grep", translateDetail: true },
+  { name: "\\cols", detail: "cols", translateDetail: true },
+  { name: "\\set", detail: "set", translateDetail: true },
+  { name: "\\alias", detail: "alias", translateDetail: true },
   { name: "\\context", detail: "context", translateDetail: true },
   { name: "\\clear", detail: "clear", translateDetail: true },
   { name: "\\q", detail: "disconnect", translateDetail: true },
@@ -190,7 +197,8 @@ export function completions(input: string, ctx: CompletionContext): Completion |
   const partial = input.slice(from);
   const before = input.slice(0, from).trim().split(/\s+/).filter(Boolean);
   if (!before.length) {
-    const items = rank(COMMANDS, (c) => c.name, partial).map((c) => ({ value: c.name, detail: c.detail, translateDetail: c.translateDetail, kind: "command" as const }));
+    const aliases = Object.entries(ctx.aliases ?? {}).map(([name, command]) => ({ name, detail: command, translateDetail: false }));
+    const items = rank([...COMMANDS, ...aliases], (c) => c.name, partial).map((c) => ({ value: c.name, detail: c.detail, translateDetail: c.translateDetail, kind: "command" as const }));
     return { from, items, suffix: " " };
   }
   const [verb] = before;

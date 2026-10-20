@@ -78,7 +78,9 @@
       "local": "Local",
       "remote": "API"
     },
-    "api": { "title": "API" },
+    "api": {
+      "title": "API"
+    },
     "serverPending": "Pending · Server mode",
     "settings": {
       "title": "Settings",
@@ -624,7 +626,7 @@
     "type": "type",
     "count_one": "{{count}} {{item}}",
     "count_other": "{{count}} {{item}}",
-    "help": "Session\n  \\l                         available environments\n  \\c <environment>           connect (checks the connection)\n  \\q                         disconnect\n  \\x                         toggle expanded view\n  \\timing                    show or hide timings\n  \\history [text | clear]    history (also \\s); Ctrl+R searches backwards\n  !n  /  !!                  load command n from history / the latest\n  \\context [json | -]        view, set or clear session context\n  \\clear                     clear screen (Ctrl+L)\nQueries\n  search <model> [-d domain] [-f fields] [-l limit] [-o offset] [--order order]\n  count <model> [-d domain]\n  read <model> <ids> [-f fields | -f *]\n  name <model> <text> [-l limit]\n  read_group <model> <groupby> [-d domain] [-f aggregates] [-l limit] [--order order]\n  ref <module.name>          resolve an XML ID\n  metadata <model> <ids>     creator, last update and XML ID\n  \\d <model> [filter] [--names name,email]  field metadata\n  \\dm [filter]               models\n  \\next                      next page of the last search\n  $_                         ids of the last result, e.g. write res.partner $_ {'active': False}\nUser\n  whoami                     current user and companies\n  cam <model>                read/write/create/unlink rights\n  uhg <module.group>         does the user have the group?\nWrites (require confirmation)\n  create <model> <values>\n  write <model> <ids> <values>\n  unlink <model> <ids>\n  call <model> <method> [args] [kwargs]\n\nDomains and values in JSON or Python: [('name','ilike','ada')]  {'name': 'Ada', 'active': True}\nIDs: 1,2,3 or [1,2,3]. History with ↑/↓, autocomplete with Tab, → accepts the grey suggestion, new line with Shift+Enter.\nCtrl+↑ enters the last table (arrows move, Enter opens, C copies, Esc returns).\nCtrl+F searches the output; Ctrl +/−/0 changes the font size.\nCtrl+C stops waiting for a call. Click an id or relation to open it, or a long value to see it in full.",
+    "help": "Session\n  \\l                         available environments\n  \\c <environment>           connect (checks the connection)\n  \\q                         disconnect\n  \\x                         toggle expanded view\n  \\timing                    show or hide timings\n  \\history [text | clear]    history (also \\s); Ctrl+R searches backwards\n  !n  /  !!                  load command n from history / the latest\n  \\context [json | -]        view, set or clear session context\n  \\clear                     clear screen (Ctrl+L)\nQueries\n  search <model> [-d domain] [-f fields] [-l limit] [-o offset] [--order order]\n  count <model> [-d domain]\n  read <model> <ids> [-f fields | -f *]\n  name <model> <text> [-l limit]\n  read_group <model> <groupby> [-d domain] [-f aggregates] [-l limit] [--order order]\n  ref <module.name>          resolve an XML ID\n  metadata <model> <ids>     creator, last update and XML ID\n  \\d <model> [filter] [--names name,email]  field metadata\n  \\dm [filter]               models\n  \\next  /  \\prev            next / previous page of the last search\n  $_                         ids of the last result, e.g. write res.partner $_ {'active': False}\n  \\set [name [-]]            save $_ as $name (no name lists them; - forgets it)\nResults\n  \\grep <text>               keep the rows of the last table containing the text\n  \\cols a,b  /  \\cols -a,b   keep columns in that order / hide them\n  \\alias [name <command> | name -]  save a command; `name args` runs it with args appended\nUser\n  whoami                     current user and companies\n  cam <model>                read/write/create/unlink rights\n  uhg <module.group>         does the user have the group?\nWrites (require confirmation)\n  create <model> <values>\n  write <model> <ids> <values>\n  unlink <model> <ids>\n  call <model> <method> [args] [kwargs]\n\nDomains and values in JSON or Python: [('name','ilike','ada')]  {'name': 'Ada', 'active': True}\nIDs: 1,2,3 or [1,2,3]. History with ↑/↓, autocomplete with Tab, → accepts the grey suggestion, new line with Shift+Enter.\nCtrl+↑ enters the last table (arrows move, Enter opens, C copies, Esc returns).\nCtrl+F searches the output; Ctrl +/−/0 changes the font size.\nCtrl+C stops waiting for a call. Click an id or relation to open it, or a long value to see it in full.",
     "literal": {
       "position": "{{message}} (position {{position}})",
       "expectedValue": "expected a value",
@@ -673,7 +675,13 @@
       "xmlid": "Expected an XML ID like base.main_company. Usage: {{usage}}",
       "missingGroupby": "Missing groupby, e.g. partner_id,state. Usage: {{usage}}",
       "noPreviousIds": "$_ needs a previous result with records",
-      "emptyPreviousIds": "$_: the previous result has no records"
+      "emptyPreviousIds": "$_: the previous result has no records",
+      "unknownVariable": "${{name}} is not defined; save a result with \\set {{name}}",
+      "setUsage": "Usage: \\set [name [-]]  (letters, digits and _)",
+      "aliasName": "Invalid alias name: {{name}}. Use letters, digits and _, and not a command name",
+      "aliasUsage": "Usage: \\alias name <command>  or  \\alias name -",
+      "grepUsage": "Usage: \\grep <text>",
+      "colsUsage": "Usage: \\cols col1,col2  or  \\cols -col1,col2"
     },
     "completions": {
       "search": "Search and read records",
@@ -706,7 +714,12 @@
       "whoami": "Current user",
       "access": "Model access rights",
       "hasGroup": "Does the user have a group?",
-      "aggregates": "aggregates"
+      "aggregates": "aggregates",
+      "prev": "Previous page",
+      "grep": "Filter the last table",
+      "cols": "Pick or hide columns",
+      "set": "Save the last ids as $name",
+      "alias": "Saved commands"
     },
     "usage": {
       "fields": "\\d <model> [filter] [--names name,email]",
@@ -767,7 +780,22 @@
     "sessionRestored": "── Session restored · {{date}} ──",
     "restoredEnvironmentGone": "The environment {{name}} no longer exists; use \\c to connect to another one.",
     "sessionsNotSaved": "Sessions could not be saved; they will not survive a restart",
-    "previousFromModel": "$_ holds {{model}} ids, not {{target}} ids; check them before confirming."
+    "previousFromModel": "{{name}} holds {{model}} ids, not {{target}} ids; check them before confirming.",
+    "firstPage": "Already on the first page",
+    "noVariables": "No saved variables. Save the last result with \\set name",
+    "variable": "Variable",
+    "model": "Model",
+    "records": "Records",
+    "variableRemoved": "{{name}} removed",
+    "variableSet_one": "{{name}} = {{count}} {{model}} id",
+    "variableSet_other": "{{name}} = {{count}} {{model}} ids",
+    "noAliases": "No aliases. Create one with \\alias name command",
+    "aliasRemoved": "Alias {{name}} removed",
+    "aliasSet": "Alias {{name}} saved",
+    "noTable": "No table on screen to filter",
+    "unknownColumns": "Unknown columns: {{columns}}. Available: {{available}}",
+    "filtered_one": "{{shown}} of {{count}} row",
+    "filtered_other": "{{shown}} of {{count}} rows"
   },
   "errors": {
     "unknown": "An unknown error occurred.",
