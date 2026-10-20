@@ -110,3 +110,12 @@ it("ignores a database list that arrives for an older URL", async () => {
   fireEvent.focus(screen.getByRole("combobox", { name: "Database" }));
   expect(screen.queryByRole("option", { name: "old-db" })).toBeNull();
 });
+
+it("restores what was typed after being unmounted", () => {
+  const draftRef = { current: null };
+  const { unmount } = render(<EnvironmentForm busy={false} tagSuggestions={[]} save={vi.fn()} cancel={vi.fn()} draftRef={draftRef} />);
+  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Dev" } });
+  unmount();
+  render(<EnvironmentForm busy={false} tagSuggestions={[]} save={vi.fn()} cancel={vi.fn()} draftRef={draftRef} />);
+  expect((screen.getByLabelText(/^Name/) as HTMLInputElement).value).toBe("Dev");
+});

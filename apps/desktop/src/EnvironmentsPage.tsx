@@ -3,7 +3,7 @@ import SettingsTable from "./SettingsTable";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ipc, type Environment, type EnvironmentDraft, type EnvironmentProxyInput, type EnvironmentProxyView, type Pending, type ProxyMode, type WriteMode } from "./ipc";
 import { ProxyFields, ProxyKindSelect, draftFromView, emptyProxy, proxyError, proxyInput, withKind, type ProxyDraft } from "./ProxyPanel";
-import EnvironmentForm, { ProtocolSelect, connectionComplete, protocolLabels, urlError, type ConnectionValues, type Protocol } from "./EnvironmentForm";
+import EnvironmentForm, { ProtocolSelect, type FormDraft, connectionComplete, protocolLabels, urlError, type ConnectionValues, type Protocol } from "./EnvironmentForm";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { Icon } from "./Icon";
 import { EnvIcon } from "./EnvIcon";
@@ -18,7 +18,7 @@ import { useWindowState, usePreventUnload } from "./windowState";
 import TagEditor, { sameTag, uniqueTags } from "./TagEditor";
 import EnvironmentFilters from "./EnvironmentFilters";
 
-export default function EnvironmentsPage({ envs, pending = [], refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode }: {
+export default function EnvironmentsPage({ envs, pending = [], refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode, draftRef }: {
   envs: Environment[];
   /** Confirm before saving context or headers, which revokes pending approvals. */
   pending?: Pending[];
@@ -34,6 +34,7 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   writableOnly: boolean;
   setWritableOnly: (value: boolean) => void;
   changeMode: (env: Environment, mode: WriteMode) => void;
+  draftRef?: { current: FormDraft | null };
 }) {
   const { t } = useTranslation();
   const [listWidth, setListWidth] = useListWidth();
@@ -141,7 +142,7 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
       </ul>
     </aside>
     <section className="detail-pane">
-      {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} cancel={() => setCreating(false)} save={async (draft, tags) => { setSelectedId((await save(draft, tags)).id); }} />
+      {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} draftRef={draftRef} cancel={() => setCreating(false)} save={async (draft, tags) => { setSelectedId((await save(draft, tags)).id); }} />
         : selected && <EnvironmentDetail key={selected.id} env={selected} busy={busy} pendingCount={pending.filter((p) => p.environment_id === selected.id).length} envNames={envs.map((e) => e.name)} allTags={allTags}
           refresh={refresh}
           openShell={() => openShell(selected)}

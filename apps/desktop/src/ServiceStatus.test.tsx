@@ -161,3 +161,17 @@ it("closes the approval dialog when the decision succeeds even if the refresh af
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(ipc.decide).toHaveBeenCalledWith("p1", true);
 });
+
+it("keeps the environment draft across pages and drops it on cancel", async () => {
+  localStorage.setItem("odx.page", "environments");
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Create environment" }));
+  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Dev" } });
+  fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+  fireEvent.click(screen.getByRole("button", { name: "Environments" }));
+  const name = () => screen.getByLabelText(/^Name/) as HTMLInputElement;
+  expect((await screen.findByLabelText(/^Name/) as HTMLInputElement).value).toBe("Dev");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Create environment" }));
+  expect(name().value).toBe("");
+});

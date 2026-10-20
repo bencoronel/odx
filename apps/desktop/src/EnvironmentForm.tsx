@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { ipc, type EnvironmentDraft, type Health } from "./ipc";
 import HeaderInput from "./HeaderInput";
 import TagEditor from "./TagEditor";
@@ -70,15 +70,20 @@ export function ConnectionFields({ idPrefix, values, change, editing, autoFocus,
   </div>;
 }
 
-export default function EnvironmentForm({ busy, save, cancel, tagSuggestions }: {
+export type FormDraft = { values: ConnectionValues; tags: string[] };
+
+export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, draftRef }: {
   busy: boolean;
   save: (draft: EnvironmentDraft, tags: string[]) => Promise<void>;
   cancel: () => void;
   tagSuggestions: string[];
+  /** Keeps what was typed while the form is unmounted, e.g. when switching pages. */
+  draftRef?: { current: FormDraft | null };
 }) {
   const { t } = useTranslation();
-  const [values, setValues] = useState<ConnectionValues>({ name: "", url: "", database: "", login: "", secret: "", protocol: "auto" });
-  const [tags, setTags] = useState<string[]>([]);
+  const [values, setValues] = useState<ConnectionValues>(() => draftRef?.current?.values ?? { name: "", url: "", database: "", login: "", secret: "", protocol: "auto" });
+  const [tags, setTags] = useState<string[]>(() => draftRef?.current?.tags ?? []);
+  useEffect(() => { if (draftRef) draftRef.current = { values, tags }; }, [draftRef, values, tags]);
   const [error, setError] = useState<ErrorState>("");
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<Health | null>(null);

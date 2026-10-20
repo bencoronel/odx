@@ -1,5 +1,5 @@
 import { forgetHealth } from "./HealthChip";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ipc, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
@@ -10,6 +10,7 @@ import ActivityPage from "./ActivityPage";
 import ShellPage from "./ShellPage";
 import UnlockScreen from "./UnlockScreen";
 import EnvironmentsPage from "./EnvironmentsPage";
+import type { FormDraft } from "./EnvironmentForm";
 import { CallDetails, methodTone } from "./ApprovalDetails";
 import { PageLoadBoundary } from "./PageLoadBoundary";
 import { WindowTitleBar } from "./WindowTitleBar";
@@ -74,6 +75,9 @@ export default function App() {
   const [decision, setDecision] = useState<{ approval: Pending; approve: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [creatingEnvironment, setCreatingEnvironment] = useState(false);
+  const environmentDraft = useRef<FormDraft | null>(null);
+  // The draft (secret included) lives only while the form is open: cancel, save and lock drop it.
+  useEffect(() => { if (!creatingEnvironment) environmentDraft.current = null; }, [creatingEnvironment]);
   const [modeDecision, setModeDecision] = useState<{ environment: Environment; mode: "temporary" | "permanent" } | null>(null);
   const [minutes, setMinutes] = useState("60");
   useWindowLifecycle((error) => setError(normalizeAppError(error)));
@@ -198,6 +202,7 @@ export default function App() {
         busy={busy}
         creating={creatingEnvironment}
         setCreating={setCreatingEnvironment}
+        draftRef={environmentDraft}
         save={(draft, tags) => mutate(async () => {
           const created = await ipc.saveEnvironment(draft);
           setCreatingEnvironment(false);
