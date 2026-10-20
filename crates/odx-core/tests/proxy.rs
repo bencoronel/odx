@@ -7,7 +7,7 @@ use odx_core::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use support::proxy::{HIDDEN_HOST, TestProxy, closed_port, http_proxy, socks_proxy};
+use support::proxy::{HIDDEN_HOST, TestProxy, closed_port, digest_proxy, http_proxy, socks_proxy};
 
 const PROTOCOLS: [Protocol; 3] = [Protocol::LegacyJsonrpc, Protocol::Xmlrpc, Protocol::Json2];
 const USER: &str = "fixture-proxy-user";
@@ -688,4 +688,106 @@ async fn editing_the_connection_keeps_the_environment_proxy() {
         core.environment_proxy(&direct.id).await.unwrap().mode,
         ProxyMode::Direct
     );
+}
+
+#[tokio::test]
+async fn a_digest_only_proxy_is_reached_through_a_relay_started_on_demand() {
+    let sim = support::simulator().await;
+    let basic = http_proxy(Some((USER, PASSWORD))).await;
+    let digest = digest_proxy(USER, PASSWORD).await;
+    let (core, _tmp) = core().await;
+    let env = core
+        .save_environment(draft("A", &hidden(&sim.url), Protocol::LegacyJsonrpc))
+        .await
+        .unwrap();
+    // Accepted Basic credentials never probe for Digest.
+    core.set_proxy(Some(proxy_with_auth(&basic.url("http"), USER, PASSWORD)))
+        .await
+        .unwrap();
+    assert_eq!(core.check_environment(&env.id).await.unwrap().status, "ok");
+    assert!(
+        basic.log.entries().iter().all(|e| !e.starts_with("407")),
+        "{:?}",
+        basic.log.entries()
+    );
+    core.set_proxy(Some(proxy_with_auth(&digest.url("http"), USER, PASSWORD)))
+        .await
+        .unwrap();
+    let report = core.check_environment(&env.id).await.unwrap();
+    assert_eq!(report.status, "ok", "{report:?} {:?}", digest.log.entries());
+    let entries = digest.log.entries();
+    // Forwarded Basic is rejected, then every request goes through authenticated CONNECT tunnels.
+    assert!(
+        entries.iter().any(|e| e.starts_with("407 POST")),
+        "{entries:?}"
+    );
+    let tunnel = format!("CONNECT {}", hidden(&sim.url).trim_start_matches("http://"));
+    assert!(entries.contains(&tunnel), "{entries:?}");
+    let client = flow::client(&core).await;
+    core.run_tool(
+        &client,
+        "search_read",
+        json!({"env":"A","model":"res.partner","fields":["name"],"limit":1}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        digest
+            .log
+            .entries()
+            .iter()
+            .filter(|e| e.starts_with("407 POST"))
+            .count(),
+        1,
+        "the relay is reused"
+    );
+
+    // HTTPS destinations detect the rejection from the CONNECT tunnel instead of a 407 response.
+    let (tls_port, _) = support::untrusted_tls_server().await;
+    let tls = core
+        .save_environment(draft(
+            "tls",
+            &format!("https://{HIDDEN_HOST}:{tls_port}"),
+            Protocol::LegacyJsonrpc,
+        ))
+        .await
+        .unwrap();
+    let tunnel_only = digest_proxy(USER, PASSWORD).await;
+    core.set_proxy(Some(proxy_with_auth(
+        &tunnel_only.url("http"),
+        USER,
+        PASSWORD,
+    )))
+    .await
+    .unwrap();
+    let report = core.check_environment(&tls.id).await.unwrap();
+    // The untrusted certificate is only reached through an open tunnel.
+    assert_eq!(report.network_error.as_deref(), Some("tls"), "{report:?}");
+    let entries = tunnel_only.log.entries();
+    assert!(
+        entries.contains(&format!("407 CONNECT {HIDDEN_HOST}:{tls_port}")),
+        "{entries:?}"
+    );
+    assert!(
+        entries.contains(&format!("CONNECT {HIDDEN_HOST}:{tls_port}")),
+        "{entries:?}"
+    );
+
+    let wrong = digest_proxy(USER, "fixture-wrong-pass").await;
+    core.set_proxy(Some(proxy_with_auth(&wrong.url("http"), USER, PASSWORD)))
+        .await
+        .unwrap();
+    let report = core.check_environment(&env.id).await.unwrap();
+    assert_eq!(report.network_error.as_deref(), Some("proxy"), "{report:?}");
+    assert!(!wrong.log.entries().iter().any(|e| e.starts_with("CONNECT")));
+    let error = core
+        .run_tool(
+            &client,
+            "search_read",
+            json!({"env":"A","model":"res.partner","limit":1}),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("Digest"), "{error:?}");
+    assert!(!activity_dump(&core).await.contains(PASSWORD));
 }

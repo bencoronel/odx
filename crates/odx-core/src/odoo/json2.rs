@@ -1,7 +1,5 @@
 //! Odoo 19 JSON-2: `POST /json/2/<model>/<method>`. Sources: External JSON-2 API documentation and addons/rpc/controllers/json2.py. Bearer API key, X-Odoo-Database and named body arguments including ids/context. Each call is a separate transaction. Errors use 4xx/5xx with name, message, arguments, context and debug.
-use super::jsonrpc::{
-    MAX_RESPONSE, OdooClient, network_error, proxy_rejected, read_limited, scrub,
-};
+use super::jsonrpc::{MAX_RESPONSE, OdooClient, read_limited, scrub};
 use crate::{
     config::{Environment, Protocol},
     error::{OdxError, Result},
@@ -168,15 +166,14 @@ pub(crate) async fn probe_version(
     client: &OdooClient,
     env: &Environment,
 ) -> Result<Option<String>> {
+    let headers = crate::headers::request_headers(&env.headers)?;
     let response = client
-        .http(env)?
-        .get(format!("{}/web/version", env.url))
-        .headers(crate::headers::request_headers(&env.headers)?)
-        .timeout(client.request_timeout())
-        .send()
-        .await
-        .map_err(|e| network_error(&e, env))
-        .and_then(|r| proxy_rejected(r, env))?;
+        .send(env, |http| {
+            http.get(format!("{}/web/version", env.url))
+                .headers(headers.clone())
+                .timeout(client.request_timeout())
+        })
+        .await?;
     match response.status().as_u16() {
         200..=299 => {}
         status => return Err(OdxError::HttpStatus { status }),
@@ -226,20 +223,20 @@ async fn post(
             "invalid database name for JSON-2",
         )
     })?;
-    let payload = Zeroizing::new(serde_json::to_vec(body)?);
+    let payload = bytes::Bytes::from_owner(crate::security::WipeBody(Zeroizing::new(
+        serde_json::to_vec(body)?,
+    )));
     let response = client
-        .http(env)?
-        .post(url)
-        .header(CONTENT_TYPE, "application/json; charset=utf-8")
-        .headers(headers)
-        .header(AUTHORIZATION, authorization)
-        .header("X-Odoo-Database", database)
-        .body(bytes::Bytes::from_owner(crate::security::WipeBody(payload)))
-        .timeout(client.request_timeout())
-        .send()
-        .await
-        .map_err(|e| network_error(&e, env))
-        .and_then(|r| proxy_rejected(r, env))?;
+        .send(env, |http| {
+            http.post(url.clone())
+                .header(CONTENT_TYPE, "application/json; charset=utf-8")
+                .headers(headers.clone())
+                .header(AUTHORIZATION, authorization.clone())
+                .header("X-Odoo-Database", database.clone())
+                .body(payload.clone())
+                .timeout(client.request_timeout())
+        })
+        .await?;
     let status = response.status().as_u16();
     let bytes = read_limited(response, env, max_response).await?;
     let size = bytes.len();

@@ -1,5 +1,5 @@
 //! Odoo 16–19 XML-RPC: /xmlrpc/2/<service> with integer faultCode. Sources: odoo/addons/base/controllers/rpc.py (16–18) and addons/rpc/controllers/xmlrpc.py (19). Odoo uses allow_none=False and textual dates/binaries; also accept nil, i8, dateTime.iso8601 and base64. Reject DTDs and custom entities; allow predefined and numeric XML references.
-use super::jsonrpc::{OdooClient, network_error, proxy_rejected, read_limited, scrub};
+use super::jsonrpc::{OdooClient, read_limited, scrub};
 use crate::{
     config::Environment,
     error::{OdxError, Result},
@@ -27,18 +27,19 @@ pub(crate) async fn call(
     params: &[Param<'_>],
     max_response: usize,
 ) -> Result<(Value, usize)> {
-    let body = Zeroizing::new(encode_call(method, params)?.into_bytes());
+    let body = bytes::Bytes::from_owner(crate::security::WipeBody(Zeroizing::new(
+        encode_call(method, params)?.into_bytes(),
+    )));
+    let headers = crate::headers::request_headers(&env.headers)?;
     let response = client
-        .http(env)?
-        .post(format!("{}/xmlrpc/2/{service}", env.url))
-        .header(reqwest::header::CONTENT_TYPE, "text/xml; charset=utf-8")
-        .headers(crate::headers::request_headers(&env.headers)?)
-        .body(bytes::Bytes::from_owner(crate::security::WipeBody(body)))
-        .timeout(client.request_timeout())
-        .send()
-        .await
-        .map_err(|e| network_error(&e, env))
-        .and_then(|r| proxy_rejected(r, env))?;
+        .send(env, |http| {
+            http.post(format!("{}/xmlrpc/2/{service}", env.url))
+                .header(reqwest::header::CONTENT_TYPE, "text/xml; charset=utf-8")
+                .headers(headers.clone())
+                .body(body.clone())
+                .timeout(client.request_timeout())
+        })
+        .await?;
     if !response.status().is_success() {
         return Err(OdxError::HttpStatus {
             status: response.status().as_u16(),

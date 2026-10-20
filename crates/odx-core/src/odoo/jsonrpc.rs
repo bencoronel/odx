@@ -32,8 +32,8 @@ struct RpcRequest<'a, A> {
 type AuthCache = HashMap<(String, u64, Protocol), Arc<OnceCell<i64>>>;
 type ProtocolCache = HashMap<(String, u64), Arc<OnceCell<Protocol>>>;
 
-/// One pooled HTTP client per effective proxy; `None` is direct.
-type ClientPool = Vec<(Option<ProxySettings>, Client)>;
+/// One pooled HTTP client per effective proxy; `None` is direct. A Digest proxy's client goes through its own relay.
+type ClientPool = Vec<(Option<ProxySettings>, Client, Option<super::digest::Relay>)>;
 
 #[derive(Clone)]
 pub struct OdooClient {
@@ -65,17 +65,11 @@ impl OdooClient {
             }
         };
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, client)) = clients.iter().find(|(p, _)| p.as_ref() == proxy) {
+        if let Some((_, client, _)) = clients.iter().find(|(p, _, _)| p.as_ref() == proxy) {
             return Ok(client.clone());
         }
-        let builder = Client::builder()
-            .user_agent(concat!("Odx/", env!("CARGO_PKG_VERSION")))
-            .redirect(Policy::none())
-            .retry(reqwest::retry::never())
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(60));
-        let builder = match proxy {
-            None => builder.no_proxy(),
+        let config = match proxy {
+            None => None,
             Some(p) => {
                 // Keep credentials outside URLs to exclude them from errors.
                 let mut config = reqwest::Proxy::all(p.url.as_str()).map_err(|_| {
@@ -84,21 +78,89 @@ impl OdooClient {
                 if !p.username.is_empty() {
                     config = config.basic_auth(p.username.as_str(), p.password.as_str());
                 }
-                builder.proxy(config)
+                Some(config)
             }
         };
-        let client = builder
-            .build()
-            .map_err(|_| OdxError::Upstream("could not create HTTP client".into()))?;
-        clients.push((proxy.cloned(), client.clone()));
+        let client = build_client(config)?;
+        clients.push((proxy.cloned(), client.clone(), None));
         Ok(client)
+    }
+    /// Send through the environment's proxy. When the proxy rejects Basic and offers only Digest, its pooled client switches to the Digest relay and the request is retried once; a rejected request never reached Odoo.
+    pub(super) async fn send(
+        &self,
+        env: &Environment,
+        request: impl Fn(Client) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let attempt = async || {
+            request(self.http(env)?)
+                .send()
+                .await
+                .map_err(|e| network_error(&e, env))
+                .and_then(|r| proxy_rejected(r, env))
+        };
+        let result = match attempt().await {
+            Err(e) if auth_rejected(&e) && self.switch_to_digest(env).await => attempt().await,
+            result => result,
+        };
+        match result {
+            // The relay reports failures as SOCKS errors; name the proxy the user configured.
+            Err(OdxError::Network { kind: "proxy", .. }) if self.relayed(env) => {
+                Err(OdxError::Network {
+                    kind: "proxy",
+                    message: "proxy rejected the Digest login or the tunnel".into(),
+                })
+            }
+            result => result,
+        }
+    }
+    fn relayed(&self, env: &Environment) -> bool {
+        let EnvironmentProxy::Custom(p) = &env.proxy else {
+            return false;
+        };
+        relayed(&self.clients.lock().unwrap_or_else(|e| e.into_inner()), p)
+    }
+    async fn switch_to_digest(&self, env: &Environment) -> bool {
+        let EnvironmentProxy::Custom(p) = &env.proxy else {
+            return false;
+        };
+        // Another request switched after this one used the Basic client.
+        if self.relayed(env) {
+            return true;
+        }
+        let Some(authority) = url::Url::parse(&env.url)
+            .ok()
+            .and_then(|u| Some(format!("{}:{}", u.host_str()?, u.port_or_known_default()?)))
+        else {
+            return false;
+        };
+        if !super::digest::offered(p, &authority).await {
+            return false;
+        }
+        let Ok(relay) = super::digest::Relay::start(p.clone()).await else {
+            return false;
+        };
+        let Ok(config) = reqwest::Proxy::all(relay.url.as_str()) else {
+            return false;
+        };
+        let Ok(client) = build_client(Some(
+            config.basic_auth(super::digest::RELAY_USER, &relay.token),
+        )) else {
+            return false;
+        };
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        // A concurrent request may have switched first; keep its relay so in-flight retries still reach it.
+        if !relayed(&clients, p) {
+            clients.retain(|(q, _, _)| q.as_ref() != Some(p));
+            clients.push((Some(p.clone()), client, Some(relay)));
+        }
+        true
     }
     /// Drop unused proxy clients; retain the direct client.
     pub(crate) fn retain_clients(&self, active: &[Option<ProxySettings>]) {
         self.clients
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|(p, _)| p.is_none() || active.contains(p));
+            .retain(|(p, _, _)| p.is_none() || active.contains(p));
     }
     pub(crate) fn clear_clients(&self) {
         self.clients
@@ -147,18 +209,19 @@ impl OdooClient {
             },
             id: 1,
         };
-        let body = Zeroizing::new(serde_json::to_vec(&request)?);
+        let body = bytes::Bytes::from_owner(crate::security::WipeBody(Zeroizing::new(
+            serde_json::to_vec(&request)?,
+        )));
+        let headers = crate::headers::request_headers(&env.headers)?;
         let response = self
-            .http(env)?
-            .post(format!("{}/jsonrpc", env.url))
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(bytes::Bytes::from_owner(crate::security::WipeBody(body)))
-            .headers(crate::headers::request_headers(&env.headers)?)
-            .timeout(self.request_timeout())
-            .send()
-            .await
-            .map_err(|e| network_error(&e, env))
-            .and_then(|r| proxy_rejected(r, env))?;
+            .send(env, |http| {
+                http.post(format!("{}/jsonrpc", env.url))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body.clone())
+                    .headers(headers.clone())
+                    .timeout(self.request_timeout())
+            })
+            .await?;
         if !response.status().is_success() {
             return Err(OdxError::HttpStatus {
                 status: response.status().as_u16(),
@@ -242,16 +305,15 @@ impl OdooClient {
             if remaining.is_zero() {
                 break;
             }
+            let headers = crate::headers::request_headers(&env.headers)?;
             let mut response = self
-                .http(env)?
-                .get(url.clone())
-                .header(reqwest::header::ACCEPT, accept)
-                .headers(crate::headers::request_headers(&env.headers)?)
-                .timeout(remaining)
-                .send()
-                .await
-                .map_err(|e| network_error(&e, env))
-                .and_then(|r| proxy_rejected(r, env))?;
+                .send(env, |http| {
+                    http.get(url.clone())
+                        .header(reqwest::header::ACCEPT, accept)
+                        .headers(headers.clone())
+                        .timeout(remaining)
+                })
+                .await?;
             if response.status().is_redirection() {
                 let target = response
                     .headers()
@@ -600,11 +662,32 @@ pub(super) async fn read_limited(
     }
     Ok(bytes)
 }
+fn relayed(clients: &ClientPool, proxy: &ProxySettings) -> bool {
+    clients
+        .iter()
+        .any(|(p, _, relay)| p.as_ref() == Some(proxy) && relay.is_some())
+}
+fn build_client(proxy: Option<reqwest::Proxy>) -> Result<Client> {
+    let builder = Client::builder()
+        .user_agent(concat!("Odx/", env!("CARGO_PKG_VERSION")))
+        .redirect(Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(60));
+    match proxy {
+        None => builder.no_proxy(),
+        Some(config) => builder.proxy(config),
+    }
+    .build()
+    .map_err(|_| OdxError::Upstream("could not create HTTP client".into()))
+}
+/// HTTP 407 from forwarding or from the CONNECT tunnel.
+fn auth_rejected(error: &OdxError) -> bool {
+    matches!(error, OdxError::Network { kind: "proxy", message }
+        if message.contains("HTTP 407") || message.contains("proxy authorization required"))
+}
 /// HTTP 407 while forwarding http:// is a proxy authentication failure, not an Odoo status.
-pub(super) fn proxy_rejected(
-    response: reqwest::Response,
-    env: &Environment,
-) -> Result<reqwest::Response> {
+fn proxy_rejected(response: reqwest::Response, env: &Environment) -> Result<reqwest::Response> {
     if env.proxied() && response.status() == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
         return Err(OdxError::Network {
             kind: "proxy",
@@ -614,7 +697,7 @@ pub(super) fn proxy_rejected(
     Ok(response)
 }
 /// Network kind: proxy, timeout, dns, tls, refused, unreachable, reset or network. With a proxy, connection failures are proxy errors except Odoo TLS failures inside the tunnel.
-pub(super) fn network_error(e: &reqwest::Error, env: &Environment) -> OdxError {
+fn network_error(e: &reqwest::Error, env: &Environment) -> OdxError {
     // Include the cause chain, such as DNS or certificate errors.
     let mut detail = e.to_string();
     let mut source = std::error::Error::source(e);

@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+digest_auth.workspace = true
 hex.workspace = true
 libsodium-rs.workspace = true
 libc.workspace = true

@@ -103,11 +103,40 @@ pub async fn http_proxy(auth: Option<(&str, &str)>) -> TestProxy {
         auth.map(|(u, p)| (u.into(), p.into())),
         |stream, auth, log| {
             Box::pin(async move {
-                let _ = http_connection(stream, auth, log).await;
+                let _ = http_connection(stream, auth, log, false).await;
             })
         },
     )
     .await
+}
+
+/// HTTP proxy that only offers and accepts Proxy-Authorization: Digest (MD5, qop=auth).
+pub async fn digest_proxy(user: &str, password: &str) -> TestProxy {
+    serve(Some((user.into(), password.into())), |stream, auth, log| {
+        Box::pin(async move {
+            let _ = http_connection(stream, auth, log, true).await;
+        })
+    })
+    .await
+}
+
+const DIGEST_NONCE: &str = "fixture-nonce";
+
+/// Recompute the client's Digest response with the known password.
+fn digest_valid(given: &str, user: &str, password: &str, method: &str, target: &str) -> bool {
+    let Ok(mut header) = digest_auth::AuthorizationHeader::parse(given) else {
+        return false;
+    };
+    let claimed = header.response.clone();
+    let uri = header.uri.clone();
+    header.digest(&digest_auth::AuthContext::new_with_method(
+        user,
+        password,
+        uri.as_str(),
+        None::<&[u8]>,
+        digest_auth::HttpMethod(method.to_owned().into()),
+    ));
+    header.nonce == DIGEST_NONCE && uri == target && header.response == claimed
 }
 
 /// SOCKS5 optionally accepts only the configured username/password method.
@@ -152,6 +181,7 @@ async fn http_connection(
     mut client: TcpStream,
     auth: Option<(String, String)>,
     log: ProxyLog,
+    digest: bool,
 ) -> std::io::Result<()> {
     let (head, rest) = read_head(&mut client).await?;
     let mut lines = head.split("\r\n").filter(|l| !l.is_empty());
@@ -169,11 +199,23 @@ async fn http_connection(
                 .filter(|(name, _)| name.trim().eq_ignore_ascii_case("proxy-authorization"))
                 .map(|(_, value)| value.trim().to_owned())
         });
-        if given.as_deref() != Some(basic(user, password).as_str()) {
+        let valid = match (&given, digest) {
+            (Some(given), true) => digest_valid(given, user, password, method, target),
+            (given, false) => given.as_deref() == Some(basic(user, password).as_str()),
+            (None, true) => false,
+        };
+        if !valid {
             log.push(format!("407 {method} {target}"));
+            let challenge = if digest {
+                format!(
+                    "Digest realm=\"fixture\", nonce=\"{DIGEST_NONCE}\", qop=\"auth\", algorithm=MD5"
+                )
+            } else {
+                "Basic realm=\"fixture\"".into()
+            };
             client
                 .write_all(
-                    b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"fixture\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    format!("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: {challenge}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
                 )
                 .await?;
             return Ok(());
