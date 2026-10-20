@@ -121,7 +121,7 @@ it("drops the active status when the vault is locked outside the window", async 
 });
 
 it("locking from the sidebar drops pending work and navigation and shows the unlock screen", async () => {
-  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, expires_at: "2026-10-16T10:05:00Z" }]);
+  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: "2026-10-16T00:00:00Z", expires_at: "2026-10-16T10:05:00Z" }]);
   render(<App />);
   await within(await screen.findByRole("contentinfo", { name: "Service status" })).findByRole("button", { name: "1 pending approval" });
   vi.mocked(ipc.lock).mockImplementation(async () => {
@@ -150,16 +150,72 @@ it("moves between sections with Ctrl+1…6 keeping the service status", async ()
   expect(screen.getByRole("button", { name: "Environments" }).getAttribute("aria-current")).toBe("page");
 });
 
-it("closes the approval dialog when the decision succeeds even if the refresh after it fails", async () => {
-  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, expires_at: new Date(Date.now() + 300_000).toISOString() }]);
+it("approves a write in place and reports a refresh failure without blocking", async () => {
+  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() }]);
   localStorage.setItem("odx.page", "approvals");
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  const approve = await screen.findByRole("button", { name: "Approve" });
   vi.mocked(ipc.decide).mockResolvedValue(undefined);
   vi.mocked(ipc.clients).mockRejectedValue({ code: "app.persistence" });
+  fireEvent.click(approve);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await waitFor(() => expect(ipc.decide).toHaveBeenCalledWith("p1", true));
+});
+
+it("confirms an unlink approval and closes the dialog at once", async () => {
+  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "unlink", args: [[1]], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() }]);
+  localStorage.setItem("odx.page", "approvals");
+  render(<App />);
+  vi.mocked(ipc.decide).mockReturnValue(new Promise(() => undefined));
+  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
   fireEvent.click(await screen.findByRole("button", { name: "Confirm send" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(ipc.decide).toHaveBeenCalledWith("p1", true);
+  // Only the request in flight is locked.
+  expect((screen.getByRole("button", { name: "Processing…" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+
+it("rejects a selected batch after one confirmation, with a reason for the agent", async () => {
+  const write = (id: string) => ({ id, environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [[1], { x: 1 }], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() });
+  vi.mocked(ipc.approvals).mockResolvedValue([write("a"), write("b")]);
+  localStorage.setItem("odx.page", "approvals");
+  render(<App />);
+  vi.mocked(ipc.decide).mockResolvedValue(undefined);
+  const options = await screen.findAllByRole("option");
+  fireEvent.click(options[1], { shiftKey: true, detail: 1 });
+  fireEvent.click(screen.getByRole("button", { name: "Reject 2" }));
+  expect(ipc.decide).not.toHaveBeenCalled();
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Rejection reason" }), { target: { value: "duplicated" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Reject 2" }));
+  await waitFor(() => expect(screen.getByText("2 requests rejected")).toBeTruthy());
+  expect(vi.mocked(ipc.decide).mock.calls).toEqual([["a", false, "duplicated"], ["b", false, "duplicated"]]);
+});
+
+it("starts a batch rejection in the reason field, so Enter rejects", async () => {
+  const write = (id: string) => ({ id, environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [[1], { x: 1 }], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() });
+  vi.mocked(ipc.approvals).mockResolvedValue([write("a"), write("b")]);
+  localStorage.setItem("odx.page", "approvals");
+  render(<App />);
+  vi.mocked(ipc.decide).mockResolvedValue(undefined);
+  fireEvent.click((await screen.findAllByRole("option"))[1], { shiftKey: true, detail: 1 });
+  fireEvent.keyDown(document.body, { key: "r" });
+  const input = within(await screen.findByRole("alertdialog")).getByRole("textbox", { name: "Rejection reason" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(vi.mocked(ipc.decide).mock.calls).toEqual([["a", false, ""], ["b", false, ""]]);
+});
+
+it("keeps the approvals filter when switching pages", async () => {
+  vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() }]);
+  localStorage.setItem("odx.page", "approvals");
+  render(<App />);
+  fireEvent.change(await screen.findByRole("searchbox", { name: "Filter requests" }), { target: { value: "partner" } });
+  fireEvent.click(screen.getByRole("button", { name: "Environments" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Approvals/ }));
+  expect((await screen.findByRole("searchbox", { name: "Filter requests" }) as HTMLInputElement).value).toBe("partner");
 });
 
 it("keeps the environment draft across pages and drops it on cancel", async () => {

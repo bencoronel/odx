@@ -71,8 +71,16 @@ export default function App() {
   const [services, setServices] = useState<ServiceStatus | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [writableOnly, setWritableOnly] = useWindowState("app.writableOnly", false);
-  const [shellTarget, setShellTarget] = useState<string | null>(null);
-  const [decision, setDecision] = useState<{ approval: Pending; approve: boolean } | null>(null);
+  const [approvalFilter, setApprovalFilter] = useWindowState("app.approvalFilter", "");
+  // Environment to show when Environments opens from elsewhere (an approval).
+  const [environmentFocus, setEnvironmentFocus] = useState<string | null>(null);
+  useEffect(() => { if (page === "environments") setEnvironmentFocus(null); }, [page]);
+  const [shellTarget, setShellTarget] = useState<{ env: string; command?: string } | null>(null);
+  const [decision, setDecision] = useState<{ approvals: Pending[]; approve: boolean } | null>(null);
+  const [batchReason, setBatchReason] = useState("");
+  const batchReasonInput = useRef<HTMLInputElement>(null);
+  const [notice, setNotice] = useState<{ text: string; activity: boolean } | null>(null);
+  const [deciding, setDeciding] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [creatingEnvironment, setCreatingEnvironment] = useState(false);
   const environmentDraft = useRef<FormDraft | null>(null);
@@ -81,7 +89,7 @@ export default function App() {
   const [modeDecision, setModeDecision] = useState<{ environment: Environment; mode: "temporary" | "permanent" } | null>(null);
   const [minutes, setMinutes] = useState("60");
   useWindowLifecycle((error) => setError(normalizeAppError(error)));
-  usePreventUnload(status === "loading" || busy || creatingEnvironment || decision !== null || modeDecision !== null);
+  usePreventUnload(status === "loading" || busy || deciding.size > 0 || creatingEnvironment || decision !== null || modeDecision !== null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -169,6 +177,29 @@ export default function App() {
     }
   }
 
+  /** Lock only these requests while their decisions are sent; the rest of the app stays usable. */
+  async function decideAll(approvals: Pending[], approve: boolean, reason?: string) {
+    const ids = approvals.map((a) => a.id);
+    setDeciding((current) => new Set([...current, ...ids]));
+    setError("");
+    try {
+      const results = await Promise.allSettled(approvals.map((a) => approve ? ipc.decide(a.id, true) : ipc.decide(a.id, false, reason)));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      if (failed) setError(normalizeAppError(failed.reason));
+      const done = results.filter((r) => r.status === "fulfilled").length;
+      if (done) setNotice({ text: t(approve ? "approvals.approvedNotice" : "approvals.rejectedNotice", { count: done }), activity: approve });
+      // One refresh for the whole batch, and unlock only after it, so decided requests never look pending again.
+      await refresh().catch((reason) => setError(normalizeAppError(reason)));
+    } finally {
+      setDeciding((current) => new Set([...current].filter((id) => !ids.includes(id))));
+    }
+  }
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const themeToggle = <button type="button" className="icon-btn" aria-label={theme === "dark" ? t("app.theme.useLight") : t("app.theme.useDark")} data-tip={theme === "dark" ? t("app.theme.light") : t("app.theme.dark")} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>;
 
   if (status !== "unlocked") {
@@ -186,7 +217,7 @@ export default function App() {
       {error && <div className="banner danger page-banner" role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><button className="icon-btn sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></button></div>}
       <div className="shell-workspace" hidden={page !== "shell"}>
         {shellVisited && <PageLoadBoundary>
-          <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget} onConnectHandled={() => setShellTarget(null)} />
+          <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget?.env} command={shellTarget?.command} onConnectHandled={() => setShellTarget(null)} />
         </PageLoadBoundary>}
       </div>
       <PageLoadBoundary key={page}>
@@ -198,6 +229,7 @@ export default function App() {
         : page === "environments" ? <EnvironmentsPage
         envs={envs}
         pending={pending}
+        focusId={environmentFocus}
         refresh={refresh}
         busy={busy}
         creating={creatingEnvironment}
@@ -213,7 +245,7 @@ export default function App() {
         update={(id, draft) => mutate(() => ipc.updateEnvironment(id, draft))}
         remove={(id) => run(() => ipc.deleteEnvironment(id, true))}
         clone={(id, name) => mutate(() => ipc.cloneEnvironment(id, name))}
-        openShell={(env) => { setShellTarget(env.name); setPage("shell"); }}
+        openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }}
         writableOnly={writableOnly}
         setWritableOnly={setWritableOnly}
         changeMode={(env, mode) => {
@@ -226,7 +258,13 @@ export default function App() {
         envs={envs}
         busy={busy}
         update={(id, label, ids, caps) => run(() => ipc.updateClient(id, label, ids, caps)).then((ok) => { if (!ok) throw { code: "app.client_update_failed" }; })}
-      /> : <ApprovalsPage pending={pending} envs={envs} busy={busy} decide={(approval, approve) => setDecision({ approval, approve })} />}
+      /> : <ApprovalsPage pending={pending} envs={envs} deciding={deciding}
+        // Irreversible deletions still need an explicit confirmation.
+        decide={(approval, approve, reason) => approve && approval.method === "unlink" ? setDecision({ approvals: [approval], approve }) : void decideAll([approval], approve, reason)}
+        decideMany={(approvals, approve) => { setBatchReason(""); setDecision({ approvals, approve }); }}
+        openInShell={(approval, command) => { setShellTarget({ env: approval.environment_name, command }); setPage("shell"); }}
+        openEnvironment={(id) => { setEnvironmentFocus(id); setPage("environments"); }}
+        filter={approvalFilter} setFilter={setApprovalFilter} />}
       </PageLoadBoundary>
     </main>
   </div>
@@ -263,23 +301,32 @@ export default function App() {
     </ApprovalDialog>
     <ApprovalDialog
       open={decision !== null}
-      busy={busy}
-      tone={decision?.approve ? (decision.approval.method === "unlink" ? "danger" : "warn") : "danger"}
-      title={decision?.approve ? t("app.approval.confirmSendTitle") : t("app.approval.confirmRejectTitle")}
-      description={decision?.approve ? t("app.approval.confirmSendDescription") : t("app.approval.confirmRejectDescription")}
-      confirmLabel={decision?.approve ? t("app.approval.confirmSend") : t("app.approval.confirmReject")}
-      destructive={decision?.approve === false || decision?.approval.method === "unlink"}
-      onOpenChange={(open) => { if (!open && !busy) setDecision(null); }}
-      onConfirm={async () => {
-        if (!decision) return;
-        await mutate(() => ipc.decide(decision.approval.id, decision.approve));
-        setDecision(null);
-      }}
+      busy={false}
+      tone={decision?.approve && !decision.approvals.some((a) => a.method === "unlink") ? "warn" : "danger"}
+      title={t(decision?.approve === false ? "app.approval.confirmRejectTitle" : "app.approval.confirmSendTitle", { count: decision?.approvals.length ?? 1 })}
+      description={t(decision?.approve === false ? "app.approval.confirmRejectDescription" : "app.approval.confirmSendDescription", { count: decision?.approvals.length ?? 1 })}
+      confirmLabel={t(decision?.approve === false ? "app.approval.confirmReject" : "app.approval.confirmSend", { count: decision?.approvals.length ?? 1 })}
+      destructive={decision?.approve === false || !!decision?.approvals.some((a) => a.method === "unlink")}
+      onOpenChange={(open) => { if (!open) setDecision(null); }}
+      // Close at once; each request shows its progress in Approvals.
+      // Rejecting starts in the reason field so R, Enter rejects; approving keeps the safe default focus.
+      initialFocus={decision?.approve === false ? batchReasonInput : undefined}
+      onConfirm={async () => { if (decision) void decideAll(decision.approvals, decision.approve, decision.approve ? undefined : batchReason); }}
     >
-      {decision && <div className="call-box">
-        <div className="row gap-2"><code className={`method tone-${methodTone(decision.approval.method)}`}>{decision.approval.method}</code><strong className="mono">{decision.approval.model}</strong><span className="chip ml-auto"><Icon name="server" />{decision.approval.environment_name}</span></div>
-        <CallDetails item={decision.approval} />
+      {decision?.approvals.length === 1 && <div className="call-box">
+        <div className="row gap-2"><code className={`method tone-${methodTone(decision.approvals[0].method)}`}>{decision.approvals[0].method}</code><strong className="mono">{decision.approvals[0].model}</strong><span className="chip ml-auto"><Icon name="server" />{decision.approvals[0].environment_name}</span></div>
+        <CallDetails item={decision.approvals[0]} />
       </div>}
+      {decision && decision.approvals.length > 1 && <ul className="batch-list">
+        {decision.approvals.map((a) => <li key={a.id}><code className={`method tone-${methodTone(a.method)}`}>{a.method}</code><span className="mono">{a.model}</span><span className="chip ml-auto"><Icon name="server" />{a.environment_name}</span></li>)}
+      </ul>}
+      {decision?.approve === false && <label className="field"><span>{t("approvals.reasonLabel")}</span>
+        <input ref={batchReasonInput} value={batchReason} maxLength={500} placeholder={t("approvals.batchReasonPlaceholder")} onChange={(event) => setBatchReason(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void decideAll(decision.approvals, false, batchReason); setDecision(null); } }} /></label>}
     </ApprovalDialog>
+    {notice && <div className="toast" role="status"><Icon name="check" /><span>{notice.text}</span>
+      {notice.activity && <button type="button" className="btn ghost sm" onClick={() => { setNotice(null); setPage("activity"); }}>{t("approvals.viewActivity")}</button>}
+      <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={() => setNotice(null)}><Icon name="x" /></button>
+    </div>}
   </div>;
 }

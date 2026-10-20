@@ -209,7 +209,7 @@ it("configures an own proxy with masked credentials and only saves the proxy whe
 it("asks before saving the connection when the environment has pending requests", async () => {
   vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", proxy: null, inherited: null });
   const update = vi.fn().mockResolvedValue({ ...env });
-  const pending = [{ id: "p1", environment_id: "fixture", environment_name: "Fixture", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, expires_at: "2026-10-16T00:00:00Z" }];
+  const pending = [{ id: "p1", environment_id: "fixture", environment_name: "Fixture", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: "2026-10-16T00:00:00Z", expires_at: "2026-10-16T00:00:00Z" }];
   render(withProps({ update, pending }));
   editConnection();
   // Editing before the proxy loads still shows the selector when ready.
@@ -324,6 +324,10 @@ it("focuses the search with Ctrl+F or / and starts a new environment with Ctrl+N
   search.blur();
   fireEvent.keyDown(document.body, { key: "/" });
   expect(document.activeElement).toBe(search);
+  // Spanish layouts type "/" with Shift+7.
+  search.blur();
+  fireEvent.keyDown(document.body, { key: "/", shiftKey: true });
+  expect(document.activeElement).toBe(search);
   // While typing, / is just a character.
   fireEvent.change(search, { target: { value: "a" } });
   const event = new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
@@ -349,4 +353,10 @@ it("keeps quick tag edits and treats tags differing in case as one", async () =>
   fireEvent.click(box);
   expect(within(screen.getByRole("listbox", { name: "Environments" })).getAllByRole("option")).toHaveLength(2);
   vi.mocked(ipc.setTags).mockResolvedValue(undefined as never);
+});
+
+it("opens with the requested environment selected", () => {
+  const other: Environment = { ...env, id: "other", name: "Other" };
+  render(withProps({ envs: [env, other], focusId: "other" }));
+  expect(screen.getByRole("option", { name: /Other/ }).getAttribute("aria-selected")).toBe("true");
 });

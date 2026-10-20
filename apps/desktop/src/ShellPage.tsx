@@ -160,8 +160,9 @@ function rowsTable(rows: Record<string, unknown>[]): Table {
 }
 const size = (bytes: number) => bytes < 1024 ? `${formatNumber(bytes)} B` : `${formatNumber(bytes / 1024, { maximumFractionDigits: 1 })} KB`;
 
-export default function ShellPage({ envs, connectTo, onConnectHandled, visible = true }: {
-  envs: Environment[]; connectTo?: string | null; onConnectHandled?: () => void; visible?: boolean;
+export default function ShellPage({ envs, connectTo, command, onConnectHandled, visible = true }: {
+  /** `command` runs once connected to `connectTo`. */
+  envs: Environment[]; connectTo?: string | null; command?: string | null; onConnectHandled?: () => void; visible?: boolean;
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useWindowState("shell.tabs", () => [newTab()], (tabs) => tabs.map((tab) => ({
@@ -231,7 +232,22 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
     const tab = newTab();
     setTabs((current) => [...current, tab]);
     select(tab.id);
+    return tab.id;
   };
+  // A requested environment reuses a tab already connected to it, then an untouched active tab, else opens a new
+  // one: a session in use never switches environment. Waits for saved tabs, since a restore changes the active tab.
+  const [targetId, setTargetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!connectTo || !loaded) { setTargetId(null); return; }
+    const name = connectTo.toLowerCase();
+    const connected = tabs.filter((tab) => tab.session.env?.name.toLowerCase() === name);
+    const active = tabs.find((tab) => tab.id === activeId);
+    const target = connected.find((tab) => tab === active) ?? connected[0] ?? (active && pristine(active) ? active : undefined);
+    const id = target?.id ?? add();
+    select(id);
+    setTargetId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectTo, loaded]);
   const close = (tab: ShellTab) => {
     if (tab.busy) return;
     const index = tabs.indexOf(tab);
@@ -292,14 +308,14 @@ export default function ShellPage({ envs, connectTo, onConnectHandled, visible =
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
       <ShellSession tab={tab} envs={envs} active={visible && activeId === tab.id} onChange={refreshTabs} onPersist={persist} saveFailed={saveFailed} fontSize={fontSize} setFontSize={setFontSize}
         aliases={aliases} setAliases={setAliases}
-        connectTo={activeId === tab.id ? connectTo : null} onConnectHandled={onConnectHandled} />
+        connectTo={tab.id === targetId ? connectTo : null} command={command} onConnectHandled={onConnectHandled} />
     </div>)}
   </div>;
 }
 
-function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, onConnectHandled, fontSize, setFontSize, aliases, setAliases }: {
+function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, command, onConnectHandled, fontSize, setFontSize, aliases, setAliases }: {
   tab: ShellTab; envs: Environment[]; active: boolean; onChange: () => void; onPersist: () => void; saveFailed: boolean;
-  connectTo?: string | null; onConnectHandled?: () => void;
+  connectTo?: string | null; command?: string | null; onConnectHandled?: () => void;
   fontSize: number; setFontSize: (size: number) => void;
   aliases: Record<string, string>; setAliases: (update: (aliases: Record<string, string>) => Record<string, string>) => void;
 }) {
@@ -386,16 +402,22 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     handled.current = connectTo;
     onConnectHandled?.();
     if (confirming) { setConfirming(null); text("info", t("shell.cancelled")); }
-    if (tab.session.env?.name !== connectTo) {
-      print({ kind: "input", prompt: prompt(tab.session), text: `\\c ${connectTo}`, command: true });
-      void connect(connectTo);
-    }
+    void (async () => {
+      if (tab.session.env?.name !== connectTo) {
+        print({ kind: "input", prompt: prompt(tab.session), text: `\\c ${connectTo}`, command: true });
+        await connect(connectTo);
+      }
+      // Run only where requested; a failed connection already explains itself.
+      if (command && tab.session.env?.name === connectTo) await submit(command);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectTo, busy]);
   // A tab restored from the vault reconnects the first time it is shown.
   useEffect(() => {
     if (!active || !tab.reconnect || busy || !envs.length) return;
     tab.reconnect = false;
+    // A requested connection wins; reconnecting here would cancel it.
+    if (connectTo) return;
     const saved = tab.session.env;
     if (!saved) return;
     const env = envs.find((e) => e.id === saved.id);

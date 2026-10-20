@@ -6,6 +6,7 @@ import { ProxyFields, ProxyKindSelect, draftFromView, emptyProxy, proxyError, pr
 import EnvironmentForm, { ProtocolSelect, type FormDraft, connectionComplete, protocolLabels, urlError, type ConnectionValues, type Protocol } from "./EnvironmentForm";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { Icon } from "./Icon";
+import { ListResizer, useListWidth } from "./ListResizer";
 import { EnvIcon } from "./EnvIcon";
 import { ModeSelect, modeLabels, modeTone } from "./ModeSelect";
 import Select from "./Select";
@@ -18,10 +19,12 @@ import { useWindowState, usePreventUnload } from "./windowState";
 import TagEditor, { sameTag, uniqueTags } from "./TagEditor";
 import EnvironmentFilters from "./EnvironmentFilters";
 
-export default function EnvironmentsPage({ envs, pending = [], refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode, draftRef }: {
+export default function EnvironmentsPage({ envs, pending = [], focusId, refresh, busy, creating, setCreating, save, update, remove, clone, openShell, writableOnly, setWritableOnly, changeMode, draftRef }: {
   envs: Environment[];
   /** Confirm before saving context or headers, which revokes pending approvals. */
   pending?: Pending[];
+  /** Environment to select on open, e.g. when coming from an approval. */
+  focusId?: string | null;
   refresh: () => Promise<void>;
   busy: boolean;
   creating: boolean;
@@ -37,8 +40,8 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   draftRef?: { current: FormDraft | null };
 }) {
   const { t } = useTranslation();
-  const [listWidth, setListWidth] = useListWidth();
-  const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", null);
+  const [listWidth, setListWidth] = useListWidth("odx.environments.listWidth");
+  const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", focusId ?? null);
   const [filter, setFilter] = useWindowState("environments.filter", "");
   const [tagFilter, setTagFilter] = useWindowState<string[]>("environments.tags", []);
   // Tags differing only in case are one tag, shown with the first spelling.
@@ -69,8 +72,10 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
   // Ctrl+F or / focuses the search; Ctrl+N starts a new environment.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || event.shiftKey || document.querySelector('[role="alertdialog"]')) return;
+      if (event.altKey || document.querySelector('[role="alertdialog"]')) return;
+      // Shift is allowed alone: "/" needs it on layouts such as Spanish (Shift+7).
       const command = event.ctrlKey || event.metaKey;
+      if (command && event.shiftKey) return;
       const key = event.key.toLowerCase();
       const typing = event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]");
       if ((command && key === "f") || (!command && key === "/" && !typing)) {
@@ -98,7 +103,7 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
 
   return <div className="split" style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
     <aside className="list-pane" aria-label={t("environments.listLabel")}>
-      <ListResizer width={listWidth} setWidth={setListWidth} />
+      <ListResizer width={listWidth} setWidth={setListWidth} label={t("environments.resizeList")} />
       <div className="list-toolbar">
         <div className="row gap-2">
           <label className="search grow"><Icon name="search" /><input ref={search} type="search" aria-keyshortcuts="Control+F /" placeholder={t("environments.filterPlaceholder")} aria-label={t("environments.filterLabel")} value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && filter) { e.preventDefault(); setFilter(""); } }} />{!filter && <kbd className="search-kbd" aria-hidden="true">/</kbd>}</label>
@@ -155,51 +160,6 @@ export default function EnvironmentsPage({ envs, pending = [], refresh, busy, cr
 }
 
 const LIST_TAGS = 3;
-const LIST_WIDTH = { min: 220, max: 520, initial: 300 };
-const listWidthKey = "odx.environments.listWidth";
-const clampWidth = (width: number) => Math.round(Math.min(LIST_WIDTH.max, Math.max(LIST_WIDTH.min, width)));
-
-/** List width, remembered on this computer. */
-function useListWidth(): [number, (width: number, persist?: boolean) => void] {
-  const [width, set] = useState(() => {
-    try { const stored = Number(localStorage.getItem(listWidthKey)); return stored ? clampWidth(stored) : LIST_WIDTH.initial; } catch { return LIST_WIDTH.initial; }
-  });
-  return [width, (next, persist = true) => {
-    const value = clampWidth(next);
-    set(value);
-    if (persist) try { localStorage.setItem(listWidthKey, String(value)); } catch { /* Optional preference. */ }
-  }];
-}
-
-/** Drag, arrow keys or double-click (reset) to resize the list. */
-function ListResizer({ width, setWidth }: { width: number; setWidth: (width: number, persist?: boolean) => void }) {
-  const { t } = useTranslation();
-  return <div className="list-resizer" role="separator" aria-orientation="vertical" tabIndex={0}
-    aria-label={t("environments.resizeList")} aria-valuemin={LIST_WIDTH.min} aria-valuemax={LIST_WIDTH.max} aria-valuenow={width}
-    onPointerDown={(e) => {
-      e.preventDefault();
-      const handle = e.currentTarget;
-      const start = e.clientX - width;
-      handle.setPointerCapture(e.pointerId);
-      let last = width;
-      // Save once on release, not on every pointer move.
-      const move = (event: PointerEvent) => { last = event.clientX - start; setWidth(last, false); };
-      const stop = () => { setWidth(last); handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", stop); handle.removeEventListener("pointercancel", stop); };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", stop);
-      handle.addEventListener("pointercancel", stop);
-    }}
-    onDoubleClick={() => setWidth(LIST_WIDTH.initial)}
-    onKeyDown={(e) => {
-      const step = e.shiftKey ? 64 : 16;
-      if (e.key === "ArrowLeft") setWidth(width - step);
-      else if (e.key === "ArrowRight") setWidth(width + step);
-      else if (e.key === "Home") setWidth(LIST_WIDTH.min);
-      else if (e.key === "End") setWidth(LIST_WIDTH.max);
-      else return;
-      e.preventDefault();
-    }} />;
-}
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 /** Build a saved environment draft; an empty credential preserves it. Context is edited separately and ignored on update. */

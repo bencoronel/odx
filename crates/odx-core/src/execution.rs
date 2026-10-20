@@ -92,6 +92,7 @@ pub struct PendingApproval {
     pub args: Value,
     pub kwargs: Value,
     pub context: Value,
+    pub created_at: chrono::DateTime<Utc>,
     pub expires_at: chrono::DateTime<Utc>,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -147,7 +148,8 @@ impl Upstream {
 #[derive(Debug)]
 pub(crate) enum ApprovalEnd {
     Executed(Value, Upstream),
-    Rejected,
+    /// Optional human reason, relayed to the agent.
+    Rejected(Option<String>),
     Revoked,
     Expired,
     Cancelled,
@@ -1217,6 +1219,7 @@ impl Core {
                     args: p.call.args.clone(),
                     kwargs: p.call.kwargs.clone(),
                     context: p.call.kwargs.get("context").cloned().unwrap_or(json!({})),
+                    created_at: p.created_at,
                     expires_at: p.call.expires_at,
                 })
             })
@@ -1244,7 +1247,16 @@ impl Core {
     }
     /// Deliver the human decision and outcome to any waiting client.
     pub async fn decide(&self, id: &str, approve: bool) -> Result<Value> {
-        self.decide_measured(id, approve)
+        self.decide_measured(id, approve, None)
+            .await
+            .map(|(value, _)| value)
+    }
+    /// Reject and tell the waiting client why; blank reasons are dropped, long ones cut to 500 characters.
+    pub async fn reject(&self, id: &str, reason: Option<String>) -> Result<Value> {
+        let reason = reason
+            .map(|r| r.trim().chars().take(500).collect::<String>())
+            .filter(|r| !r.is_empty());
+        self.decide_measured(id, false, reason)
             .await
             .map(|(value, _)| value)
     }
@@ -1253,6 +1265,7 @@ impl Core {
         &self,
         id: &str,
         approve: bool,
+        reason: Option<String>,
     ) -> Result<(Value, Upstream)> {
         // Only the winning decision closes the request.
         let (env, call, client, authorization) = self.claim(id, approve).await?;
@@ -1262,7 +1275,7 @@ impl Core {
         let mut s = self.inner.lock().await;
         if let Some(tx) = s.waiters.remove(id) {
             let end = match &result {
-                Ok(_) if !approve => ApprovalEnd::Rejected,
+                Ok(_) if !approve => ApprovalEnd::Rejected(reason),
                 Ok((value, up)) => ApprovalEnd::Executed(value.clone(), *up),
                 Err(error) => ApprovalEnd::Failed(error.duplicate()),
             };

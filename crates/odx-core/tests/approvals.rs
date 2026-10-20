@@ -77,6 +77,18 @@ async fn rejected_writes_never_reach_odoo_and_approved_request_is_single_use() {
     );
     assert_eq!(flow::error_code(call).await, "approval_rejected");
     assert_eq!(sim.counts.writes(), 0);
+    // The reason reaches the waiting client, trimmed.
+    let (call, rejected) = flow::queue(&core, &client, "write", req()).await;
+    core.reject(&rejected.id, Some("  use the staging copy  ".into()))
+        .await
+        .unwrap();
+    let error = call.await.unwrap().unwrap_err();
+    assert_eq!(error.code, "approval_rejected");
+    assert!(
+        error.message.ends_with("Reason: use the staging copy"),
+        "{}",
+        error.message
+    );
     let (call, accepted) = flow::queue(&core, &client, "write", req()).await;
     assert_eq!(sim.counts.writes(), 0);
     assert_eq!(core.decide(&accepted.id, true).await.unwrap(), json!(true));

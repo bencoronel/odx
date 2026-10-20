@@ -456,9 +456,15 @@ pub async fn approvals_list(
 pub async fn approval_decide(
     id: String,
     approve: bool,
+    reason: Option<String>,
     core: State<'_, Arc<Core>>,
 ) -> Result<Value, AppError> {
-    core.decide(&id, approve).await.map_err(AppError::from)
+    if approve {
+        core.decide(&id, true).await
+    } else {
+        core.reject(&id, reason).await
+    }
+    .map_err(AppError::from)
 }
 #[tauri::command]
 pub async fn rules_list(

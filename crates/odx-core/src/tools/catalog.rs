@@ -1548,7 +1548,7 @@ impl Core {
         let Some(mut waiter) = waiter else {
             // Free-write/rule execution uses the human-approval path in a separate task. Cancellation or disconnect cannot interrupt sent writes or their outcome audit.
             let core = self.clone();
-            return tokio::spawn(async move { core.decide_measured(&id, true).await })
+            return tokio::spawn(async move { core.decide_measured(&id, true, None).await })
                 .await
                 .map_err(|_| {
                     ToolError::new(
@@ -1628,9 +1628,14 @@ impl Core {
                 let wait = up.started.saturating_duration_since(requested);
                 Ok((value, up, wait))
             }
-            Ok(ApprovalEnd::Rejected) => Err(ToolError::new(
+            Ok(ApprovalEnd::Rejected(reason)) => Err(ToolError::new(
                 "approval_rejected",
-                "request rejected by a human; nothing was sent to Odoo",
+                match reason {
+                    Some(reason) => format!(
+                        "request rejected by a human; nothing was sent to Odoo. Reason: {reason}"
+                    ),
+                    None => "request rejected by a human; nothing was sent to Odoo".into(),
+                },
                 Outcome::NotSent,
             )),
             Ok(ApprovalEnd::Revoked) => Err(ToolError::new(

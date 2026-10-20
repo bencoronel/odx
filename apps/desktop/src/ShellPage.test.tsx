@@ -81,7 +81,7 @@ it("keeps a running call in its original tab while another session connects else
   expect(within(panel()).queryByText(/^Connected to B/)).toBeNull();
 });
 
-it("cancels a pending confirmation instead of sending it to another environment", async () => {
+it("opens another environment in a new tab, leaving a pending confirmation where it was", async () => {
   requireConfirmation([]);
   const { rerender } = render(<ShellPage envs={envs} />);
   command("\\c A");
@@ -90,10 +90,38 @@ it("cancels a pending confirmation instead of sending it to another environment"
   expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
   rerender(<ShellPage envs={envs} connectTo="B" />);
   await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
-  expect(within(panel()).getByText("Cancelled. Nothing was sent.")).toBeTruthy();
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
   rerender(<ShellPage envs={envs} connectTo={null} />);
-  command("y");
-  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "write" && call.confirmed)).toBe(false);
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  expect(within(panel()).getByText("Send to A? [y/N]")).toBeTruthy();
+});
+
+it("reuses a tab already connected to the requested environment", async () => {
+  const { rerender } = render(<ShellPage envs={envs} />);
+  command("\\c A");
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  rerender(<ShellPage envs={envs} connectTo="B" />);
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  rerender(<ShellPage envs={envs} connectTo={null} />);
+  vi.mocked(ipc.check).mockClear();
+  rerender(<ShellPage envs={envs} connectTo="A" command="read res.partner 7" />);
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "read" && call.environment_id === "A")).toBe(true));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(screen.getAllByRole("tab")[0].getAttribute("aria-selected")).toBe("true");
+  expect(ipc.check).not.toHaveBeenCalled();
+});
+
+it("uses the untouched active tab instead of opening another", async () => {
+  render(<ShellPage envs={envs} connectTo="B" />);
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+});
+
+it("runs a requested command once connected to the requested environment", async () => {
+  render(<ShellPage envs={envs} connectTo="B" command="read res.partner 7,8" />);
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "read" && call.model === "res.partner")).toBe(true));
+  const read = vi.mocked(ipc.shell).mock.calls.find(([call]) => call.method === "read")![0];
+  expect(read).toMatchObject({ environment_id: envs[1].id, args: [[7, 8]] });
 });
 
 it("asks for confirmation only when the core answers confirmation_required", async () => {
@@ -589,6 +617,19 @@ it("restores saved tabs with their output and reconnects each one when it is fir
   const saved = vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0];
   expect(saved).toContain("out of whoami");
   expect(saved).not.toMatch(/Session restored|Connected to|\\\\c [AB]/);
+});
+
+it("does not switch a restored tab to the requested environment", async () => {
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t2", tabs: [savedTab("t2", "B", "whoami")] }));
+  const handled = vi.fn();
+  render(<ShellPage envs={envs} connectTo="A" command="read res.partner 7" onConnectHandled={handled} />);
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "read" && call.environment_id === "A")).toBe(true));
+  // The restored session stays as it was; the request gets its own tab, shown.
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy();
+  expect(within(panel()).queryByText("out of whoami")).toBeNull();
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  expect(within(panel()).getByText("out of whoami")).toBeTruthy();
 });
 
 it("does not announce a restored session when only untouched tabs were saved", async () => {

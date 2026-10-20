@@ -1,5 +1,5 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, type RefObject } from "react";
 import { Icon } from "@/Icon";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "@/appError";
@@ -15,6 +15,8 @@ type ApprovalDialogProps = {
   tone?: "info" | "warn" | "danger";
   children?: ReactNode;
   confirmDisabled?: boolean;
+  /** Element to focus on open instead of the safe default (Cancel). */
+  initialFocus?: RefObject<HTMLElement | null>;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => Promise<void>;
 };
@@ -29,6 +31,7 @@ export function ApprovalDialog({
   tone = destructive ? "danger" : "info",
   children,
   confirmDisabled = false,
+  initialFocus,
   onOpenChange,
   onConfirm,
 }: ApprovalDialogProps) {
@@ -40,7 +43,7 @@ export function ApprovalDialog({
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="dialog-overlay" />
-        <AlertDialog.Content className="dialog-content">
+        <AlertDialog.Content className="dialog-content" onOpenAutoFocus={initialFocus ? (event) => { event.preventDefault(); initialFocus.current?.focus(); } : undefined}>
           <header className="dialog-header">
             <span className={`tile tone-${tone}`}><Icon name={tone === "info" ? "shield" : "alert"} /></span>
             <div className="grow min-w-0">

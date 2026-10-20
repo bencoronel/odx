@@ -51,6 +51,7 @@ pub struct Approval {
     /// Originating client; `None` for local administration.
     pub client_id: Option<String>,
     pub call: ApprovalCall,
+    pub created_at: DateTime<Utc>,
     pub state: State,
     /// Redacted audit request, including requests closed without sending.
     pub details: AuditDetails,
@@ -92,6 +93,7 @@ impl Approval {
                 revision: env.revision,
                 expires_at: now + ttl(ttl_configured),
             },
+            created_at: now,
             state: State::Pending,
             authorization: crate::policy::Authorization::Individual,
         }
