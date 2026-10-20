@@ -690,6 +690,18 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .unlock-language { display: flex; align-items: center; gap: 8px; color: var(--text-3); }
 .unlock-language-select { min-width: 150px; }
 .unlock-loading { display: grid; justify-items: center; gap: 10px; padding: 12px 0; }
+/* Inside the field, beside the eye toggle, so it never shifts the form. */
+.unlock-caps { position: absolute; top: 50%; right: 40px; transform: translateY(-50%); display: flex; color: var(--warn); }
+.unlock-caps > .icon { width: 14px; height: 14px; }
+.unlock-password-control:has(.unlock-caps) input { padding-right: 62px !important; }
+/* WebKit draws its own Caps Lock arrow in password fields; ours replaces it. */
+.unlock input::-webkit-caps-lock-indicator { display: none; content: none; appearance: none; }
+.unlock-forgot { justify-self: center; }
+.unlock-strength { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.unlock-strength > i { height: 3px; border-radius: 2px; background: var(--border); }
+.unlock-strength[data-level="0"] > i:nth-child(-n+1), .unlock-strength[data-level="1"] > i:nth-child(-n+1) { background: var(--danger); }
+.unlock-strength[data-level="2"] > i:nth-child(-n+2) { background: var(--warn); }
+.unlock-strength[data-level="3"] > i:nth-child(-n+3), .unlock-strength[data-level="4"] > i { background: var(--ok); }
 .unlock-loading > .icon { width: 22px; height: 22px; color: var(--accent-text); }
 
 /* Dialogs */

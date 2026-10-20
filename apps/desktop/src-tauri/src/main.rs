@@ -106,6 +106,8 @@ fn main() {
             desktop::configure_main(app.handle());
             desktop::setup_tray(app, &desktop);
             desktop::probe_notifications(app.handle().clone());
+            desktop::lock_on_sleep(app.handle().clone());
+            desktop::lock_on_screen_lock(app.handle().clone());
             let data_dir = if cfg!(debug_assertions) {
                 match std::env::var_os("ODX_TEST_DATA_DIR") {
                     Some(value) => {
@@ -156,6 +158,7 @@ fn main() {
             commands::vault_unlock,
             commands::vault_change_password,
             commands::vault_lock,
+            commands::vault_reset,
             commands::service_status,
             commands::activity_list,
             commands::shell_call,

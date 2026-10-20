@@ -32,6 +32,38 @@ impl Vault {
     pub(crate) fn exists(path: &Path) -> bool {
         Self::database_path(path).exists() || path.with_file_name("vault.enc").exists()
     }
+    /// Move the vault files into `reset-<unix seconds>/` beside them, still encrypted, so a new vault can be created.
+    /// Synchronous I/O; call outside Tokio worker threads.
+    pub fn reset(path: impl AsRef<Path>) -> Result<()> {
+        let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());
+        let path = Self::database_path(path.as_ref());
+        let parent = path.parent().ok_or(OdxError::Persistence)?;
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| OdxError::Persistence)?
+            .as_secs();
+        let aside = parent.join(format!("reset-{secs}"));
+        fs::create_dir(&aside)?;
+        // Keep original names so the SQLite journal still pairs with its database if restored by hand.
+        // Move the live database last: a failure before it leaves the current vault usable instead of
+        // exposing the legacy `vault.enc` that migration keeps, which would be migrated again on unlock.
+        for file in [
+            path.with_file_name("vault.enc"),
+            path.with_file_name("activity"),
+            PathBuf::from(format!("{}-journal", path.display())),
+            path.clone(),
+        ] {
+            let Some(name) = file.file_name() else {
+                continue;
+            };
+            match fs::rename(&file, aside.join(name)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    }
     /// Synchronous I/O and KDF; call outside Tokio worker threads.
     pub fn create(path: impl AsRef<Path>, password: &str) -> Result<Self> {
         let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());

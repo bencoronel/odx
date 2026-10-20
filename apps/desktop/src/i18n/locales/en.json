@@ -100,10 +100,27 @@
     "createHint": "Choose a master password to encrypt your connections.",
     "enterHint": "Enter the master password to continue.",
     "password": "Master password",
+    "repeat": "Repeat master password",
+    "minLength": "At least 8 characters.",
+    "mismatch": "The passwords do not match.",
+    "capsLock": "Caps Lock is on.",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "lossWarning": "I understand that I cannot recover the vault if I forget the password.",
-    "unlock": "Unlock"
+    "unlock": "Unlock",
+    "strength": "Strength: {{level}}.",
+    "strengthLevels": {
+      "weak": "weak",
+      "fair": "fair",
+      "good": "good",
+      "strong": "strong"
+    },
+    "forgot": "Forgot the password?",
+    "resetTitle": "Reset vault",
+    "resetHint": "Odx will start with a new, empty vault: saved environments, clients and activity will no longer be available. The current files are kept encrypted in a reset-… folder inside the app data directory, in case you remember the password later.",
+    "resetWord": "RESET",
+    "resetConfirm": "Type {{word}} to confirm",
+    "resetAction": "Reset vault"
   },
   "service": {
     "statusLabel": "Service status",

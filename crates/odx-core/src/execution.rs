@@ -374,6 +374,22 @@ impl Core {
         self.apply_settings(settings, s.audit.as_deref());
         Ok(())
     }
+    /// Set a locked vault aside (see `Vault::reset`) so the user can start over after forgetting the password.
+    pub async fn reset(&self) -> Result<()> {
+        let mut s = self.inner.lock().await;
+        if s.vault.is_some() {
+            return Err(OdxError::validation(
+                "validation.vault.already_unlocked",
+                "vault already unlocked",
+            ));
+        }
+        // Supersede an unlock still running its KDF on the old files.
+        s.session = s.session.wrapping_add(1);
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || Vault::reset(&path))
+            .await
+            .map_err(|_| OdxError::Persistence)?
+    }
     pub async fn unlock(&self, password: &str) -> Result<()> {
         self.odoo.clear_auth().await;
         let session = self.inner.lock().await.session;
@@ -1923,5 +1939,51 @@ mod approval_end_tests {
                 .iter()
                 .all(|(_, outcome)| outcome != "attempted")
         );
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reset_sets_a_locked_vault_aside_and_allows_a_new_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+        core.create("fixture password").await.unwrap();
+        assert!(
+            core.reset().await.is_err(),
+            "an unlocked vault must not be reset"
+        );
+        core.lock().await;
+        core.reset().await.unwrap();
+        assert_eq!(core.status().await, "absent");
+        let aside: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("reset-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert!(aside[0].join("vault.sqlite3").exists());
+        core.create("another password").await.unwrap();
+        assert_eq!(core.status().await, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn reset_also_sets_a_legacy_vault_aside() {
+        let tmp = tempfile::tempdir().unwrap();
+        drop(
+            crate::legacy_vault::Vault::create(tmp.path().join("vault.enc"), "fixture password")
+                .unwrap(),
+        );
+        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+        assert_eq!(core.status().await, "locked");
+        core.reset().await.unwrap();
+        assert_eq!(core.status().await, "absent");
     }
 }

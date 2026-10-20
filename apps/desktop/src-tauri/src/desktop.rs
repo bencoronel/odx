@@ -349,6 +349,74 @@ async fn lock(app: &AppHandle) {
     }
 }
 
+/// Lock after the computer sleeps: a monotonic sleep does not advance while suspended, so the wall clock jumps past it.
+// shortcut: moving the system clock forward by more than the gap also locks; listen to OS sleep notifications if that bites.
+pub fn lock_on_sleep(app: AppHandle) {
+    const CHECK: std::time::Duration = std::time::Duration::from_secs(5);
+    const GAP: std::time::Duration = std::time::Duration::from_secs(30);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let before = std::time::SystemTime::now();
+            tokio::time::sleep(CHECK).await;
+            if before.elapsed().is_ok_and(|elapsed| elapsed > GAP) {
+                lock_if_unlocked(&app).await;
+            }
+        }
+    });
+}
+
+async fn lock_if_unlocked(app: &AppHandle) {
+    let unlocked = match app.try_state::<Arc<Core>>() {
+        Some(core) => core.inner().clone().status().await == "unlocked",
+        None => false,
+    };
+    if unlocked {
+        lock(app).await;
+    }
+}
+
+/// Lock when the desktop locks the screen, which GNOME, KDE and others report as logind's `LockedHint`.
+// shortcut: Linux only; Windows (WTS session notifications) and macOS (screenIsLocked) need their own listeners.
+#[cfg(target_os = "linux")]
+pub fn lock_on_screen_lock(app: AppHandle) {
+    std::thread::spawn(move || {
+        if let Err(error) = watch_screen_lock(&app) {
+            eprintln!("odx: screen lock is not watched: {error}");
+        }
+    });
+}
+#[cfg(not(target_os = "linux"))]
+pub fn lock_on_screen_lock(_app: AppHandle) {}
+
+#[cfg(target_os = "linux")]
+fn watch_screen_lock(app: &AppHandle) -> zbus::Result<()> {
+    use zbus::{
+        blocking::{Connection, Proxy},
+        zvariant::OwnedObjectPath,
+    };
+    let connection = Connection::system()?;
+    // The user's graphical session, even when Odx itself was started outside it.
+    let user = Proxy::new(
+        &connection,
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1/user/self",
+        "org.freedesktop.login1.User",
+    )?;
+    let (_, path): (String, OwnedObjectPath) = user.get_property("Display")?;
+    let session = Proxy::new(
+        &connection,
+        "org.freedesktop.login1",
+        path,
+        "org.freedesktop.login1.Session",
+    )?;
+    for change in session.receive_property_changed::<bool>("LockedHint") {
+        if change.get()? {
+            tauri::async_runtime::block_on(lock_if_unlocked(app));
+        }
+    }
+    Ok(())
+}
+
 /// Lock, drain sent operations up to `EXIT_DRAIN`, then exit.
 pub fn quit(app: &AppHandle) {
     let desktop = app.state::<Arc<Desktop>>().inner().clone();

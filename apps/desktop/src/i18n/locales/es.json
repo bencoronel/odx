@@ -100,10 +100,27 @@
     "createHint": "Elige una contraseña maestra para cifrar tus conexiones.",
     "enterHint": "Introduce la contraseña maestra para continuar.",
     "password": "Contraseña maestra",
+    "repeat": "Repite la contraseña maestra",
+    "minLength": "Al menos 8 caracteres.",
+    "mismatch": "Las contraseñas no coinciden.",
+    "capsLock": "Bloq Mayús está activado.",
     "showPassword": "Mostrar contraseña",
     "hidePassword": "Ocultar contraseña",
     "lossWarning": "Entiendo que si olvido la contraseña no podré recuperar el almacén.",
-    "unlock": "Desbloquear"
+    "unlock": "Desbloquear",
+    "strength": "Seguridad: {{level}}.",
+    "strengthLevels": {
+      "weak": "débil",
+      "fair": "aceptable",
+      "good": "buena",
+      "strong": "fuerte"
+    },
+    "forgot": "¿Olvidaste la contraseña?",
+    "resetTitle": "Restablecer almacén",
+    "resetHint": "Odx empezará con un almacén nuevo y vacío: los entornos, clientes y actividad guardados dejarán de estar disponibles. Los archivos actuales se conservan cifrados en una carpeta reset-… dentro del directorio de datos de la app, por si recuerdas la contraseña más adelante.",
+    "resetWord": "RESTABLECER",
+    "resetConfirm": "Escribe {{word}} para confirmar",
+    "resetAction": "Restablecer almacén"
   },
   "service": {
     "statusLabel": "Estado del servicio",

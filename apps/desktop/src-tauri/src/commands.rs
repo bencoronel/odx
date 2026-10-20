@@ -118,6 +118,10 @@ pub async fn vault_change_password(
         .map_err(|_| AppError::new("app.password_change_failed"))
 }
 #[tauri::command]
+pub async fn vault_reset(core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+    core.reset().await.map_err(AppError::from)
+}
+#[tauri::command]
 pub async fn vault_lock(app: tauri::AppHandle, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
     crate::desktop::clear_window_state(&app);
     core.lock().await;

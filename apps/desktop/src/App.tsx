@@ -173,7 +173,7 @@ export default function App() {
 
   if (status !== "unlocked") {
     return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices />
-      <UnlockScreen status={status} busy={busy} error={error} retry={() => void run()} submit={(password) => run(() => status === "absent" ? ipc.create(password) : ipc.unlock(password))} />
+      <UnlockScreen status={status} busy={busy} error={error} retry={() => void run()} submit={(password) => run(() => status === "absent" ? ipc.create(password) : ipc.unlock(password))} reset={() => run(ipc.reset)} />
       <ServiceStatusBar vault={status} services={services} />
     </div>;
   }
