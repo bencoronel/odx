@@ -89,6 +89,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             desktop::show_main(app)
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(desktop.clone())
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -181,6 +182,7 @@ fn main() {
             commands::environment_favicon_page,
             commands::environment_favicon_image,
             commands::environment_open_url,
+            commands::updates_open_releases,
             commands::clients_list,
             commands::client_update,
             commands::approvals_list,
@@ -189,6 +191,7 @@ fn main() {
             commands::rule_save,
             commands::rule_delete,
             commands::desktop_status,
+            commands::desktop_restart,
             commands::settings_get,
             commands::settings_save
         ])

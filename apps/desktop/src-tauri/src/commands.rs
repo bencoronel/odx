@@ -198,8 +198,16 @@ pub async fn environment_open_url(
         }
         None => url,
     };
+    xdg_open(&url)
+}
+/// Release page for installs the updater cannot replace (.deb, .rpm, development builds).
+#[tauri::command]
+pub fn updates_open_releases() -> Result<(), AppError> {
+    xdg_open("https://github.com/bencoronel/odx/releases")
+}
+fn xdg_open(url: &str) -> Result<(), AppError> {
     let mut child = std::process::Command::new("xdg-open")
-        .arg(&url)
+        .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -574,6 +582,11 @@ pub async fn environment_favicon_page(
     core: State<'_, Arc<Core>>,
 ) -> Result<odx_core::favicon::FaviconPage, AppError> {
     core.favicon_page(&id).await.map_err(AppError::from)
+}
+/// Install-and-restart path for updates: lock and drain like Quit, then relaunch.
+#[tauri::command]
+pub fn desktop_restart(app: tauri::AppHandle) {
+    crate::desktop::quit(&app, true);
 }
 /// Expose tray and notification availability to the window.
 #[tauri::command]

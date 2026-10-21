@@ -417,8 +417,9 @@ fn watch_screen_lock(app: &AppHandle) -> zbus::Result<()> {
     Ok(())
 }
 
-/// Lock, drain sent operations up to `EXIT_DRAIN`, then exit.
-pub fn quit(app: &AppHandle) {
+/// Lock, drain sent operations up to `EXIT_DRAIN`, then exit or restart.
+/// Restart goes through here because Tauri ignores `prevent_exit` for `RESTART_EXIT_CODE`.
+pub fn quit(app: &AppHandle, restart: bool) {
     let desktop = app.state::<Arc<Desktop>>().inner().clone();
     if !desktop.exit.begin() {
         return;
@@ -436,7 +437,11 @@ pub fn quit(app: &AppHandle) {
             }
         }
         desktop.exit.finish();
-        app.exit(0);
+        if restart {
+            app.request_restart();
+        } else {
+            app.exit(0);
+        }
     });
 }
 
@@ -451,7 +456,7 @@ pub fn hold_exit(app: &AppHandle, code: Option<i32>) -> bool {
     }
     let held = app.state::<Arc<Desktop>>().exit.must_hold();
     if held {
-        quit(app);
+        quit(app, false);
     }
     held
 }
@@ -564,7 +569,7 @@ fn build_tray(app: &tauri::App) -> Result<(), String> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move { lock(&app).await });
             }
-            "quit" => quit(app),
+            "quit" => quit(app, false),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {

@@ -19,6 +19,9 @@ tauri-runtime-wry = "=2.10.1"
 tauri-macros = "=2.5.5"
 notify-rust = "=4.18.2"
 tauri-plugin-single-instance = "=2.4.5"
+# Default features add rustls/ring next to the workspace aws-lc-rs and break rustls provider auto-selection;
+# reqwest TLS comes from the workspace. No `zip`: the release ships a raw (signed) AppImage.
+tauri-plugin-updater = { version = "=2.10.1", default-features = false }
 zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
