@@ -1,5 +1,5 @@
 //! Odoo 19 JSON-2: `POST /json/2/<model>/<method>`. Sources: External JSON-2 API documentation and addons/rpc/controllers/json2.py. Bearer API key, X-Odoo-Database and named body arguments including ids/context. Each call is a separate transaction. Errors use 4xx/5xx with name, message, arguments, context and debug.
-use super::jsonrpc::{MAX_RESPONSE, OdooClient, read_limited, scrub};
+use super::jsonrpc::{MAX_RESPONSE, OdooClient, parse_json, read_limited, scrub};
 use crate::{
     config::{Environment, Protocol},
     error::{OdxError, Result},
@@ -241,15 +241,16 @@ async fn post(
     let bytes = read_limited(response, env, max_response).await?;
     let size = bytes.len();
     if (200..300).contains(&status) {
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| OdxError::Upstream("invalid JSON-2 response".into()))?;
+        let value = parse_json(bytes)
+            .await
+            .ok_or_else(|| OdxError::Upstream("invalid JSON-2 response".into()))?;
         return Ok((value, size));
     }
     if status == 401 {
         return Err(OdxError::AuthenticationRejected);
     }
     // Only an Odoo error object proves transactional failure; other responses retain their HTTP status.
-    let error: Option<Value> = serde_json::from_slice(&bytes).ok();
+    let error = parse_json(bytes).await;
     match error.as_ref().and_then(odoo_error_message) {
         Some(message) => Err(OdxError::Remote(scrub(
             &format!("{message} (HTTP {status})"),

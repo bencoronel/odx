@@ -20,6 +20,8 @@ use std::{
 };
 use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
+/// Shared limits key for unsaved drafts; per-call random ids would grow the slot map forever.
+const DRAFT_SLOTS: &str = "\0draft";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentView {
@@ -307,7 +309,7 @@ pub struct Core {
 impl Core {
     pub fn new(path: impl AsRef<Path>) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
-            path: Vault::database_path(path.as_ref()),
+            path: path.as_ref().to_owned(),
             notices: tokio::sync::broadcast::channel(32).0,
             grant_changes: tokio::sync::broadcast::channel(32).0,
             usage: std::sync::Mutex::new(Usage::default()),
@@ -524,7 +526,8 @@ impl Core {
             .find(|e| e.id == id)
             .cloned()
             .ok_or(OdxError::EnvironmentNotFound)?;
-        if draft.secret.is_empty() {
+        let keep_secret = draft.secret.is_empty();
+        if keep_secret {
             draft.secret = old.secret.as_str().to_owned();
         }
         draft.validate()?;
@@ -553,6 +556,13 @@ impl Core {
         // Do not transfer rules to a different server, database or user.
         let retarget = (&old.url, &old.database, &old.login)
             != (&updated.url, &updated.database, &updated.login);
+        // Never send the old key to a different server, database or user.
+        if retarget && keep_secret {
+            return Err(OdxError::validation(
+                "validation.environment.secret_required",
+                "a new connection target requires its API key",
+            ));
+        }
         v.update(|data| {
             let env = data
                 .environments
@@ -567,38 +577,6 @@ impl Core {
         })?;
         self.environment_changed(s, &[id.to_owned()]).await;
         Ok(view)
-    }
-    pub async fn rename_environment(&self, id: &str, new_name: &str) -> Result<()> {
-        if new_name.trim().is_empty() {
-            return Err(OdxError::validation(
-                "validation.environment.name_required",
-                "nonempty name required",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        if v.data()
-            .environments
-            .iter()
-            .any(|e| e.id != id && e.name == new_name)
-        {
-            return Err(OdxError::validation(
-                "validation.environment.name_exists",
-                "an environment with this name already exists",
-            ));
-        }
-        v.update(|data| {
-            let env = data
-                .environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            env.name = new_name.to_owned();
-            env.revision += 1;
-            Ok(())
-        })?;
-        self.environment_changed(s, &[id.to_owned()]).await;
-        Ok(())
     }
     /// Tags only organize the list; they keep the revision and pending approvals.
     pub async fn set_environment_tags(&self, id: &str, tags: &[String]) -> Result<EnvironmentView> {
@@ -1001,37 +979,14 @@ impl Core {
             .iter()
             .find(|g| g.id == clients::STDIO_CLIENT_ID && !g.revoked)
             .ok_or(OdxError::Unauthorized)?;
-        Ok(ClientIdentity {
-            client_id: grant.id.clone(),
-            revision: grant.revision,
-            environment_ids: if grant.all_environments {
-                vault
-                    .data()
-                    .environments
-                    .iter()
-                    .map(|e| e.id.clone())
-                    .collect()
-            } else {
-                grant.environment_ids.clone()
-            },
-            capabilities: grant.capabilities.clone(),
-        })
+        Ok(clients::identity(grant, vault.data()))
     }
     /// Authenticate a client token; reject all clients while locked.
     pub async fn authenticate_client(&self, token: &str) -> Result<ClientIdentity> {
         let s = self.inner.lock().await;
         let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
         let grant = clients::find_grant(&v.data().clients, token).ok_or(OdxError::Unauthorized)?;
-        Ok(ClientIdentity {
-            client_id: grant.id.clone(),
-            revision: grant.revision,
-            environment_ids: if grant.all_environments {
-                v.data().environments.iter().map(|e| e.id.clone()).collect()
-            } else {
-                grant.environment_ids.clone()
-            },
-            capabilities: grant.capabilities.clone(),
-        })
+        Ok(clients::identity(grant, v.data()))
     }
     /// Check reachability (`common.version`) and credentials (revision-cached login), without accessing business data.
     pub async fn check_environment(&self, id: &str) -> Result<HealthReport> {
@@ -1054,7 +1009,7 @@ impl Core {
     pub async fn check_draft(&self, draft: EnvironmentDraft) -> Result<HealthReport> {
         let env = self.draft_connection(draft.into_environment()?).await?;
         let started = std::time::Instant::now();
-        let permits = self.limits.acquire(&env.id).await?;
+        let permits = self.limits.acquire(DRAFT_SLOTS).await?;
         let resolved = match env.protocol {
             crate::config::Protocol::Auto => self
                 .odoo
@@ -1081,7 +1036,7 @@ impl Core {
                 ..Default::default()
             })
             .await?;
-        let _permits = self.limits.acquire(&env.id).await?;
+        let _permits = self.limits.acquire(DRAFT_SLOTS).await?;
         self.odoo.list_databases(&env).await
     }
     /// Apply global headers and the inherited proxy to an environment that is not in the vault.
@@ -1187,17 +1142,18 @@ impl Core {
         Ok(env)
     }
     pub async fn approvals(&self) -> Result<Vec<PendingApproval>> {
-        let mut s = self.inner.lock().await;
-        let now = s.vault.as_ref().ok_or(OdxError::Locked)?.now();
+        let mut guard = self.inner.lock().await;
+        let s = &mut *guard;
+        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let now = v.now();
         for approval in s.pending.values_mut() {
             approval.expire_if_due(now);
         }
-        let _v = s.vault.as_ref().ok_or(OdxError::Locked)?;
         Ok(s.pending
             .values()
             .filter(|p| p.state == crate::approval::State::Pending)
             .filter_map(|p| {
-                let e = _v
+                let e = v
                     .data()
                     .environments
                     .iter()
@@ -1206,7 +1162,7 @@ impl Core {
                     id: p.id.clone(),
                     client_id: p.client_id.clone(),
                     client_label: p.client_id.as_ref().and_then(|c| {
-                        _v.data()
+                        v.data()
                             .clients
                             .iter()
                             .find(|g| &g.id == c)
@@ -1428,7 +1384,6 @@ impl Core {
             )
             .await
             .map_err(crate::odoo::jsonrpc::sent_error);
-        drop(permits);
         up.calls += 1;
         match &result {
             Ok((value, _)) => audit.finish(&env, Ok(value)),
@@ -1443,6 +1398,8 @@ impl Core {
         let _ = self
             .log_outcome_as(audit, client, &env.id, &operation, outcome)
             .await;
+        // Release after the outcome is logged so drain() waits for it.
+        drop(permits);
         let (value, bytes) = result?;
         up.bytes += bytes;
         Ok((value, up))
@@ -1594,7 +1551,7 @@ mod mode_tests {
     async fn temporary_expiry_blocks_a_write_waiting_for_capacity() {
         let tmp = tempfile::tempdir().unwrap();
         let sim = super::mode_test_support::simulator().await;
-        let core = Core::new(tmp.path().join("vault.enc")).unwrap();
+        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
         core.create("fictional master password").await.unwrap();
         let env = core
             .save_environment(EnvironmentDraft {
@@ -1985,18 +1942,5 @@ mod reset_tests {
         assert!(aside[0].join("vault.sqlite3").exists());
         core.create("another password").await.unwrap();
         assert_eq!(core.status().await, "unlocked");
-    }
-
-    #[tokio::test]
-    async fn reset_also_sets_a_legacy_vault_aside() {
-        let tmp = tempfile::tempdir().unwrap();
-        drop(
-            crate::legacy_vault::Vault::create(tmp.path().join("vault.enc"), "fixture password")
-                .unwrap(),
-        );
-        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-        assert_eq!(core.status().await, "locked");
-        core.reset().await.unwrap();
-        assert_eq!(core.status().await, "absent");
     }
 }

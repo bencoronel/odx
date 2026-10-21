@@ -50,7 +50,12 @@ impl Relay {
             token: token.clone(),
         });
         let task = tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    // Transient errors such as EMFILE must not stop the relay; back off instead of spinning.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                };
                 let upstream = upstream.clone();
                 tokio::spawn(async move {
                     let _ = relay(stream, &upstream).await;

@@ -96,3 +96,24 @@ pub async fn abandon(core: &Arc<Core>, call: Call, id: &str) {
     }
     panic!("abandoned request was not cancelled");
 }
+
+/// Rename an environment keeping its connection target and key.
+pub async fn rename(core: &Core, id: &str, name: &str) {
+    let env = core
+        .environments()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.id == id)
+        .unwrap();
+    let draft = odx_core::EnvironmentDraft {
+        name: name.into(),
+        url: env.url,
+        database: env.database,
+        login: env.login,
+        protocol: env.protocol,
+        context: env.context,
+        secret: String::new(),
+    };
+    core.update_environment(id, draft).await.unwrap();
+}

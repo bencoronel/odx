@@ -159,6 +159,19 @@ pub(crate) fn issue_token() -> Result<(String, String)> {
 }
 
 /// Find the active grant by comparing all hashes in constant time.
+/// Identity for a grant; `all_environments` expands to the current environments.
+pub(crate) fn identity(grant: &ClientGrant, data: &crate::config::VaultData) -> ClientIdentity {
+    ClientIdentity {
+        client_id: grant.id.clone(),
+        revision: grant.revision,
+        environment_ids: if grant.all_environments {
+            data.environments.iter().map(|e| e.id.clone()).collect()
+        } else {
+            grant.environment_ids.clone()
+        },
+        capabilities: grant.capabilities.clone(),
+    }
+}
 pub(crate) fn find_grant<'a>(grants: &'a [ClientGrant], token: &str) -> Option<&'a ClientGrant> {
     if !token.starts_with(TOKEN_PREFIX) || token.len() != TOKEN_PREFIX.len() + TOKEN_BYTES * 2 {
         return None;

@@ -1,5 +1,5 @@
 use crate::{
-    Core,
+    Core, Environment,
     error::{OdxError, Result},
 };
 use serde::Serialize;
@@ -22,28 +22,21 @@ pub struct FaviconImage {
 impl Core {
     /// Fetch a same-origin icon using only non-sensitive configured headers.
     pub async fn favicon_image(&self, id: &str, url: &str) -> Result<FaviconImage> {
-        let (env, session) = {
-            let state = self.inner.lock().await;
-            let data = state.vault.as_ref().ok_or(OdxError::Locked)?.data();
-            let mut env = data.connection_environment(id)?;
-            env.headers
-                .retain(|h| !crate::headers::is_sensitive(&h.name));
-            (env, state.session)
-        };
-        let _permit = FAVICON_PERMITS
-            .acquire()
+        self.favicon_fetch(id, async |env| self.odoo.favicon_image(env, url).await)
             .await
-            .map_err(|_| OdxError::Capacity)?;
-        self.assert_environment_current(id, env.revision, session)
-            .await?;
-        let image = self.odoo.favicon_image(&env, url).await?;
-        self.assert_environment_current(id, env.revision, session)
-            .await?;
-        Ok(image)
     }
 
     /// Public display metadata using only non-sensitive configured headers.
     pub async fn favicon_page(&self, id: &str) -> Result<FaviconPage> {
+        self.favicon_fetch(id, async |env| self.odoo.favicon_page(env).await)
+            .await
+    }
+
+    async fn favicon_fetch<T>(
+        &self,
+        id: &str,
+        fetch: impl AsyncFnOnce(&Environment) -> Result<T>,
+    ) -> Result<T> {
         let (env, session) = {
             let state = self.inner.lock().await;
             let data = state.vault.as_ref().ok_or(OdxError::Locked)?.data();
@@ -58,9 +51,9 @@ impl Core {
             .map_err(|_| OdxError::Capacity)?;
         self.assert_environment_current(id, env.revision, session)
             .await?;
-        let page = self.odoo.favicon_page(&env).await?;
+        let value = fetch(&env).await?;
         self.assert_environment_current(id, env.revision, session)
             .await?;
-        Ok(page)
+        Ok(value)
     }
 }

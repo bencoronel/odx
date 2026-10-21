@@ -676,7 +676,6 @@ async fn editing_the_connection_keeps_the_environment_proxy() {
     ] {
         let mut changed = draft(name, url, Protocol::LegacyJsonrpc);
         changed.login = "another-user".into();
-        changed.secret = String::new();
         core.update_environment(&env.id, changed).await.unwrap();
     }
     let view = core.environment_proxy(&custom.id).await.unwrap();

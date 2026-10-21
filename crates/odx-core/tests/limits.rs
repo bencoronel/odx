@@ -1,4 +1,5 @@
 //! Limits: 16/4 upstream slots, 64/16 queues with 10 s deadlines, I/O sizes and connection/operation timeouts. Core cases use run_tool against simulated Odoo.
+mod flow;
 mod support;
 use odx_core::{
     Capability, ClientIdentity, ClientScope, Core, EnvironmentDraft, Format, Outcome, Protocol,
@@ -799,5 +800,38 @@ async fn a_write_waiting_for_a_slot_does_not_log_in_after_lock() {
         f.sim.counts.logins(),
         logins,
         "no login with the vault locked"
+    );
+}
+
+#[tokio::test]
+async fn a_read_whose_environment_changes_while_queued_closes_its_attempt() {
+    let f = fixture(1).await;
+    f.core
+        .save_settings(settings(|s| s.environment_concurrency = 1))
+        .await
+        .unwrap();
+    f.sim.counts.hold_database("db-0");
+    let held = spawn(&f, "search_read", read(0));
+    until("read holds the only slot", || {
+        f.sim.counts.in_flight("db-0") == 1
+    })
+    .await;
+    let queued = spawn(&f, "search_read", read(0));
+    settle().await;
+    flow::rename(&f.core, &f.envs[0], "E0b").await;
+    f.sim.counts.release_databases();
+    let _ = held.await;
+    let err = queued.await.unwrap().unwrap_err();
+    assert_eq!(err.outcome, Outcome::NotSent, "{err:?}");
+    let events = f
+        .core
+        .activity(None, odx_core::ActivityFilter::default())
+        .await
+        .unwrap()
+        .events;
+    assert!(events.iter().any(|e| e.outcome == "not_sent"));
+    assert!(
+        events.iter().all(|e| e.outcome != "attempted"),
+        "{events:?}"
     );
 }

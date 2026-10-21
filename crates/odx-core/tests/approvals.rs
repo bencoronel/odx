@@ -247,7 +247,7 @@ async fn cancellation_and_environment_revision_revoke_unsent_approvals() {
     flow::abandon(&core, call, &cancelled.id).await;
     assert!(core.decide(&cancelled.id, true).await.is_err());
     let (call, changed) = flow::queue(&core, &client, "write", request()).await;
-    core.rename_environment(&env.id, "A renamed").await.unwrap();
+    flow::rename(&core, &env.id, "A renamed").await;
     assert!(core.decide(&changed.id, true).await.is_err());
     assert_eq!(flow::error_code(call).await, "approval_revoked");
     assert_eq!(sim.counts.writes(), 0);

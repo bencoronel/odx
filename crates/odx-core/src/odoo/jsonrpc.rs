@@ -229,8 +229,9 @@ impl OdooClient {
         }
         let bytes = read_limited(response, env, max_response).await?;
         let size = bytes.len();
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| OdxError::Upstream("invalid JSON-RPC response".into()))?;
+        let value = parse_json(bytes)
+            .await
+            .ok_or_else(|| OdxError::Upstream("invalid JSON-RPC response".into()))?;
         if let Some(err) = value.get("error") {
             let message = err
                 .pointer("/data/message")
@@ -306,7 +307,7 @@ impl OdooClient {
                 break;
             }
             let headers = crate::headers::request_headers(&env.headers)?;
-            let mut response = self
+            let response = self
                 .send(env, |http| {
                     http.get(url.clone())
                         .header(reqwest::header::ACCEPT, accept)
@@ -330,12 +331,6 @@ impl OdooClient {
                     status: response.status().as_u16(),
                 });
             }
-            if response
-                .content_length()
-                .is_some_and(|n| n > MAX_RESOURCE as u64)
-            {
-                return Err(OdxError::Upstream("favicon resource too large".into()));
-            }
             let content_type = response
                 .headers()
                 .get(reqwest::header::CONTENT_TYPE)
@@ -346,14 +341,16 @@ impl OdooClient {
                 .unwrap_or("")
                 .trim()
                 .to_ascii_lowercase();
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|e| network_error(&e, env))? {
-                if bytes.len() + chunk.len() > MAX_RESOURCE {
-                    return Err(OdxError::Upstream("favicon resource too large".into()));
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            return Ok((url, content_type, bytes));
+            let mut bytes =
+                read_limited(response, env, MAX_RESOURCE)
+                    .await
+                    .map_err(|e| match e {
+                        OdxError::ResponseTooLarge { .. } => {
+                            OdxError::Upstream("favicon resource too large".into())
+                        }
+                        e => e,
+                    })?;
+            return Ok((url, content_type, std::mem::take(&mut *bytes)));
         }
         Err(OdxError::Upstream("could not fetch favicon page".into()))
     }
@@ -661,6 +658,16 @@ pub(super) async fn read_limited(
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+/// Parse JSON; bodies over 1 MiB parse on the blocking pool so tokio workers keep serving.
+pub(super) async fn parse_json(bytes: Zeroizing<Vec<u8>>) -> Option<Value> {
+    if bytes.len() <= 1024 * 1024 {
+        return serde_json::from_slice(&bytes).ok();
+    }
+    tokio::task::spawn_blocking(move || serde_json::from_slice(&bytes).ok())
+        .await
+        .ok()
+        .flatten()
 }
 fn relayed(clients: &ClientPool, proxy: &ProxySettings) -> bool {
     clients

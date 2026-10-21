@@ -15,6 +15,8 @@ use std::{
 const MAX_EVENT: usize = 16 * 1024;
 const MAX_QUEUED_EVENTS: usize = 128;
 const MAX_HISTORY: u64 = 256 * 1024 * 1024;
+/// Prune on the first insert and every 64th after; 64 events of at most MAX_EVENT stay far below the page reserve.
+const PRUNE_EVERY: u32 = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -289,6 +291,7 @@ pub struct AuditLog {
     /// Current retention limits in days and content bytes.
     retention_days: std::sync::atomic::AtomicU32,
     retention_bytes: std::sync::atomic::AtomicU64,
+    inserts: std::sync::atomic::AtomicU32,
 }
 /// Decrements a queue counter on drop.
 pub(crate) struct QueueSlot<'a>(pub(crate) &'a AtomicUsize);
@@ -304,6 +307,7 @@ impl AuditLog {
             queued: AtomicUsize::new(0),
             retention_days: std::sync::atomic::AtomicU32::new(30),
             retention_bytes: std::sync::atomic::AtomicU64::new(MAX_HISTORY),
+            inserts: std::sync::atomic::AtomicU32::new(0),
         }
     }
     pub fn for_vault(vault: &crate::vault::Vault) -> Self {
@@ -348,9 +352,16 @@ impl AuditLog {
     }
     fn write(&self, event: &AuditEvent) -> Result<()> {
         let _slot = QueueSlot(&self.queued);
+        let prune = self
+            .inserts
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(PRUNE_EVERY);
         self.database.transaction(|tx| {
             insert_event(tx, event)?;
-            self.prune(tx)
+            if prune {
+                self.prune(tx)?;
+            }
+            Ok(())
         })
     }
     pub(crate) fn last_used(&self) -> Result<Vec<(String, chrono::DateTime<Utc>)>> {
@@ -533,7 +544,13 @@ mod tests {
         // Out-of-range values cannot exceed the 30-day limit.
         audit.set_retention(400, 256);
         audit.append(&event("ancient", 31)).unwrap();
-        assert_eq!(count(), 1);
+        assert_eq!(count(), 2, "inserts between periodic prunes skip retention");
+        for _ in 3..PRUNE_EVERY {
+            audit.append(&event("new", 0)).unwrap();
+        }
+        assert_eq!(count(), 2);
+        audit.append(&event("new", 0)).unwrap();
+        assert_eq!(count(), 1, "periodic prune keeps the 30-day limit");
     }
     #[test]
     fn sql_projection_groups_requests_before_filters_and_pagination() {
@@ -596,7 +613,8 @@ mod tests {
         event.request_id = Some("expired".into());
         event.at = Utc::now() - chrono::Duration::days(31);
         audit.append(&event).unwrap();
-        assert_eq!(events(), 105, "writes also enforce retention");
+        audit.prune_now().unwrap();
+        assert_eq!(events(), 105, "retention removes expired requests");
     }
 
     fn fixture_event(id: String, at: DateTime<Utc>) -> AuditEvent {

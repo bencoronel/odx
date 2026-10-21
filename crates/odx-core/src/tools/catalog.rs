@@ -282,11 +282,11 @@ fn from_error(error: OdxError) -> ToolError {
         OdxError::Network { message, .. } => {
             ToolError::new("upstream_network", message, Outcome::Failed)
         }
-        OdxError::HttpStatus { status } => ToolError::new(
-            "upstream_error",
-            format!("Odoo returned HTTP {status}"),
-            Outcome::Failed,
-        ),
+        error @ OdxError::HttpStatus { .. } => {
+            let (code, params) = (error.code(), error.ui_params());
+            ToolError::new("upstream_error", error.to_string(), Outcome::Failed)
+                .with_ui_error(code, params)
+        }
         OdxError::Upstream(m) => ToolError::new("upstream_network", m, Outcome::Failed),
         e @ OdxError::ResponseTooLarge { .. } => {
             ToolError::new("output_too_large", e.to_string(), Outcome::Failed)
@@ -496,20 +496,15 @@ pub(crate) fn ids(args: &mut Args) -> Result<Vec<i64>, ToolError> {
 }
 /// Remove the extra fetched row and populate meta.page.
 pub(crate) fn paged(
-    data: Value,
+    mut data: Value,
     limit: usize,
     offset: usize,
     meta: &mut Map<String, Value>,
 ) -> Value {
-    let mut out = ToolOutput {
-        data,
-        meta: std::mem::take(meta),
-        format: Format::Compact,
-        trunc: 0,
-    };
-    out.page(limit, offset);
-    *meta = out.meta;
-    out.data
+    if let Value::Array(rows) = &mut data {
+        meta.insert("page".into(), crate::output::page_of(rows, limit, offset));
+    }
+    data
 }
 pub(crate) fn common(args: &mut Args) -> Result<(Format, usize), ToolError> {
     let format = match args.map.get("format").and_then(Value::as_str) {
@@ -604,9 +599,7 @@ impl Core {
             "access" => self.tool_access(&client, arguments).await,
             "compare" => self.tool_compare(&client, arguments).await,
             "download" => self.tool_download(&client, arguments).await,
-            _ => Err(ToolError::invalid(format!(
-                "herramienta desconocida: {name}"
-            ))),
+            _ => Err(ToolError::invalid(format!("unknown tool: {name}"))),
         }
     }
 
@@ -844,8 +837,22 @@ impl Core {
                 ),
             )
             .await?;
-        self.assert_environment_current(&env.id, env.revision, target.session)
+        // A change while waiting for a slot closes the recorded attempt as not sent.
+        if let Err(e) = self
+            .assert_environment_current(&env.id, env.revision, target.session)
+            .await
+        {
+            audit.finish_odx_error(env, &e);
+            self.log_outcome_as(
+                audit,
+                Some(&client.client_id),
+                &env.id,
+                &operation,
+                "not_sent",
+            )
             .await?;
+            return Err(e.into());
+        }
         let result = async {
             let (uid, login) = self.odoo.authenticate_measured(env).await?;
             // Only the call that logged in counts login in its metrics.
@@ -866,7 +873,6 @@ impl Core {
                 .await
         }
         .await;
-        drop(permits);
         upstream.calls += 1;
         let outcome = if result.is_ok() {
             "succeeded"
@@ -879,6 +885,8 @@ impl Core {
         }
         self.log_outcome_as(audit, Some(&client.client_id), &env.id, &operation, outcome)
             .await?;
+        // Release after the outcome is logged so drain() waits for it.
+        drop(permits);
         let (value, bytes) = result?;
         upstream.bytes += bytes;
         Ok(value)
@@ -962,9 +970,7 @@ impl Core {
                 domain: domain(&mut args)?,
             },
             _ => {
-                return Err(ToolError::invalid(format!(
-                    "herramienta desconocida: {name}"
-                )));
+                return Err(ToolError::invalid(format!("unknown tool: {name}")));
             }
         };
         let target = self.target(client, &env_name, Capability::OdooRead).await?;
@@ -1440,7 +1446,7 @@ impl Core {
             .await?;
         // Human wait spans request creation to execution start.
         let requested;
-        let (id, expires_at, details, waiter) = {
+        let (id, deadline, details, waiter) = {
             let mut s = self.inner.lock().await;
             let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
             let now = v.now();
@@ -1518,10 +1524,14 @@ impl Core {
             approval.details.authorization = Some(authorization.clone());
             approval.authorization = authorization;
             let id = approval.id.clone();
-            let expires_at = approval.call.expires_at;
+            // Wait on Instant from the vault-clock TTL; system time can be skewed against the vault clock.
+            let ttl = (approval.call.expires_at - now)
+                .to_std()
+                .unwrap_or_default();
             let details = approval.details.clone();
             s.pending.insert(id.clone(), approval);
             requested = Instant::now();
+            let deadline = requested + ttl;
             let waiter = if needs_approval {
                 let (tx, rx) = oneshot::channel();
                 s.waiters.insert(id.clone(), tx);
@@ -1543,7 +1553,7 @@ impl Core {
             } else {
                 None
             };
-            (id, expires_at, details, waiter)
+            (id, deadline, details, waiter)
         };
         let Some(mut waiter) = waiter else {
             // Free-write/rule execution uses the human-approval path in a separate task. Cancellation or disconnect cannot interrupt sent writes or their outcome audit.
@@ -1601,8 +1611,7 @@ impl Core {
             }
             Err(_) => return Err(OdxError::Persistence.into()),
         }
-        let remaining = (expires_at - Utc::now()).to_std().unwrap_or_default();
-        let end = match tokio::time::timeout(remaining, &mut waiter).await {
+        let end = match tokio::time::timeout_at(deadline.into(), &mut waiter).await {
             Ok(end) => end,
             Err(_) => match self.withdraw(&id, true).await {
                 Ok(_) => {

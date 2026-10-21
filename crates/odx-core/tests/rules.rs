@@ -648,7 +648,7 @@ async fn an_environment_change_revokes_rule_authorized_work_and_deletion_removes
         })
     };
     f.sim.counts.wait_for_login().await;
-    f.core.rename_environment(&f.env, "A2").await.unwrap();
+    flow::rename(&f.core, &f.env, "A2").await;
     f.sim.counts.release_login();
     assert!(call.await.unwrap().is_err());
     assert_eq!(f.sim.counts.writes(), 0);
@@ -659,7 +659,8 @@ async fn an_environment_change_revokes_rule_authorized_work_and_deletion_removes
 }
 
 #[tokio::test]
-async fn changing_the_connection_target_drops_its_rules_but_a_new_key_does_not() {
+async fn changing_the_connection_target_requires_a_key_and_drops_its_rules_but_a_new_key_does_not()
+{
     let f = fixture(WriteMode::Approval).await;
     f.core.save_rule(save(&f, json!({}))).await.unwrap();
     let draft = |database: &str, secret: &str| EnvironmentDraft {
@@ -676,8 +677,16 @@ async fn changing_the_connection_target_drops_its_rules_but_a_new_key_does_not()
         .await
         .unwrap();
     assert_eq!(f.core.rules(None).await.unwrap().len(), 1);
-    f.core
+    // The kept key belongs to the old target; a new target requires its own.
+    let err = f
+        .core
         .update_environment(&f.env, draft("base-b", ""))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "validation.environment.secret_required");
+    assert_eq!(f.core.rules(None).await.unwrap().len(), 1);
+    f.core
+        .update_environment(&f.env, draft("base-b", "fixture-secret"))
         .await
         .unwrap();
     assert!(f.core.rules(None).await.unwrap().is_empty());

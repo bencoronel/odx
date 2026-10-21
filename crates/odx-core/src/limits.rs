@@ -29,6 +29,8 @@ pub struct Limits {
     per_environment_target: Arc<AtomicUsize>,
     global_queue_limit: usize,
     environment_queue_limit: usize,
+    /// Downloads buffer ~130 MiB each (response, string, decoded copy).
+    downloads: Arc<Semaphore>,
 }
 pub struct UpstreamPermits {
     _admission: OwnedSemaphorePermit,
@@ -65,6 +67,14 @@ impl Limits {
             per_environment_target: Arc::new(AtomicUsize::new(per_environment)),
             global_queue_limit,
             environment_queue_limit,
+            downloads: Arc::new(Semaphore::new(2)),
+        }
+    }
+    /// Bound concurrent downloads to cap peak memory; others wait up to the queue deadline.
+    pub async fn download_permit(&self) -> Result<OwnedSemaphorePermit> {
+        match tokio::time::timeout(WAIT, self.downloads.clone().acquire_owned()).await {
+            Ok(Ok(p)) => Ok(p),
+            _ => Err(OdxError::Capacity),
         }
     }
     pub fn queue_depth(&self, environment_id: &str) -> Result<QueueDepth> {
@@ -273,5 +283,16 @@ mod tests {
         let x = l.acquire("a").await.unwrap();
         let y = l.acquire("a").await.unwrap();
         drop((x, y));
+    }
+    #[tokio::test(start_paused = true)]
+    async fn downloads_are_limited_to_two_at_once() {
+        let l = Limits::default();
+        let held = (
+            l.download_permit().await.unwrap(),
+            l.download_permit().await.unwrap(),
+        );
+        assert!(matches!(l.download_permit().await, Err(OdxError::Capacity)));
+        drop(held);
+        assert!(l.download_permit().await.is_ok());
     }
 }

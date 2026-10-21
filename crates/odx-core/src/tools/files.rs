@@ -279,6 +279,43 @@ pub(crate) fn sweep_outputs(
     sweep(dir, quota, now, None)
 }
 
+const SWEEP_EVERY: Duration = Duration::from_secs(600);
+/// Output directories with a periodic sweeper and their latest quota.
+static SWEEPERS: std::sync::Mutex<std::collections::BTreeMap<PathBuf, Quota>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// One periodic sweep per directory removes expired files while idle; it stops once the directory is empty or gone.
+fn keep_sweeping(dir: PathBuf, quota: Quota) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let mut sweepers = SWEEPERS.lock().unwrap_or_else(|e| e.into_inner());
+    if sweepers.insert(dir.clone(), quota).is_some() {
+        return;
+    }
+    handle.spawn(async move {
+        loop {
+            tokio::time::sleep(SWEEP_EVERY).await;
+            let dir = dir.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let quota = SWEEPERS.lock().unwrap_or_else(|e| e.into_inner())[&dir];
+                let _ = sweep_outputs(&dir, &quota, SystemTime::now());
+                // Check and deregister under the registry lock so a concurrent store restarts the sweeper.
+                let mut sweepers = SWEEPERS.lock().unwrap_or_else(|e| e.into_inner());
+                let idle = fs::read_dir(&dir).map_or(true, |mut e| e.next().is_none());
+                if idle {
+                    sweepers.remove(&dir);
+                }
+                idle
+            })
+            .await;
+            if done.unwrap_or(true) {
+                return;
+            }
+        }
+    });
+}
+
 impl Core {
     /// Clean expired/excess output in a blocking background thread without waiting for another write.
     pub(crate) fn sweep_outputs_in_background(&self, settings: crate::config::Settings) {
@@ -287,6 +324,7 @@ impl Core {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn_blocking(move || sweep_outputs(&dir, &quota, SystemTime::now()));
         }
+        keep_sweeping(self.outputs_dir(), quota);
     }
 
     /// Store body in the managed directory; return its descriptor and cleanup warnings.
@@ -311,20 +349,7 @@ impl Core {
         })
         .await
         .map_err(|_| StoreError::Io(io::Error::other("file write task interrupted")))??;
-        // Expire files while open (default 24 h); otherwise clean on next unlock or write.
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let path = stored.path.clone();
-            handle.spawn(async move {
-                tokio::time::sleep(quota.max_age).await;
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-                    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file()) {
-                        let _ = fs::remove_file(&path);
-                    }
-                })
-                .await;
-            });
-        }
+        keep_sweeping(self.outputs_dir(), quota);
         let mut descriptor = Map::new();
         descriptor.insert("file_id".into(), json!(stored.id));
         descriptor.insert("path".into(), json!(stored.path.to_string_lossy()));
@@ -450,6 +475,7 @@ impl Core {
                     .map(String::from),
             );
         }
+        let _download = self.limits.download_permit().await?;
         let rows = self
             .read_call_limited(
                 client,
@@ -470,20 +496,25 @@ impl Core {
                 }
                 e
             })?;
-        let Some(row) = rows.get(0) else {
+        let mut rows = rows;
+        let Some(row) = rows.get_mut(0) else {
             return Err(not_found(format!(
                 "record {model}({id}) is missing or inaccessible"
             )));
         };
-        let encoded = match &row[&field] {
-            Value::String(s) if !s.is_empty() => s.as_str(),
+        let encoded = match row[&field].take() {
+            Value::String(s) if !s.is_empty() => s,
             _ => {
                 return Err(not_found(format!(
                     "{model}({id}).{field} is empty; no file created"
                 )));
             }
         };
-        let decoded = decode(encoded)?;
+        // Up to 48 MiB of base64: decode off the async workers.
+        let decoded = tokio::task::spawn_blocking(move || decode(&encoded).map_err(Box::new))
+            .await
+            .map_err(|_| StoreError::Io(io::Error::other("decode task interrupted")))?
+            .map_err(|e| *e)?;
         let hint = row
             .get("name")
             .and_then(Value::as_str)
@@ -760,5 +791,27 @@ mod tests {
         assert_eq!(decode(&encoded).unwrap_err().code, "output_too_large");
         assert_eq!(decode("no*base64").unwrap_err().code, "upstream_error");
         assert_eq!(decode("aGk=").unwrap(), b"hi");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn periodic_sweep_removes_expired_files_then_stops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("outputs");
+        let q = Quota {
+            max_age: Duration::ZERO,
+            ..QUOTA
+        };
+        let stored = store(&dir, "a", None, b"x", &q, SystemTime::now()).unwrap();
+        keep_sweeping(dir.clone(), q);
+        let running = || SWEEPERS.lock().unwrap().contains_key(&dir);
+        assert!(running());
+        for _ in 0..10 {
+            if !running() {
+                break;
+            }
+            tokio::time::sleep(SWEEP_EVERY).await;
+        }
+        assert!(!stored.path.exists());
+        assert!(!running(), "an empty directory ends the sweeper");
     }
 }
