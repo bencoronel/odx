@@ -1,5 +1,5 @@
 mod support;
-use odx_core::{ActivityFilter, Core, EnvironmentDraft, Protocol, ShellCall};
+use odx_core::{ActivityFilter, Core, EnvironmentDraft, Protocol, ShellCall, WriteMode};
 use serde_json::{Map, json};
 
 fn call(
@@ -21,7 +21,7 @@ fn call(
 }
 
 #[tokio::test]
-async fn shell_bypasses_mode_but_requires_confirmation_for_changes() {
+async fn shell_requires_confirmation_and_respects_read_only() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
     let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
@@ -38,7 +38,7 @@ async fn shell_bypasses_mode_but_requires_confirmation_for_changes() {
         })
         .await
         .unwrap();
-    // Shell can read and explicitly confirm writes even in the default read-only mode.
+    // Shell reads in the default read-only mode; confirmed writes still need a writable mode.
     let count = core
         .shell_call(call(
             &env.id,
@@ -68,7 +68,20 @@ async fn shell_bypasses_mode_but_requires_confirmation_for_changes() {
         .await
         .unwrap_err();
     assert_eq!(unconfirmed.code, "confirmation_required");
+    let read_only = core
+        .shell_call(call(
+            &env.id,
+            "res.partner",
+            "write",
+            json!([[1], {"name":"x"}]),
+            true,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(read_only.code, "forbidden");
     assert_eq!(sim.counts.writes(), 0);
+    // Confirmation stands in for individual approval.
+    core.set_mode(&env.id, WriteMode::Approval).await.unwrap();
     let done = core
         .shell_call(call(
             &env.id,

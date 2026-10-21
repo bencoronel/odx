@@ -273,9 +273,14 @@ impl Rule {
                 let Some(fields) = &self.fields else {
                     return false;
                 };
+                // Command lists write comodel records outside the field list and max_records.
                 payloads(call).is_some_and(|list| {
-                    list.iter()
-                        .all(|p| p.keys().all(|k| fields.binary_search(k).is_ok()))
+                    list.iter().all(|p| {
+                        p.iter().all(|(k, v)| {
+                            fields.binary_search(k).is_ok()
+                                && !crate::tools::mutations::is_command_list(v)
+                        })
+                    })
                 })
             }
             RuleKind::Values => {
@@ -518,5 +523,44 @@ mod tests {
         env.write_mode = WriteMode::Approval;
         assert!(authorize(&env, Effect::Write, now).unwrap());
         assert!(authorize(&env, Effect::Delete, now).unwrap());
+    }
+
+    #[test]
+    fn fields_rules_never_match_x2many_commands() {
+        let now = Utc::now();
+        let rule = Rule {
+            id: "r".into(),
+            environment_id: "e".into(),
+            model: "sale.order".into(),
+            method: "write".into(),
+            kind: RuleKind::Fields,
+            fields: Some(vec!["note".into(), "order_line".into()]),
+            values: None,
+            context: Map::new(),
+            max_records: 1,
+            expires_at: None,
+            revision: 1,
+            created_at: now,
+        };
+        let kwargs = Map::new();
+        let matches = |vals: Value| {
+            let args = [serde_json::json!([7]), vals];
+            let call = EffectiveCall {
+                environment_id: "e",
+                model: "sale.order",
+                method: "write",
+                args: &args,
+                kwargs: &kwargs,
+            };
+            rule.matches(&call, &Effect::Write, now)
+        };
+        assert!(matches(serde_json::json!({"note": "x"})));
+        assert!(!matches(
+            serde_json::json!({"order_line": [[1, 777, {"price_unit": 0}]]})
+        ));
+        assert!(!matches(
+            serde_json::json!({"order_line": [[0, 0, {"name": "x"}]]})
+        ));
+        assert!(!matches(serde_json::json!({"order_line": [[4, 9]]})));
     }
 }

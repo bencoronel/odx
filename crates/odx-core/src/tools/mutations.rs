@@ -81,15 +81,17 @@ pub fn call_effect(
             )),
         }
     };
+    let ids = || -> Result<Vec<i64>> {
+        serde_json::from_value(parameter(0, "ids")?.clone()).map_err(|_| {
+            OdxError::validation(
+                "validation.console.ids_must_be_integers",
+                "ids must be an integer list",
+            )
+        })
+    };
     match method {
         "unlink" | "write" => {
-            let ids: Vec<i64> =
-                serde_json::from_value(parameter(0, "ids")?.clone()).map_err(|_| {
-                    OdxError::validation(
-                        "validation.console.ids_must_be_integers",
-                        "ids must be an integer list",
-                    )
-                })?;
+            let ids = ids()?;
             validate_ids(&ids)?;
             // One individual approval covers every listed ID.
             if method == "unlink" {
@@ -112,13 +114,7 @@ pub fn call_effect(
         }
         // web_save(ids, vals, specification) creates without IDs and writes otherwise.
         "web_save" => {
-            let ids: Vec<i64> =
-                serde_json::from_value(parameter(0, "ids")?.clone()).map_err(|_| {
-                    OdxError::validation(
-                        "validation.console.ids_must_be_integers",
-                        "ids must be an integer list",
-                    )
-                })?;
+            let ids = ids()?;
             let values = parameter(1, "vals")?;
             if ids.is_empty() {
                 validate_create(values)?;
@@ -135,13 +131,7 @@ pub fn call_effect(
         }
         // copy(ids, default) creates copies; defaults cannot contain relational deletes.
         "copy" => {
-            let ids: Vec<i64> =
-                serde_json::from_value(parameter(0, "ids")?.clone()).map_err(|_| {
-                    OdxError::validation(
-                        "validation.console.ids_must_be_integers",
-                        "ids must be an integer list",
-                    )
-                })?;
+            let ids = ids()?;
             validate_ids(&ids)?;
             if args
                 .iter()
@@ -211,6 +201,16 @@ pub fn has_relational_delete(values: &Value) -> bool {
 fn command_code(value: &Value) -> Option<Option<i64>> {
     let code = value.as_f64().filter(|code| (0.0..=6.0).contains(code))?;
     Some((code.fract() == 0.0).then_some(code as i64))
+}
+/// x2many command list: an array containing a command array such as [1, id, {..}] or [0, 0, {..}].
+pub fn is_command_list(value: &Value) -> bool {
+    value.as_array().is_some_and(|a| {
+        a.iter().any(|c| {
+            c.as_array()
+                .and_then(|c| command_code(c.first()?))
+                .is_some()
+        })
+    })
 }
 pub fn relational_delete_count(values: &Value) -> usize {
     fn visit(v: &Value) -> usize {

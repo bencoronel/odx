@@ -1,4 +1,4 @@
-//! Desktop admin Shell. Bypasses environment write mode but requires explicit write confirmation and shares limits, revision checks, redaction and audit.
+//! Desktop admin Shell. Explicit write confirmation replaces approval; read-only environments still deny writes. Shares limits, revision checks, redaction and audit.
 use crate::{
     audit::AuditDetails,
     error::OdxError,
@@ -184,11 +184,11 @@ impl Core {
                 Outcome::NotSent,
             ));
         }
-        let (env, global, session) = {
+        let (env, global, session, now) = {
             let s = self.inner.lock().await;
             let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
             let env = v.data().connection_environment(&call.environment_id)?;
-            (env, v.data().global_context.clone(), s.session)
+            (env, v.data().global_context.clone(), s.session, v.now())
         };
         let mut kwargs = call.kwargs;
         let call_context = match kwargs.remove("context") {
@@ -209,6 +209,10 @@ impl Core {
             &Value::Object(kwargs.clone()),
         )
         .await?;
+        // Confirmation stands in for approval but never overrides read-only or an expired deadline.
+        if write {
+            crate::policy::authorize(&env, crate::policy::Effect::Write, now)?;
+        }
         let env = self.resolve_protocol(env, session).await?;
         let operation = format!("{}:{}", call.method, call.model);
         let permits = self.limits.acquire(&env.id).await?;
@@ -243,7 +247,6 @@ impl Core {
         let uid = match self.odoo.authenticate(&env).await {
             Ok(uid) => uid,
             Err(e) => {
-                drop(permits);
                 audit.finish_odx_error(&env, &e);
                 self.log_outcome_as(audit, None, &env.id, &operation, "failed")
                     .await?;
@@ -261,7 +264,6 @@ impl Core {
                 Value::Object(kwargs),
             )
             .await;
-        drop(permits);
         let elapsed = started.elapsed().as_millis() as u64;
         let (outcome, result): (&str, Result<(Value, usize), ToolError>) = match result {
             Ok(ok) => ("succeeded", Ok(ok)),
@@ -279,6 +281,8 @@ impl Core {
         let _ = self
             .log_outcome_as(audit, None, &env.id, &operation, outcome)
             .await;
+        // Release after the outcome is logged so drain() waits for it.
+        drop(permits);
         let (data, bytes) = result?;
         Ok(ShellResult {
             data,
