@@ -1,9 +1,7 @@
 //! Shared SQLCipher connection for configuration and audit while unlocked.
 use crate::{
-    audit::AuditEvent,
     config::VaultData,
     error::{OdxError, Result},
-    shell::HistoryEntry,
 };
 use rusqlite::{Connection, OpenFlags, Transaction};
 use std::{
@@ -29,14 +27,7 @@ pub(crate) struct Database {
     connection: Mutex<Connection>,
 }
 impl Database {
-    pub fn create(
-        path: &Path,
-        password: &str,
-        data: &VaultData,
-        events: &[AuditEvent],
-        history: &[HistoryEntry],
-        complete: bool,
-    ) -> Result<Self> {
+    pub fn create(path: &Path, password: &str, data: &VaultData) -> Result<Self> {
         if password.is_empty() {
             return Err(OdxError::validation(
                 "validation.vault.password_empty",
@@ -63,18 +54,6 @@ impl Database {
                 "INSERT INTO config(id,data) VALUES(1,?1)",
                 [clear.as_slice()],
             )?;
-            insert_history(&tx, history)?;
-            for batch in events.chunks(100) {
-                for event in batch {
-                    crate::audit::insert_event(&tx, event)?;
-                }
-                crate::audit::prune(&tx)?;
-            }
-            tx.execute(
-                "UPDATE metadata SET history_complete=?1 WHERE id=1",
-                [complete],
-            )?;
-            crate::audit::prune(&tx)?;
             tx.commit()?;
             Ok(Self {
                 path: path.to_owned(),
@@ -89,25 +68,16 @@ impl Database {
     pub fn open(path: &Path, password: &str) -> Result<Self> {
         let mut connection = Self::connection(path, password)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(1..=4).contains(&version) {
+        // v3 shipped in 0.1.0-alpha.1; older storage never left development.
+        if !(3..=4).contains(&version) {
             return Err(OdxError::validation(
                 "validation.vault.version_unsupported",
                 "unsupported storage version",
             ));
         }
-        if version < 4 {
-            // Migrate v1→v2→v3→v4 atomically; failure preserves the original database.
+        if version == 3 {
+            // Failure preserves the original database.
             let tx = connection.transaction()?;
-            if version == 1 {
-                // v1 also counted activity projections; recalculate using audit_events only.
-                tx.execute_batch(
-                    "DROP TRIGGER activity_added; DROP TRIGGER activity_removed; DROP TRIGGER activity_changed;
-                    UPDATE metadata SET history_bytes=(SELECT COALESCE(SUM(bytes),0) FROM audit_events) WHERE id=1;",
-                )?;
-            }
-            if version < 3 {
-                migrate_v3(&tx)?;
-            }
             migrate_v4(&tx)?;
             tx.commit()?;
         }
@@ -235,66 +205,6 @@ fn migrate_v4(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-/// v2→v3: reference audit payloads instead of copying them; move Shell history to its own table.
-fn migrate_v3(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute_batch(
-        "-- Preserve orphaned activity content as an event.
-        INSERT INTO audit_events(activity_key,at,client_id,payload,bytes)
-            SELECT activity_key,at,client_id,payload,bytes FROM activity a
-            WHERE NOT EXISTS (SELECT 1 FROM audit_events e WHERE e.activity_key=a.activity_key);
-        CREATE TABLE activity_v3 (
-            activity_key TEXT PRIMARY KEY, at INTEGER NOT NULL, environment_id TEXT NOT NULL,
-            client_id TEXT, operation TEXT NOT NULL, outcome TEXT NOT NULL, write INTEGER NOT NULL,
-            terminal INTEGER NOT NULL, last_seq INTEGER NOT NULL
-        );
-        INSERT INTO activity_v3
-            SELECT activity_key,at,environment_id,client_id,operation,outcome,write,terminal,
-                COALESCE(
-                    (SELECT MAX(e.seq) FROM audit_events e WHERE e.activity_key=a.activity_key AND e.payload=a.payload),
-                    (SELECT MAX(e.seq) FROM audit_events e WHERE e.activity_key=a.activity_key))
-            FROM activity a;
-        DROP TABLE activity;
-        ALTER TABLE activity_v3 RENAME TO activity;
-        CREATE INDEX activity_date ON activity(at DESC,activity_key DESC);
-        CREATE TABLE shell_history (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, environment TEXT, command TEXT NOT NULL);",
-    )?;
-    // Reclassify writes using the current rule instead of v2 prefixes.
-    let operations: Vec<String> = tx
-        .prepare("SELECT DISTINCT operation FROM activity")?
-        .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    for operation in operations {
-        tx.execute(
-            "UPDATE activity SET write=?1 WHERE operation=?2",
-            rusqlite::params![crate::activity::is_write(&operation), operation],
-        )?;
-    }
-    let clear = Zeroizing::new(tx.query_row("SELECT data FROM config WHERE id=1", [], |r| {
-        r.get::<_, Vec<u8>>(0)
-    })?);
-    // Decode secrets directly into protected types, avoiding serde_json::Value.
-    #[derive(serde::Deserialize)]
-    struct OldHistory {
-        shell_history: Option<Vec<HistoryEntry>>,
-    }
-    let old: OldHistory = serde_json::from_slice(&clear).map_err(crate::security::decode_error)?;
-    if let Some(history) = old.shell_history {
-        insert_history(tx, &history)?;
-        let data: VaultData =
-            serde_json::from_slice(&clear).map_err(crate::security::decode_error)?;
-        let clear = Zeroizing::new(serde_json::to_vec(&data)?);
-        tx.execute("UPDATE config SET data=?1 WHERE id=1", [clear.as_slice()])?;
-    }
-    tx.execute_batch("PRAGMA user_version=3;")?;
-    Ok(())
-}
-fn insert_history(tx: &Transaction<'_>, history: &[HistoryEntry]) -> Result<()> {
-    for entry in history {
-        crate::shell::insert_history(tx, entry)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -323,179 +233,6 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
         mode
-    }
-
-    /// Older v2 schema for migration fixtures only.
-    const V2_SCHEMA: &str = r#"CREATE TABLE config (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
-CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), history_complete INTEGER NOT NULL, history_bytes INTEGER NOT NULL DEFAULT 0);
-INSERT INTO metadata(id, history_complete) VALUES(1,1);
-CREATE TABLE audit_events (
-    seq INTEGER PRIMARY KEY, activity_key TEXT NOT NULL, at INTEGER NOT NULL,
-    client_id TEXT, payload BLOB NOT NULL, bytes INTEGER NOT NULL
-);
-CREATE INDEX audit_events_request ON audit_events(activity_key);
-CREATE INDEX audit_events_client ON audit_events(client_id,at DESC);
-CREATE TABLE activity (
-    activity_key TEXT PRIMARY KEY, at INTEGER NOT NULL, environment_id TEXT NOT NULL,
-    client_id TEXT, operation TEXT NOT NULL, outcome TEXT NOT NULL, write INTEGER NOT NULL,
-    terminal INTEGER NOT NULL, payload BLOB NOT NULL, bytes INTEGER NOT NULL
-);
-CREATE INDEX activity_date ON activity(at DESC);
-CREATE INDEX activity_environment_date ON activity(environment_id,at DESC);
-CREATE INDEX activity_client_date ON activity(client_id,at DESC);
-CREATE INDEX activity_outcome_date ON activity(outcome,at DESC);
--- history_bytes counts audit_events payloads only; activity is derived.
-CREATE TRIGGER audit_added AFTER INSERT ON audit_events BEGIN UPDATE metadata SET history_bytes=history_bytes+new.bytes WHERE id=1; END;
-CREATE TRIGGER audit_removed AFTER DELETE ON audit_events BEGIN UPDATE metadata SET history_bytes=history_bytes-old.bytes WHERE id=1; END;
-PRAGMA user_version=2;
-"#;
-
-    /// v2/v1 fixture with two requests and Shell history in configuration.
-    fn old_database(path: &std::path::Path, version: i64) {
-        std::fs::File::create(path).unwrap();
-        let connection = super::Database::connection(path, "fixture password").unwrap();
-        connection.execute_batch(V2_SCHEMA).unwrap();
-        let config = serde_json::json!({
-            "environments": [], "global_context": {},
-            "shell_history": [
-                {"at": "2026-10-01T10:00:00Z", "environment": "Prod", "command": "count res.partner"},
-                {"at": "2026-10-01T10:01:00Z", "environment": null, "command": "search res.users"}
-            ]
-        });
-        connection
-            .execute(
-                "INSERT INTO config(id,data) VALUES(1,?1)",
-                [serde_json::to_vec(&config).unwrap()],
-            )
-            .unwrap();
-        let at = chrono::Utc::now().timestamp_micros();
-        let event = |id: &str, operation: &str, outcome: &str, response: Option<&str>| {
-            let mut event = serde_json::json!({
-                "request_id": id, "at": chrono::Utc::now(), "environment_id": "fixture",
-                "operation": operation, "outcome": outcome,
-                "details": {"request": {"text": "fixture request", "truncated": false},
-                    "response": null, "error": null, "duration_ms": null}
-            });
-            if let Some(text) = response {
-                event["details"]["response"] =
-                    serde_json::json!({"text": text, "truncated": false});
-            }
-            serde_json::to_vec(&event).unwrap()
-        };
-        let rows = [
-            ("r1", "write:res.partner", "attempted", None, at),
-            (
-                "r1",
-                "write:res.partner",
-                "succeeded",
-                Some("fixture response"),
-                at + 1,
-            ),
-            (
-                "r2",
-                "search_read_and_mark:res.partner",
-                "succeeded",
-                None,
-                at + 2,
-            ),
-        ];
-        for (id, operation, outcome, response, at) in rows {
-            let payload = event(id, operation, outcome, response);
-            connection
-                .execute(
-                    "INSERT INTO audit_events(activity_key,at,payload,bytes) VALUES(?1,?2,?3,?4)",
-                    rusqlite::params![format!("request:{id}"), at, payload, payload.len() as i64],
-                )
-                .unwrap();
-            // v2 prefixes classified search_read_and_mark as a read.
-            connection
-                .execute(
-                    "INSERT OR REPLACE INTO activity VALUES(?1,?2,'fixture',NULL,?3,?4,?5,1,?6,?7)",
-                    rusqlite::params![
-                        format!("request:{id}"),
-                        at,
-                        operation,
-                        outcome,
-                        operation.starts_with("write"),
-                        payload,
-                        payload.len() as i64
-                    ],
-                )
-                .unwrap();
-        }
-        if version == 1 {
-            connection
-                .execute_batch(
-                    "CREATE TRIGGER activity_added AFTER INSERT ON activity BEGIN SELECT 1; END;
-                    CREATE TRIGGER activity_removed AFTER DELETE ON activity BEGIN SELECT 1; END;
-                    CREATE TRIGGER activity_changed AFTER UPDATE ON activity BEGIN SELECT 1; END;
-                    UPDATE metadata SET history_bytes=history_bytes*3; PRAGMA user_version=1;",
-                )
-                .unwrap();
-        }
-    }
-
-    #[test]
-    fn v1_and_v2_databases_migrate_to_current_without_losing_events_or_shell_history() {
-        for version in [1, 2] {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("vault.sqlite3");
-            old_database(&path, version);
-            let vault = Vault::unlock(&path, "fixture password").unwrap();
-            let (counted, stored) = counters(&vault);
-            assert_eq!(counted, stored);
-            {
-                let connection = vault.database.lock().unwrap();
-                let (version, events): (i64, i64) = connection
-                    .query_row(
-                        "SELECT (SELECT user_version FROM pragma_user_version),(SELECT count(*) FROM audit_events)",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .unwrap();
-                assert_eq!((version, events), (4, 3));
-                let payload_column: i64 = connection
-                    .query_row(
-                        "SELECT count(*) FROM pragma_table_info('activity') WHERE name='payload'",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .unwrap();
-                assert_eq!(payload_column, 0);
-                let config: Vec<u8> = connection
-                    .query_row("SELECT data FROM config", [], |r| r.get(0))
-                    .unwrap();
-                assert!(!String::from_utf8(config).unwrap().contains("shell_history"));
-            }
-            let audit = AuditLog::for_vault(&vault);
-            let none = std::collections::HashMap::new();
-            let (page, _, _) = audit.page(None, &Default::default(), &none, &none).unwrap();
-            assert_eq!(page.len(), 2);
-            let r1 = page
-                .iter()
-                .find(|e| e.request_id.as_deref() == Some("r1"))
-                .unwrap();
-            assert_eq!(r1.outcome, "succeeded");
-            assert_eq!(
-                r1.details.as_ref().unwrap().response.as_ref().unwrap().text,
-                "fixture response"
-            );
-            let writes = crate::activity::ActivityFilter {
-                writes_only: true,
-                ..Default::default()
-            };
-            let (page, _, _) = audit.page(None, &writes, &none, &none).unwrap();
-            assert_eq!(page.len(), 2, "reclassify search_read_and_mark as a write");
-            let history = vault.shell_history().unwrap();
-            assert_eq!(
-                history
-                    .iter()
-                    .map(|h| h.command.as_str())
-                    .collect::<Vec<_>>(),
-                ["count res.partner", "search res.users"]
-            );
-            assert_eq!(history[0].environment.as_deref(), Some("Prod"));
-        }
     }
 
     #[test]

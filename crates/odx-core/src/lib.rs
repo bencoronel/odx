@@ -32,6 +32,3 @@ pub use shell::{HistoryEntry, ShellCall, ShellResult};
 pub use tools::catalog::{ToolDefinition, tool_definitions};
 
 mod database;
-mod legacy_audit;
-#[allow(dead_code)]
-mod legacy_vault;
