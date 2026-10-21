@@ -33,5 +33,6 @@ zeroize = { version = "=1.9.1", features = ["derive"] }
 
 [profile.release]
 strip = true
-lto = "thin"
+lto = "fat"
+opt-level = "s"
 codegen-units = 1
