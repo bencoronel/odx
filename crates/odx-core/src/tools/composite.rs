@@ -2,7 +2,7 @@
 use crate::{
     clients::{Capability, ClientIdentity},
     execution::{Core, Upstream},
-    output::{Format, MAX_OUTPUT, Outcome, ToolError, ToolOutput, page_of},
+    output::{Format, Outcome, ToolError, ToolOutput, page_of},
     tools::{
         catalog::{
             Args, READ_METHODS, Target, allowed, common, domain, fields, is_identifier, kw, model,
@@ -22,8 +22,27 @@ use std::{
 const MAX_VIEW_DEPTH: usize = 16;
 /// Maximum views in a chain.
 const MAX_VIEWS: usize = 500;
-/// Maximum inline view architecture; use q or to_file for more.
+/// Maximum inline view architecture in transported bytes; use q or to_file for more.
 const ARCH_BUDGET: usize = 192 * 1024;
+
+/// Byte index where the architecture exceeds ARCH_BUDGET as sent, or None if it fits. Compact text escapes the arch twice (JSON data, then the JSON-RPC string); JSON format also sends it once escaped as structuredContent.
+fn arch_cut(arch: &str, format: Format) -> Option<usize> {
+    let mut used = 0;
+    for (i, c) in arch.char_indices() {
+        // Bytes after one and two rounds of JSON string escaping.
+        let (once, twice) = match c {
+            '"' | '\\' => (2, 4),
+            '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => (2, 3),
+            c if c < ' ' => (6, 7),
+            c => (c.len_utf8(), c.len_utf8()),
+        };
+        used += twice + if format == Format::Json { once } else { 0 };
+        if used > ARCH_BUDGET {
+            return Some(i);
+        }
+    }
+    None
+}
 /// Maximum view q matches.
 const MAX_MATCHES: usize = 500;
 /// Maximum tracking values per history page, read in one call.
@@ -35,7 +54,7 @@ const MAX_RELATION_IDS: usize = 5000;
 
 type Warnings = Vec<(&'static str, String)>;
 
-/// Logical Odoo errors leave that section unavailable with a warning. Propagate vault, network and audit errors.
+/// Logical Odoo errors leave that section unavailable with a warning. Propagate vault, network, HTTP status and audit errors.
 fn soft(
     result: Result<Value, ToolError>,
     warnings: &mut Warnings,
@@ -43,7 +62,8 @@ fn soft(
 ) -> Result<Option<Value>, ToolError> {
     match result {
         Ok(v) => Ok(Some(v)),
-        Err(e) if e.code == "upstream_error" => {
+        // HTTP status errors are availability failures, not permissions.
+        Err(e) if e.code == "upstream_error" && e.ui_code != Some("upstream.http_status") => {
             warnings.push(("partial_permissions", format!("{what}: {}", e.message)));
             Ok(None)
         }
@@ -821,12 +841,6 @@ impl Core {
         let limit = args.int("limit", 50, 1, 1000)? as usize;
         let offset = args.int("offset", 0, 0, i64::MAX)? as usize;
         let to_file = args.bool("to_file")?;
-        // JSON sends the envelope twice (text and structuredContent) with quotes escaped; leave room for both.
-        let arch_budget = if format == Format::Json {
-            MAX_OUTPUT / 2 - 24 * 1024
-        } else {
-            ARCH_BUDGET
-        };
         let target = self.target(client, &env_name, Capability::OdooRead).await?;
         let mut up = Upstream::start();
         let mut warnings: Warnings = Vec::new();
@@ -921,35 +935,28 @@ impl Core {
             if matches.len() > MAX_MATCHES {
                 matches.truncate(MAX_MATCHES);
                 meta.insert("truncated".into(), json!(true));
-                warnings_into(
-                    &mut meta,
+                warnings.push((
                     "matches_truncated",
                     format!("showing only {MAX_MATCHES} matches; use to_file"),
-                );
+                ));
             }
             if matches.is_empty() {
-                warnings_into(
-                    &mut meta,
+                warnings.push((
                     "no_match",
                     format!("'{q}' not found in the final architecture"),
-                );
+                ));
             }
             data["arch"] = Value::Null;
             data["matches"] = json!(matches);
-        } else if arch_bytes > arch_budget {
-            // Mark truncation after a closing tag on a character boundary.
-            let mut cut = arch_budget;
-            while !arch.is_char_boundary(cut) {
-                cut -= 1;
-            }
+        } else if let Some(cut) = arch_cut(&arch, format) {
+            // Mark truncation after a closing tag.
             let cut = arch[..cut].rfind('>').map_or(cut, |i| i + 1);
             data["arch"] = json!(&arch[..cut]);
             meta.insert("truncated".into(), json!(true));
-            warnings_into(
-                &mut meta,
+            warnings.push((
                 "arch_truncated",
                 format!("architecture truncated to {cut} of {arch_bytes} bytes; use q or to_file"),
-            );
+            ));
         } else {
             data["arch"] = json!(arch);
         }
@@ -1666,15 +1673,6 @@ impl Core {
     }
 }
 
-fn warnings_into(meta: &mut Map<String, Value>, code: &str, message: String) {
-    let list = meta
-        .entry("warnings")
-        .or_insert_with(|| Value::Array(vec![]));
-    if let Value::Array(list) = list {
-        list.push(json!({"code": code, "message": message}));
-    }
-}
-
 fn is_relational(t: &str) -> bool {
     matches!(t, "many2one" | "one2many" | "many2many")
 }
@@ -1795,9 +1793,12 @@ fn diff(a: &Side, b: &Side, fields: &[String], offset: usize) -> DiffResult {
                 (None, _) => Some("field does not exist in env_a".into()),
                 (_, None) => Some("field does not exist in env_b".into()),
                 (Some(x), Some(y)) if x != y => Some(format!(
-                    "tipo distinto: {}/{:?} frente a {}/{:?}",
+                    "type differs: {}/{:?} vs {}/{:?}",
                     x.0, x.1, y.0, y.1
                 )),
+                (Some((t, _)), _) if matches!(t.as_str(), "reference" | "many2one_reference") => {
+                    Some("record references are not shared identities across databases".into())
+                }
                 _ => None,
             }
         };
@@ -1811,7 +1812,7 @@ fn diff(a: &Side, b: &Side, fields: &[String], offset: usize) -> DiffResult {
     for k in all_keys {
         let (ea, eb) = (ia.get(k), ib.get(k));
         if ea.is_some_and(|e| e.1.len() > 1) || eb.is_some_and(|e| e.1.len() > 1) {
-            continue; // ya listada como ambigua
+            continue; // already listed as ambiguous
         }
         match (ea, eb) {
             (Some((key, ra)), None) => out.differences.push(json!({
@@ -1847,6 +1848,7 @@ fn diff(a: &Side, b: &Side, fields: &[String], offset: usize) -> DiffResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::OdxError;
 
     #[test]
     fn read_group_specs_are_validated_without_evaluation() {
@@ -1864,5 +1866,84 @@ mod tests {
         }
         assert!(group_order("partner_id desc, amount:sum").is_ok());
         assert!(group_order("partner_id; drop").is_err());
+    }
+
+    fn side(row: Value, types: &[(&str, &str)]) -> Side {
+        Side {
+            keys: vec![Some(json!("k"))],
+            rows: vec![row],
+            types: types
+                .iter()
+                .map(|(f, t)| (f.to_string(), (t.to_string(), None)))
+                .collect(),
+            xmlids: HashMap::new(),
+            resolved: HashSet::new(),
+            page: Value::Null,
+            has_more: false,
+            up: Upstream::start(),
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn record_references_are_not_compared_across_databases() {
+        let types = [
+            ("res_id", "many2one_reference"),
+            ("ref", "reference"),
+            ("name", "char"),
+        ];
+        let a = side(
+            json!({"id": 1, "res_id": 7, "ref": "res.partner,7", "name": "x"}),
+            &types,
+        );
+        let b = side(
+            json!({"id": 2, "res_id": 9, "ref": "res.partner,9", "name": "x"}),
+            &types,
+        );
+        let fields = ["res_id", "ref", "name"].map(String::from);
+        let out = diff(&a, &b, &fields, 0);
+        assert!(out.differences.is_empty(), "{:?}", out.differences);
+        let skipped: Vec<_> = out
+            .non_comparable
+            .iter()
+            .map(|n| n["field"].clone())
+            .collect();
+        assert_eq!(skipped, [json!("res_id"), json!("ref")]);
+    }
+
+    #[test]
+    fn http_status_errors_are_not_softened_into_permission_warnings() {
+        let mut warnings = Warnings::new();
+        let status = soft(
+            Err(OdxError::HttpStatus { status: 503 }.into()),
+            &mut warnings,
+            "x",
+        );
+        assert_eq!(status.unwrap_err().code, "upstream_error");
+        let denied = soft(
+            Err(OdxError::Remote("AccessError".into()).into()),
+            &mut warnings,
+            "x",
+        );
+        assert!(denied.unwrap().is_none());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, "partial_permissions");
+    }
+
+    #[test]
+    fn quote_dense_arch_cut_fits_the_output_limit() {
+        let arch = "<field name=\"a\" string=\"b\"/>".repeat(20_000);
+        for format in [Format::Compact, Format::Json] {
+            let cut = arch_cut(&arch, format).unwrap();
+            let out = ToolOutput {
+                data: json!({"view_id": 1, "view_type": "form", "arch_bytes": arch.len(),
+                             "views": [], "arch": &arch[..cut]}),
+                meta: Map::new(),
+                format,
+                trunc: 0,
+            };
+            assert!(crate::output::fit(out).is_ok(), "{format:?}");
+        }
+        assert_eq!(arch_cut("<form/>", Format::Json), None);
     }
 }

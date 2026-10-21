@@ -39,9 +39,8 @@ pub struct HeaderSettings {
 /// Non-ASCII placeholder for sensitive values; returning it preserves the stored value. Invalid as an HTTP value.
 pub const MASK: &str = "••••••••••••";
 /// Show allowlisted negotiation, cache, client and trace headers. Treat all others, including custom headers, as sensitive.
-const VISIBLE: [&str; 9] = [
+const VISIBLE: [&str; 8] = [
     "accept",
-    "accept-encoding",
     "accept-language",
     "cache-control",
     "user-agent",
@@ -119,7 +118,9 @@ fn validate_entries(headers: &[HeaderEntry]) -> Result<()> {
         })?;
         if matches!(
             name.as_str(),
-            "host"
+            // The client cannot decompress responses.
+            "accept-encoding"
+                | "host"
                 | "content-length"
                 | "transfer-encoding"
                 | "connection"
@@ -152,7 +153,13 @@ pub(crate) fn merge(global: &[HeaderEntry], local: &[HeaderEntry]) -> Vec<Header
     headers
 }
 pub(crate) fn request_headers(headers: &[HeaderEntry]) -> Result<HeaderMap> {
-    validate_entries(headers)?;
+    // Vaults saved before Accept-Encoding became reserved still connect; the header is dropped.
+    let headers: Vec<_> = headers
+        .iter()
+        .filter(|h| !h.name.eq_ignore_ascii_case("accept-encoding"))
+        .cloned()
+        .collect();
+    validate_entries(&headers)?;
     let mut result = HeaderMap::new();
     for h in headers.iter().filter(|h| h.enabled) {
         let mut value = HeaderValue::from_str(&h.value).map_err(|_| {
@@ -284,6 +291,7 @@ mod tests {
             vec![header("HOST", "elsewhere")],
             vec![header("Content-Length", "1")],
             vec![header("Transfer-Encoding", "chunked")],
+            vec![header("Accept-Encoding", "gzip")],
             vec![header("X-Big", &"x".repeat(32_769))],
             vec![header("X-Many", "v"); 65],
         ] {
@@ -335,6 +343,14 @@ mod tests {
             request_headers(&merge(&global, &[header("X-Test", "")])).unwrap()["x-test"],
             ""
         );
+    }
+    #[test]
+    fn stored_accept_encoding_is_dropped_from_requests() {
+        let effective =
+            request_headers(&[header("Accept-Encoding", "gzip"), header("X-Test", "v")]).unwrap();
+        assert!(effective.get("accept-encoding").is_none());
+        assert_eq!(effective["x-test"], "v");
+        assert!(is_sensitive("Accept-Encoding"));
     }
     #[test]
     fn old_vaults_load_with_empty_header_settings() {

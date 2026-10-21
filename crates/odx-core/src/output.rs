@@ -284,7 +284,7 @@ fn compact(output: &ToolOutput) -> String {
     if let Some(Value::Array(warnings)) = output.meta.get("warnings") {
         for w in warnings {
             text.push_str(&format!(
-                "\n# aviso {}: {}",
+                "\n# warning {}: {}",
                 w["code"].as_str().unwrap_or(""),
                 w["message"].as_str().unwrap_or("")
             ));

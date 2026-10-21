@@ -47,7 +47,7 @@ pub fn router(core: Arc<Core>, port: u16) -> Router {
         .route("/api/v1/{tool}", post(call))
         .fallback(|| async {
             failure(
-                &ToolError::invalid("ruta inexistente; usa POST /api/v1/<herramienta>"),
+                &ToolError::invalid("unknown route; use POST /api/v1/<tool>"),
                 StatusCode::NOT_FOUND,
             )
         })
@@ -153,7 +153,7 @@ async fn call(
     }
     if !TOOLS.contains(&tool.as_str()) {
         return failure(
-            &ToolError::invalid(format!("herramienta desconocida: {tool}")),
+            &ToolError::invalid(format!("unknown tool: {tool}")),
             StatusCode::NOT_FOUND,
         );
     }
