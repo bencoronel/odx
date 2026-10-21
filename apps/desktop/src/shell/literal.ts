@@ -80,8 +80,9 @@ export function parseLiteral(text: string): unknown {
   function number(): number {
     const m = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(text.slice(pos));
     if (!m) return fail(i18n.t("shell.literal.invalidNumber"));
-    pos += m[0].length;
     const n = Number(m[0]);
+    if (!Number.isFinite(n)) fail(i18n.t("shell.literal.invalidNumber"));
+    pos += m[0].length;
     if (Number.isInteger(n) && !Number.isSafeInteger(n)) fail(i18n.t("shell.literal.integerRange"));
     return n;
   }

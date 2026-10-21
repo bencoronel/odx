@@ -9,6 +9,8 @@ describe("literales", () => {
     expect(() => parseLiteral("__import__('os')")).toThrow();
     expect(() => parseLiteral("{'a': 1, 'a': 2}")).toThrow();
     expect(() => parseLiteral("9007199254740993")).toThrow();
+    expect(() => parseLiteral("{'x': 1e999}")).toThrow(/invalid number/);
+    expect(() => parseLiteral("-1e999")).toThrow(/invalid number/);
     expect(parseIds("1, 2,3")).toEqual([1, 2, 3]);
     expect(() => parseIds("0")).toThrow();
   });
@@ -36,6 +38,8 @@ describe("commands", () => {
     expect(() => parse("search Res.Partner")).toThrow(/invalid model/i);
     expect(() => parse("search res.partner -z 1")).toThrow(/unknown option/i);
     expect(() => parse("frobnicate")).toThrow(/unknown command/i);
+    expect(() => parse(`\\c 'a' 'b'`)).toThrow(CommandError);
+    expect(() => parse(`\\c 'a' 'b'`)).toThrow(/extra text/);
     expect(() => parse("call res.partner _private")).toThrow(/method/i);
     // Extra ids are an error, not silently dropped ("5,6" is the list form).
     expect(() => parse("unlink res.partner 5 6")).toThrow(CommandError);

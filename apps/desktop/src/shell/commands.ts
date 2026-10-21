@@ -85,7 +85,8 @@ export function unfinished(line: string): boolean {
 
 /** Strip outer quotes (`'Ada'` → `Ada`). */
 function unquote(token: string) {
-  return /^(['"]).*\1$/.test(token) ? String(parseLiteral(token)) : token;
+  if (!/^(['"]).*\1$/.test(token)) return token;
+  try { return String(parseLiteral(token)); } catch (e) { throw new CommandError((e as LiteralError).message); }
 }
 
 function literal(token: string, what: "domain" | "fields" | "values" | "context" | "args" | "kwargs"): unknown {
