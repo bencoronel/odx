@@ -63,8 +63,12 @@ it("rejects incomplete proxies before calling the backend and can disable the pr
   expect(within(form()).getByRole("alert").textContent).toContain("requires a username");
   expect(save().disabled).toBe(true);
   fireEvent.change(field("Proxy password"), { target: { value: "" } });
+  expect(field("Proxy port").getAttribute("aria-invalid")).toBeNull();
   fireEvent.change(field("Proxy port"), { target: { value: "70000" } });
   expect(save().disabled).toBe(true);
+  expect(field("Proxy port").getAttribute("aria-invalid")).toBe("true");
+  expect(field("Proxy port").getAttribute("aria-describedby")).toBe("proxy-error");
+  expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
   chooseKind("No proxy");
   fireEvent.click(save());
   await waitFor(() => expect(ipc.saveProxy).toHaveBeenCalledWith(null));

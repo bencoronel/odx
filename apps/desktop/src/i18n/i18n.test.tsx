@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { createInstance } from "i18next";
-import LanguageSelector from "../LanguageSelector";
+import { LanguageSelect } from "../LanguageSelector";
 import { resolveLanguage, i18n, languageStorageKey, resources, setLanguage } from "./index";
 import { formatDateTime, formatNumber, formatRelativeTime } from "./format";
 
@@ -22,7 +22,7 @@ it("keeps catalog keys and interpolation variables aligned", () => {
 
 it("changes language immediately, persists the selection and updates document language", async () => {
   await setLanguage("en");
-  render(<LanguageSelector />);
+  render(<LanguageSelect />);
   fireEvent.click(screen.getByRole("combobox", { name: "Interface language" }));
   fireEvent.mouseDown(screen.getByRole("option", { name: "Spanish" }));
   await screen.findByRole("combobox", { name: "Idioma de la interfaz" });

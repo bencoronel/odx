@@ -131,6 +131,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
       }}
       onConfirm={async () => { if (confirm) { confirmed.current = true; commit(confirm.headers, confirm.signature); } }} />
     {!folded && <div className="panel-body headers-body">
+      {!environmentId && <p className="hint">{t(headerMode ? "settingsTable.globalHeadersHint" : "settingsTable.globalContextHint")}</p>}
       {settings && <fieldset className="props-fieldset">
         <table className="headers-table"><thead><tr><th><span className="sr-only">{t("settingsTable.enabled")}</span></th><th>{t("settingsTable.key")}</th><th>{t("settingsTable.value")}</th><th><span className="sr-only">{t("settingsTable.actions")}</span></th></tr></thead><tbody>
           {headerMode && (!environmentId || showHidden) && ["Host", "Content-Length"].map((name) => <tr key={name}>

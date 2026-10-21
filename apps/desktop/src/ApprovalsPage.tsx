@@ -79,7 +79,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   // A approves, R rejects and Shift+R asks for a reason first. With several selected, A and R act on all of them.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || document.querySelector('[role="alertdialog"]')) return;
+      if (event.altKey || document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
       const command = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       const typing = (event.target as Element).closest?.("input, textarea, select, [contenteditable]");

@@ -1,13 +1,11 @@
 import { forgetHealth } from "./HealthChip";
-import { useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ipc, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
-import SettingsPage, { type Theme } from "./SettingsPage";
-import ApprovalsPage from "./ApprovalsPage";
-import McpLocalPage from "./McpLocalPage";
-import ActivityPage from "./ActivityPage";
-import ShellPage from "./ShellPage";
+import type { Theme } from "./SettingsPage";
+import { flushShellSessions } from "./shellFlush";
+import CommandPalette from "./CommandPalette";
 import UnlockScreen from "./UnlockScreen";
 import EnvironmentsPage from "./EnvironmentsPage";
 import type { FormDraft } from "./EnvironmentForm";
@@ -23,6 +21,13 @@ import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { discardRestoredWindowState, hasWindowState, useWindowState, usePreventUnload, useWindowLifecycle } from "./windowState";
 
+// Secondary pages load on first visit; Environments, the default page, stays in the main chunk.
+const SettingsPage = lazy(() => import("./SettingsPage"));
+const ApprovalsPage = lazy(() => import("./ApprovalsPage"));
+const McpLocalPage = lazy(() => import("./McpLocalPage"));
+const ActivityPage = lazy(() => import("./ActivityPage"));
+const ShellPage = lazy(() => import("./ShellPage"));
+
 function initialPage(): Page {
   try {
     const stored = localStorage.getItem("odx.page") as Page | "clients" | null;
@@ -35,14 +40,25 @@ function initialPage(): Page {
 function initialTheme(): Theme {
   try {
     const stored = localStorage.getItem("odx.theme");
-    if (stored === "light" || stored === "dark") return stored;
+    if (stored === "light" || stored === "dark" || stored === "system") return stored;
   } catch { /* Preferences are optional when storage is unavailable. */ }
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  return "system";
 }
+const lightQuery = () => window.matchMedia?.("(prefers-color-scheme: light)");
 
 export default function App() {
   const { t } = useTranslation();
   const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [systemLight, setSystemLight] = useState(() => !!lightQuery()?.matches);
+  // "System" follows the OS live.
+  useEffect(() => {
+    const query = lightQuery();
+    if (!query) return;
+    const change = () => setSystemLight(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const shown = theme === "system" ? systemLight ? "light" : "dark" : theme;
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState<ErrorState>("");
   const [envs, setEnvs] = useState<Environment[]>([]);
@@ -58,6 +74,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+      // Not behind the palette or a confirmation.
+      if (document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
       const target = PAGE_ORDER[Number(event.key) - 1];
       if (!target) return;
       event.preventDefault();
@@ -74,7 +92,9 @@ export default function App() {
   const [approvalFilter, setApprovalFilter] = useWindowState("app.approvalFilter", "");
   // Environment to show when Environments opens from elsewhere (an approval).
   const [environmentFocus, setEnvironmentFocus] = useState<string | null>(null);
-  useEffect(() => { if (page === "environments") setEnvironmentFocus(null); }, [page]);
+  // Cleared once shown, so asking again for the same environment selects it again.
+  useEffect(() => { if (page === "environments") setEnvironmentFocus(null); }, [page, environmentFocus]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [shellTarget, setShellTarget] = useState<{ env: string; command?: string } | null>(null);
   const [decision, setDecision] = useState<{ approvals: Pending[]; approve: boolean } | null>(null);
   const [batchReason, setBatchReason] = useState("");
@@ -92,30 +112,38 @@ export default function App() {
   usePreventUnload(status === "loading" || busy || deciding.size > 0 || creatingEnvironment || decision !== null || modeDecision !== null);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-    try { localStorage.setItem("odx.theme", theme); } catch { /* Preferencia opcional. */ }
-  }, [theme]);
+    document.documentElement.dataset.theme = shown;
+    document.documentElement.style.colorScheme = shown;
+  }, [shown]);
+  useEffect(() => { try { localStorage.setItem("odx.theme", theme); } catch { /* Preferencia opcional. */ } }, [theme]);
 
+  // Refreshes overlap (poll, actions, deadlines); only the latest may apply, or an old "unlocked" result could undo a lock.
+  const refreshes = useRef(0);
   async function refresh() {
+    const current = ++refreshes.current;
     const next = await ipc.status();
     if (next === "unlocked") {
       const [environments, approvals, clientList, serviceStatus] = await Promise.all([ipc.environments(), ipc.approvals(), ipc.clients(), ipc.serviceStatus()]);
+      if (current !== refreshes.current) return;
       setEnvs(environments);
       setPending(approvals);
       setClients(clientList);
       setServices(serviceStatus);
       setRefreshKey((k) => k + 1);
     } else {
+      if (current !== refreshes.current) return;
       discardRestoredWindowState();
       setEnvs([]);
       setPending([]);
       setClients([]);
       setDecision(null);
+      setPaletteOpen(false);
       setCreatingEnvironment(false);
       setModeDecision(null);
       // MCP listens while locked and rejects requests until unlock.
-      setServices(await ipc.serviceStatus().catch(() => null));
+      const serviceStatus = await ipc.serviceStatus().catch(() => null);
+      if (current !== refreshes.current) return;
+      setServices(serviceStatus);
     }
     setStatus(next);
   }
@@ -124,7 +152,10 @@ export default function App() {
   // Receive new approval requests immediately.
   useEffect(() => {
     if (status !== "unlocked") return;
-    const stop = listen("approvals-changed", () => { void ipc.approvals().then(setPending).catch(() => undefined); });
+    const stop = listen("approvals-changed", () => {
+      const current = refreshes.current;
+      void ipc.approvals().then((approvals) => { if (current === refreshes.current) setPending(approvals); }).catch(() => undefined);
+    });
     return () => { void stop.then((unlisten) => unlisten()); };
   }, [status]);
 
@@ -132,9 +163,13 @@ export default function App() {
   useEffect(() => {
     if (status !== "unlocked") return;
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      const current = refreshes.current;
+      // Keep the current state when nothing changed, so an idle poll re-renders nothing.
+      const same = <T,>(next: T) => (shown: T) => JSON.stringify(shown) === JSON.stringify(next) ? shown : next;
       // Reflect locks triggered outside the window, including the tray.
       void ipc.status().then((vault) => vault === "unlocked" ? Promise.all([ipc.approvals(), ipc.serviceStatus()])
-        .then(([approvals, serviceStatus]) => { setPending(approvals); setServices(serviceStatus); }) : refresh())
+        .then(([approvals, serviceStatus]) => { if (current === refreshes.current) { setPending(same(approvals)); setServices(same<ServiceStatus | null>(serviceStatus)); } }) : refresh())
         .catch(() => { /* The next full refresh reports errors. */ });
     }, 2000);
     return () => window.clearInterval(timer);
@@ -163,6 +198,9 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  // Pending Shell changes are saved first: once locked, the vault rejects them.
+  const lock = () => void run(async () => { await flushShellSessions(); await ipc.lock(); });
 
   /** Return the operation result and propagate its errors. Show refresh failures without losing the result. */
   async function mutate<T>(f: () => Promise<T>): Promise<T> {
@@ -200,7 +238,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const themeToggle = <button type="button" className="icon-btn" aria-label={theme === "dark" ? t("app.theme.useLight") : t("app.theme.useDark")} data-tip={theme === "dark" ? t("app.theme.light") : t("app.theme.dark")} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>;
+  const themeToggle = <button type="button" className="icon-btn" aria-label={shown === "dark" ? t("app.theme.useLight") : t("app.theme.useDark")} data-tip={shown === "dark" ? t("app.theme.light") : t("app.theme.dark")} onClick={() => setTheme(shown === "dark" ? "light" : "dark")}><Icon name={shown === "dark" ? "sun" : "moon"} /></button>;
 
   if (status !== "unlocked") {
     return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices />
@@ -211,7 +249,7 @@ export default function App() {
 
 
   return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="shell">
-    <Sidebar page={page} setPage={setPage} busy={busy} lock={() => void run(() => ipc.lock())}
+    <Sidebar page={page} setPage={setPage} busy={busy} lock={lock} openPalette={() => setPaletteOpen(true)}
       counts={{ environments: envs.length, approvals: pending.length }} />
     <main className="main" id="main-content" aria-busy={busy}>
       {error && <div className="banner danger page-banner" role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><button className="icon-btn sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></button></div>}
@@ -224,7 +262,7 @@ export default function App() {
       {page === "settings" ? <SettingsPage theme={theme} setTheme={setTheme} busy={busy} pendingCount={pending.length}
         onContextSaved={refresh}
         onHeadersSaved={async () => { envs.forEach((e) => forgetHealth(e.id)); await refresh(); }}
-        lock={() => void run(() => ipc.lock())}
+        lock={lock}
         changePassword={async (current, next) => { setBusy(true); setError(""); try { await ipc.changePassword(current, next); } finally { setBusy(false); } }} />
         : page === "environments" ? <EnvironmentsPage
         envs={envs}
@@ -269,6 +307,9 @@ export default function App() {
     </main>
   </div>
     <ServiceStatusBar vault={status} services={services} pending={pending.length} openMcp={() => setPage("mcp")} openApprovals={() => setPage("approvals")} />
+    <CommandPalette open={paletteOpen} setOpen={setPaletteOpen} envs={envs} setPage={setPage} lock={lock}
+      showEnvironment={(env) => { setEnvironmentFocus(env.id); setPage("environments"); }}
+      openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }} />
     <ApprovalDialog
       open={modeDecision !== null}
       busy={busy}

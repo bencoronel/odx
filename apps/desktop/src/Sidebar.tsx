@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { formatNumber } from "./i18n/format";
 
 export type Page = "environments" | "approvals" | "shell" | "mcp" | "activity" | "settings";
-const pages = {
+export const pages = {
   environments: { title: "navigation.environments.title", description: "navigation.environments.description", icon: "server" },
   approvals: { title: "navigation.approvals.title", description: "navigation.approvals.description", icon: "check" },
   shell: { title: "navigation.shell.title", description: "navigation.shell.description", icon: "terminal" },
@@ -13,24 +13,28 @@ const pages = {
   settings: { title: "navigation.settings.title", description: "navigation.settings.description", icon: "settings" },
 } as const satisfies Record<Page | "api", { title: string; description: string; icon: IconName }>;
 export const PAGE_ORDER: Page[] = ["environments", "approvals", "shell", "mcp", "activity", "settings"];
-const shortcut = (p: Page) => `Ctrl+${PAGE_ORDER.indexOf(p) + 1}`;
+export const shortcut = (p: Page) => `Ctrl+${PAGE_ORDER.indexOf(p) + 1}`;
 const sections: { label: "navigation.workspace" | "navigation.administration"; items: (Page | "api")[] }[] = [
   { label: "navigation.workspace", items: ["environments", "approvals", "shell"] },
   { label: "navigation.administration", items: ["mcp", "api", "activity", "settings"] },
 ];
 
-export default function Sidebar({ page, setPage, counts, busy, lock }: {
+export default function Sidebar({ page, setPage, counts, busy, lock, openPalette }: {
   page: Page;
   setPage: (page: Page) => void;
   counts: { environments: number; approvals: number };
   busy: boolean;
   lock: () => void;
+  openPalette?: () => void;
 }) {
   const { t } = useTranslation();
   const count = (item: Page | "api") => item === "environments" ? <span className="count">{formatNumber(counts.environments)}</span>
     : item === "approvals" && counts.approvals > 0 ? <span className="count tone-warn">{formatNumber(counts.approvals)}</span> : null;
   return <aside className="sidebar">
     <nav aria-label={t("navigation.main")}>
+      {openPalette && <button className="nav-item sidebar-palette" aria-label={t("palette.title")} aria-keyshortcuts="Control+K" data-tip={t("palette.hint")} onClick={openPalette}>
+        <Icon name="search" /><span>{t("palette.open")}</span><kbd aria-hidden="true">Ctrl K</kbd>
+      </button>}
       {sections.map((section) => [
         <div key={section.label} className="nav-label">{t(section.label)}</div>,
         ...section.items.map((item) => item === "mcp" ? <div key={item} role="group" aria-label={t("navigation.mcp.title")}>

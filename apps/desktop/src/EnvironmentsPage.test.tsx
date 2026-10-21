@@ -110,15 +110,23 @@ it("rotates the key through an empty secret field and never shows the previous o
   expect(container.innerHTML).not.toContain("fixture-new-key");
 });
 
-it("saving other connection fields with an empty secret keeps the stored key", async () => {
+it("saving other connection fields with an empty secret keeps the stored key, but a new target needs the key", async () => {
   const update = vi.fn().mockResolvedValue({ ...env });
   render(withProps({ update }));
   fireEvent.click(screen.getByRole("button", { name: "Expand Connection" }));
   fireEvent.click(within(screen.getByRole("form", { name: "Connection" })).getByRole("button", { name: "Edit" }));
+  const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+  const secret = screen.getByLabelText("API key or password") as HTMLInputElement;
   fireEvent.change(screen.getByRole("textbox", { name: "User" }), { target: { value: "fixture-user-2" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(secret.required).toBe(true);
+  expect(secret.placeholder).toBe("API key required for the new URL, database or user");
+  expect(save.disabled).toBe(true);
+  fireEvent.change(screen.getByRole("textbox", { name: "User" }), { target: { value: "fixture-user" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  expect(secret.required).toBe(false);
+  fireEvent.click(save);
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-  expect(update.mock.calls[0][1]).toMatchObject({ secret: "", login: "fixture-user-2" });
+  expect(update.mock.calls[0][1]).toMatchObject({ secret: "", name: "Renamed", login: "fixture-user" });
 });
 
 // Environment proxy.
@@ -186,7 +194,7 @@ it("configures an own proxy with masked credentials and only saves the proxy whe
   expect(await within(proxyForm()).findByText("Inherit · no global proxy (direct)")).toBeTruthy();
   fireEvent.click(within(proxyForm()).getByRole("button", { name: "Edit" }));
   // An unchanged proxy only saves the edited connection.
-  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "User" }), { target: { value: "fixture-user-2" } });
+  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
   expect(ipc.saveEnvironmentProxy).not.toHaveBeenCalled();
@@ -214,7 +222,7 @@ it("asks before saving the connection when the environment has pending requests"
   editConnection();
   // Editing before the proxy loads still shows the selector when ready.
   expect(await within(proxyForm()).findByRole("combobox", { name: "Environment proxy" })).toBeTruthy();
-  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "User" }), { target: { value: "fixture-user-2" } });
+  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   const confirm = await screen.findByRole("alertdialog");
   expect(confirm.textContent).toContain("There is 1 pending approval");
@@ -358,5 +366,18 @@ it("keeps quick tag edits and treats tags differing in case as one", async () =>
 it("opens with the requested environment selected", () => {
   const other: Environment = { ...env, id: "other", name: "Other" };
   render(withProps({ envs: [env, other], focusId: "other" }));
+  expect(screen.getByRole("option", { name: /Other/ }).getAttribute("aria-selected")).toBe("true");
+});
+
+it("keeps the create form and its draft when asked to show an environment, and selects it on cancel", () => {
+  const other: Environment = { ...env, id: "other", name: "Other" };
+  const setCreating = vi.fn();
+  const { rerender } = render(withProps({ envs: [env, other], creating: true, setCreating }));
+  rerender(withProps({ envs: [env, other], creating: true, setCreating, focusId: "other" }));
+  expect(screen.getByRole("status").textContent).toBe("Finish or cancel the new environment to show Other.");
+  expect(screen.getByRole("heading", { name: "New environment" })).toBeTruthy();
+  expect(setCreating).not.toHaveBeenCalled();
+  rerender(withProps({ envs: [env, other], creating: false, setCreating, focusId: "other" }));
+  expect(screen.queryByText(/Finish or cancel/)).toBeNull();
   expect(screen.getByRole("option", { name: /Other/ }).getAttribute("aria-selected")).toBe("true");
 });

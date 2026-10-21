@@ -23,6 +23,11 @@ it("localizes migrated validation codes and safe interpolation parameters on eac
   expect(JSON.stringify(error)).not.toContain("private");
 });
 
+it("asks for the API key again when the connection target changes", async () => {
+  await setLanguage("en");
+  expect(formatAppError({ code: "validation.environment.secret_required" })).toBe("Enter the API key again: a new URL, database or user needs its own key.");
+});
+
 it("keeps uncertain writes distinct and explicitly says they were not retried", async () => {
   await setLanguage("en");
   expect(formatAppError({ code: "uncertain_result", outcome: "uncertain" })).toContain("was not retried");

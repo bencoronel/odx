@@ -169,7 +169,7 @@ small.hint { font-size: var(--fs-xs); }
 .icon-btn.sm .icon { width: 13px; height: 13px; }
 
 .field { display: grid; gap: 5px; align-content: start; min-width: 0; }
-.field > span { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.field > span, .field > label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
 input:not([type="checkbox"]), textarea, select, .select-control, .input {
   width: 100%; height: var(--h); padding: 0 9px;
   border: 1px solid var(--border-strong); border-radius: var(--r);
@@ -713,6 +713,10 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; }
 .setting-row strong { font-size: var(--fs-md); font-weight: 500; }
 .setting-row .hint { margin-top: 1px; }
+/* Sticks to the top of .page-scroll; the negative margin cancels its top padding. */
+.settings-nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; margin: -16px 0 -12px; padding: 12px 0 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.settings-group-title { scroll-margin-top: 60px; }
+.settings .props.compact > div { grid-template-columns: 170px minmax(0, 1fr); }
 
 /* Unlock */
 .unlock { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px 16px;
@@ -751,6 +755,12 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .client-editor { width: min(640px, calc(100% - 32px)); }
 .client-editor-form { display: grid; gap: 18px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.palette { width: min(560px, calc(100% - 32px)); gap: 8px; padding: 10px; }
+.palette .search input { height: var(--h); font-size: var(--fs-md); }
+.palette-list { display: grid; gap: 1px; max-height: min(360px, 60dvh); overflow: auto; }
+.palette-list .select-option { gap: 8px; }
+.palette-list .hint { padding: 6px 8px; }
+.sidebar-palette kbd { margin-left: auto; }
 .call-box { display: grid; gap: 0; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
 .call-box > .row { padding: 8px 10px; }
 .call-box .call dt { padding-left: 10px; }
@@ -760,7 +770,7 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 /* Responsive */
 @media (max-width: 860px) {
   .sidebar { width: 52px; flex-basis: 52px; padding: 8px 6px; }
-  .nav-item span:not(.count), .nav-item small { display: none; }
+  .nav-item span:not(.count), .nav-item small, .sidebar-palette kbd { display: none; }
   .sidebar-lock-text { display: none; }
   .nav-label { height: 0; padding: 0; margin: 6px 4px; border-top: 1px solid var(--border); font-size: 0; }
   .nav-label:first-child { border: 0; margin: 0; }

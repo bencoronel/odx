@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Icon } from "./Icon";
+import { UpdateNotice } from "./Updates";
 import { useTranslation } from "react-i18next";
 
 export type DesktopStatus = { tray: boolean; tray_error?: string | null; notifications_error?: string | null };
@@ -27,5 +28,5 @@ export default function DesktopNotices() {
     const stop = listen("desktop-status-changed", load);
     return () => { void stop.then((unlisten) => unlisten()); };
   }, []);
-  return <DesktopNoticeList status={status} />;
+  return <><DesktopNoticeList status={status} /><UpdateNotice /></>;
 }

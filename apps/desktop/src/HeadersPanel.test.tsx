@@ -126,6 +126,7 @@ describe("HeadersPanel", () => {
     expect(automatic.getAttribute("aria-disabled")).toBe("true");
     fireEvent.mouseDown(automatic);
     expect((key as HTMLInputElement).value).toBe("c");
+    expect(screen.getByRole("option", { name: "Accept-Encoding" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByRole("option", { name: "Accept" })).toBeNull();
     expect(screen.queryByRole("option", { name: "Host" })).toBeNull();
     fireEvent.change(key, { target: { value: "" } });

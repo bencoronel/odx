@@ -34,13 +34,12 @@
     "enabled": "Activado",
     "disabled": "Desactivado",
     "hourShort": "h",
-    "minuteShort": "min"
+    "minuteShort": "min",
+    "unsaved": "Cambios sin guardar"
   },
   "settings": {
     "language": {
-      "title": "Idioma",
       "label": "Idioma de la interfaz",
-      "hint": "Se recuerda en este equipo.",
       "english": "Inglés",
       "spanish": "Español"
     }
@@ -227,7 +226,9 @@
     "saveWarning": "Aviso al guardar",
     "onSave": "Al guardar",
     "revokeEnvironmentRequests": "Se revocan las solicitudes pendientes de este entorno y se vuelve a autenticar con Odoo.",
-    "revokeAllRequests": "Se revocan las solicitudes pendientes de todos los entornos y se vuelve a autenticar con Odoo."
+    "revokeAllRequests": "Se revocan las solicitudes pendientes de todos los entornos y se vuelve a autenticar con Odoo.",
+    "globalHeadersHint": "Se envían en cada petición a Odoo. Cada entorno puede sustituirlas. Los cambios se guardan al salir del campo.",
+    "globalContextHint": "Se añade al contexto de cada llamada a Odoo, por ejemplo lang o tz. Cada entorno puede sustituir cualquier clave. Los cambios se guardan al salir del campo."
   },
   "environmentForm": {
     "errors": {
@@ -252,16 +253,15 @@
     "unchanged": "Sin cambios",
     "keepCredentialHint": "Déjalo vacío para conservar la credencial guardada.",
     "credentialHint": "Se cifra en el almacén y nunca se muestra a los clientes.",
-    "json2Hint": "JSON-2 requiere Odoo 19 y una API key.",
     "createTitle": "Nuevo entorno",
     "createAction": "Crear entorno",
     "readOnlyHint": "Se creará en modo solo lectura.",
     "connection": "Conexión",
     "context": "Contexto",
-    "optionalJson": "Opcional · objeto JSON",
     "environmentContext": "Contexto del entorno",
     "credential": "Credencial",
     "keepSecretPlaceholder": "Sin cambios: déjalo vacío para conservarla.",
+    "newTargetSecretPlaceholder": "Clave API obligatoria para la nueva URL, base de datos o usuario",
     "savedCredential": "Credencial guardada",
     "savedCredentialHint": "Credencial guardada\nCifrada en el almacén; nunca se muestra",
     "noCredential": "Sin credencial",
@@ -276,18 +276,22 @@
   },
   "settingsPage": {
     "general": "General",
-    "appearance": "Apariencia",
+    "appearance": "Idioma y apariencia",
+    "sections": "Secciones de ajustes",
     "theme": "Tema",
     "remembered": "Se recuerda en este equipo.",
     "light": "Claro",
     "dark": "Oscuro",
+    "system": "Sistema",
     "themeLabel": "Tema de la interfaz",
     "odooConnection": "Conexión con Odoo",
     "executionStorage": "Ejecución y almacenamiento",
     "security": "Seguridad",
     "lockNow": "Bloquear ahora",
     "lockHint": "Cierra el acceso a Odoo y revoca las solicitudes pendientes.",
-    "rangeError": "Entre {{min}} y {{max}}",
+    "lockPending_one": "Se revocará {{count}} aprobación pendiente.",
+    "lockPending_other": "Se revocarán {{count}} aprobaciones pendientes.",
+    "rangeError": "Debe estar entre {{min}} y {{max}}",
     "concurrencyError": "No puede superar el total",
     "limits": "Límites y retención",
     "saved": "Ajustes guardados y aplicados.",
@@ -343,7 +347,7 @@
       "agentResponse": "Respuesta al agente",
       "binaryDownload": "Descarga binaria",
       "exportedFile": "Archivo exportado",
-      "wait": "wait",
+      "wait": "Espera de resultados",
       "activity": "Actividad",
       "auditQueue": "Cola de auditoría"
     },
@@ -541,6 +545,7 @@
   "environments": {
     "emptyTitle": "Sin entornos",
     "emptyHint": "Añade la conexión a una instancia de Odoo. Los entornos se crean en solo lectura.",
+    "focusWhileCreating": "Termina o cancela el nuevo entorno para ver {{name}}.",
     "listLabel": "Lista de entornos",
     "filterPlaceholder": "Filtrar entornos",
     "filterLabel": "Filtrar entornos",
@@ -648,7 +653,8 @@
     "revokedClient": "Cliente revocado",
     "revoked": "Revocado",
     "detailsFor": "Detalle de {{operation}}",
-    "loadMore": "Cargar más"
+    "loadMore": "Cargar más",
+    "limitReached": "Se muestran los últimos {{count}} registros. Acota los filtros para ver los anteriores."
   },
   "shell": {
     "initial": "Odx Terminal · \\c <entorno> para conectar · \\? para ver la ayuda",
@@ -666,6 +672,8 @@
     "offline": "sin conexión",
     "connected": "Conectado a {{name}} ({{database}}{{version}} · {{latency}} ms).",
     "confirmPrompt": "¿Enviar a {{name}}? [y/N]",
+    "readOnlyWrite": "{{name}} es de solo lectura: no se ha enviado esta escritura. Cambia su modo de escritura en Entornos para permitirla.",
+    "writeWindowExpired": "La ventana temporal de escritura de {{name}} ha caducado: no se ha enviado esta escritura. Vuelve a activar la escritura en Entornos.",
     "historyCleared": "Historial borrado.",
     "noCommandMatches": "Ningún comando coincide.",
     "emptyHistory": "Historial vacío.",
@@ -936,6 +944,7 @@
       "environmentTemporaryDeadlineRequired": "La escritura temporal requiere un plazo futuro.",
       "environmentUrlInvalid": "Escribe una URL de entorno válida.",
       "environmentUrlRestricted": "Usa una URL HTTP(S) sin credenciales, parámetros de consulta ni fragmento.",
+      "environmentSecretRequired": "Vuelve a introducir la clave API: una URL, base de datos o usuario nuevos necesitan su propia clave.",
       "environmentFaviconUrlNotAllowed": "La URL del favicon está fuera del sitio web del entorno.",
       "environmentApiKeyHeaderInvalid": "La clave API no se puede usar en una cabecera de autorización JSON-2.",
       "environmentDatabaseHeaderInvalid": "El nombre de base de datos no se puede usar en una cabecera JSON-2.",
@@ -1044,6 +1053,33 @@
   "desktop": {
     "trayUnavailable": "La bandeja del sistema no está disponible. Al cerrar la ventana se bloquea el almacén y se detiene Odx.",
     "notificationsUnavailable": "Las notificaciones del escritorio no están disponibles. Las solicitudes nuevas solo aparecen en Aprobaciones y en la barra de estado."
+  },
+  "updates": {
+    "title": "Actualizaciones",
+    "version": "Versión {{version}}",
+    "check": "Buscar actualizaciones",
+    "checking": "Buscando…",
+    "upToDate": "Odx está actualizado.",
+    "available": "Odx {{version}} está disponible.",
+    "install": "Actualizar y reiniciar",
+    "installing": "Actualizando…",
+    "openReleases": "Abrir página de versiones",
+    "manual": "Esta instalación no puede actualizarse sola. Descarga la nueva versión desde la página de versiones.",
+    "checkFailed": "No se pudo buscar actualizaciones. Comprueba la conexión e inténtalo de nuevo.",
+    "installFailed": "No se pudo instalar la actualización. La versión actual sigue en uso."
+  },
+  "palette": {
+    "title": "Paleta de comandos",
+    "description": "Busca páginas, entornos y acciones",
+    "placeholder": "Ir a una página o entorno…",
+    "results": "Comandos",
+    "empty": "Sin coincidencias.",
+    "open": "Buscar",
+    "hint": "Paleta de comandos\nCtrl+K",
+    "goTo": "Ir a {{page}}",
+    "showEnvironment": "Mostrar {{name}}",
+    "openInShell": "Abrir {{name}} en la Terminal",
+    "lock": "Bloquear almacén"
   },
   "contextMenu": {
     "label": "Acciones de texto",

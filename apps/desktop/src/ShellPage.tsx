@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ipc, type Environment, type HistoryEntry, type ShellError } from "./ipc";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { currentShellFlush, registerShellFlush } from "./shellFlush";
+import { ipc, type Environment, type HistoryEntry } from "./ipc";
 import { highlight } from "./shell/highlight";
 import { CommandError, expandAlias, parse, searchCall, substitute, unfinished, type Command, type OdooCall } from "./shell/commands";
 import { completions, type Completion, type Field } from "./shell/complete";
@@ -72,21 +73,27 @@ type ShellTab = { id: string; name: string; defaultName: boolean; session: Sessi
  * `aliases` are shared by every tab. */
 type SavedSessions = { version: 1; activeId: string; aliases?: Record<string, string>; tabs: { id: string; name: string; defaultName: boolean; session: Pick<Session, "entries" | "env" | "context" | "expanded" | "timing" | "last" | "previous" | "vars"> }[] };
 const SAVE_LIMIT = 7 * 1024 * 1024;
+const encoder = new TextEncoder();
+const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
 function snapshot(tabs: ShellTab[], activeId: string, aliases: Record<string, string>): string {
   const saved: SavedSessions = { version: 1, activeId, aliases, tabs: tabs.map((tab) => ({
     id: tab.id, name: tab.name, defaultName: tab.defaultName,
     session: { entries: tab.session.entries.filter((entry) => !("transient" in entry && entry.transient)), env: tab.session.env, context: tab.session.context, expanded: tab.session.expanded, timing: tab.session.timing, last: tab.session.last, previous: tab.session.previous, vars: tab.session.vars },
   })) };
   // Over the limit, drop the oldest output of the largest tab until it fits. The vault limits UTF-8 bytes, not characters.
-  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+  // Each tab is encoded once; trimming subtracts only the dropped entries, never more than they take, so the estimate stays an upper bound.
+  const json = JSON.stringify(saved);
+  if (encoder.encode(json).length <= SAVE_LIMIT) return json;
+  const overhead = bytes({ ...saved, tabs: [] }) + saved.tabs.length;
   const sizes = saved.tabs.map(bytes);
-  while (sizes.reduce((a, b) => a + b, 0) > SAVE_LIMIT) {
+  do {
     const i = sizes.indexOf(Math.max(...sizes));
     const entries = saved.tabs[i].session.entries;
     if (!entries.length) break;
-    saved.tabs[i].session.entries = entries.slice(Math.max(1, Math.ceil(entries.length / 10)));
-    sizes[i] = bytes(saved.tabs[i]);
-  }
+    const cut = Math.max(1, Math.ceil(entries.length / 10));
+    sizes[i] -= bytes(entries.slice(0, cut)) - 2;
+    saved.tabs[i].session.entries = entries.slice(cut);
+  } while (overhead + sizes.reduce((a, b) => a + b, 0) > SAVE_LIMIT);
   return JSON.stringify(saved);
 }
 /** An untouched tab: default name, no environment and only informational lines. */
@@ -198,35 +205,44 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
   const state = useRef({ tabs, activeId, aliases });
   state.current = { tabs, activeId, aliases };
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saving = useRef<Promise<void>>(Promise.resolve());
   const [saveFailed, setSaveFailed] = useState(false);
   const save = () => {
     clearTimeout(saveTimer.current);
     saveTimer.current = undefined;
-    void Promise.resolve(ipc.saveShellSessions(snapshot(state.current.tabs, state.current.activeId, state.current.aliases)))
-      .then(() => setSaveFailed(false)).catch(() => setSaveFailed(true));
+    return saving.current = Promise.resolve().then(() => ipc.saveShellSessions(snapshot(state.current.tabs, state.current.activeId, state.current.aliases)))
+      .then(() => setSaveFailed(false), () => setSaveFailed(true));
   };
-  const persist = () => {
+  const persist = useCallback(() => {
     if (!loaded) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(save, 800);
-  };
-  useEffect(persist, [tabs, activeId, aliases, loaded]);
-  // Flush on quit or when the window goes away.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
+  // Switching tabs alone is not worth a save of every tab's output; the next save records it.
+  useEffect(persist, [tabs, aliases, persist]);
+  // Flush on quit, lock or when the window goes away.
   useEffect(() => {
-    const flush = () => { if (saveTimer.current !== undefined) save(); };
-    window.addEventListener("pagehide", flush);
-    return () => { window.removeEventListener("pagehide", flush); flush(); };
+    const flush = () => saveTimer.current !== undefined ? save() : saving.current;
+    const onHide = () => void flush();
+    registerShellFlush(flush);
+    window.addEventListener("pagehide", onHide);
+    return () => { window.removeEventListener("pagehide", onHide); if (currentShellFlush() === flush) registerShellFlush(undefined); void flush(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [renaming, setRenaming] = useState<{ id: string; value: string; width: number } | null>(null);
   const [fontSize, setFontSizeState] = useState(storedFont);
-  const setFontSize = (size: number) => {
+  const setFontSize = useCallback((size: number) => {
     const next = Math.min(FONT_RANGE[1], Math.max(FONT_RANGE[0], size));
     setFontSizeState(next);
     try { localStorage.setItem(FONT_KEY, String(next)); } catch { /* per-window only */ }
-  };
+  }, []);
   usePreventUnload(tabs.some((tab) => tab.busy) || renaming !== null);
-  const refreshTabs = () => setTabs((current) => [...current]);
+  const refreshTabs = useCallback(() => setTabs((current) => [...current]), [setTabs]);
+  // Stable callbacks let hidden sessions skip re-rendering when the app updates.
+  const connectHandled = useRef(onConnectHandled);
+  connectHandled.current = onConnectHandled;
+  const handleConnected = useCallback(() => connectHandled.current?.(), []);
   const select = (id: string) => setActiveId(id);
   const add = () => {
     const tab = newTab();
@@ -308,12 +324,13 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
       <ShellSession tab={tab} envs={envs} active={visible && activeId === tab.id} onChange={refreshTabs} onPersist={persist} saveFailed={saveFailed} fontSize={fontSize} setFontSize={setFontSize}
         aliases={aliases} setAliases={setAliases}
-        connectTo={tab.id === targetId ? connectTo : null} command={command} onConnectHandled={onConnectHandled} />
+        connectTo={tab.id === targetId ? connectTo : null} command={command} onConnectHandled={handleConnected} />
     </div>)}
   </div>;
 }
 
-function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, command, onConnectHandled, fontSize, setFontSize, aliases, setAliases }: {
+// `tab` keeps its identity while the session mutates it; the session re-renders from its own state.
+const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, connectTo, command, onConnectHandled, fontSize, setFontSize, aliases, setAliases }: {
   tab: ShellTab; envs: Environment[]; active: boolean; onChange: () => void; onPersist: () => void; saveFailed: boolean;
   connectTo?: string | null; command?: string | null; onConnectHandled?: () => void;
   fontSize: number; setFontSize: (size: number) => void;
@@ -439,6 +456,14 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     if (idColumn >= 0) update((s) => ({ ...s, previous: { model: table.model, ids: table.rows.map((row) => row[idColumn]).filter((id): id is number => typeof id === "number") } }));
   };
 
+  /** Why the latest environment state refuses writes, mirroring policy::authorize; empty when allowed. */
+  const writeBlocked = (id: string) => {
+    const env = envs.find((e) => e.id === id);
+    if (env?.write_mode === "read_only") return t("shell.readOnlyWrite", { name: env.name });
+    if (env?.write_mode === "temporary" && !(env.write_until && Date.parse(env.write_until) > Date.now())) return t("shell.writeWindowExpired", { name: env.name });
+    return "";
+  };
+
   async function run(pending: Pending, confirmed: boolean) {
     const env = pending.env ?? tab.session.env;
     if (!env) return text("error", t("shell.noConnection"));
@@ -455,12 +480,15 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
       if (pending.page && pending.call.method === "search_read") update((s) => ({ ...s, last: pending }));
     } catch (reason) {
       if (!current() && !confirmed) return;
-      const e = reason as ShellError;
+      const e = reason as AppError;
       // The core classifies writes and requires confirmation before sending them.
       if (e?.code === "confirmation_required" && !confirmed) {
         const c = pending.call;
         print({ kind: "warn", text: `${c.method} ${c.model} ${JSON.stringify(c.args)}${Object.keys(c.kwargs).length ? ` ${JSON.stringify(c.kwargs)}` : ""}` });
-        setConfirming({ ...pending, env });
+        // Don't ask for a confirmation the core will refuse anyway; the core still rejects with `forbidden`.
+        const blocked = writeBlocked(env.id);
+        if (blocked) text("error", blocked);
+        else setConfirming({ ...pending, env });
       } else if (e?.code === "uncertain_result") print({ kind: "warn", text: "", appError: normalizeAppError(reason) });
       else print({ kind: "error", text: "", appError: normalizeAppError(reason) });
     } finally { finish(current); }
@@ -700,7 +728,10 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
       print({ kind: "input", prompt: t("shell.confirmPrompt", { name: confirming.env?.name }), text: line });
       const p = confirming;
       setConfirming(null);
-      if (yes) await run(p, true); else text("info", t("shell.cancelled"));
+      // The temporary window may have closed while the prompt was open.
+      const blocked = yes && p.env ? writeBlocked(p.env.id) : "";
+      if (blocked) text("error", blocked);
+      else if (yes) await run(p, true); else text("info", t("shell.cancelled"));
       return;
     }
     // Load !n / !! into the input for review before execution.
@@ -1063,7 +1094,7 @@ function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, conn
     </label>
     {search && <div className="term-search" role="status">{match ? <><span className="term-search-match">{highlight(match.command, Object.keys(aliases))}</span><span className="term-search-meta">{match.environment ? `${match.environment} · ` : ""}{formatDateTime(new Date(match.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · {t("shell.searchHelp")}</span></> : <span className="term-search-meta">{t("shell.noHistoryMatches")}</span>}</div>}
   </div>;
-}
+});
 
 /** Entries after a folded command stay in the session but are not rendered. */
 function visible(entries: Entry[]) {
@@ -1179,22 +1210,22 @@ function TableBlock({ table, expanded, footer, onToggle }: { table: Table; expan
         const cell = (event.target as HTMLElement).closest<HTMLElement>("[data-cell]")?.dataset.cell;
         if (cell) { const [r, c] = cell.split(":").map(Number); setActive({ r, c }); }
       }}>
-      {expanded ? rows.map((row, i) => <table key={i} className="term-table expanded"><tbody>
+      {expanded ? rows.map((row, i) => { const values = record(row); return <table key={i} className="term-table expanded"><tbody>
         <tr><th colSpan={2}>{t("shell.record", { index: i + 1 })}</th></tr>
-        {table.columns.map((c, j) => <tr key={c}><th>{c}</th><Cell value={row[j]} column={c} model={table.model} row={record(row)} /></tr>)}
-      </tbody></table>)
+        {table.columns.map((c, j) => <tr key={c}><th>{c}</th><Cell value={row[j]} column={c} model={table.model} row={values} /></tr>)}
+      </tbody></table>; })
         : <table className="term-table"><thead><tr>{table.columns.map((c, j) => <th key={c} className={pinned && j === 0 ? "pin" : undefined} aria-sort={sort?.column === j ? (sort.desc ? "descending" : "ascending") : undefined}>
           <button type="button" className="term-sort" tabIndex={-1} aria-label={t("shell.sortBy", { column: c })} onClick={() => cycle(j)}>
             {c}<Icon name={sort?.column === j && sort.desc ? "caretDown" : "caretUp"} className={sort?.column === j ? "on" : undefined} />
           </button>
         </th>)}</tr></thead>
-          <tbody>{rows.map((row, i) => <tr key={i}>{row.map((v, j) => {
+          <tbody>{rows.map((row, i) => { const values = record(row); return <tr key={i}>{row.map((v, j) => {
             const pos = `${i}:${j}`;
             const on = active?.r === i && active.c === j;
             return table.code?.includes(j)
               ? <td key={j} data-cell={pos} data-active={on || undefined}>{highlight(String(v), aliases)}</td>
-              : <Cell key={j} value={v} column={table.columns[j]} model={table.model} row={record(row)} pos={pos} active={on} pin={pinned && j === 0} />;
-          })}</tr>)}</tbody></table>}
+              : <Cell key={j} value={v} column={table.columns[j]} model={table.model} row={values} pos={pos} active={on} pin={pinned && j === 0} />;
+          })}</tr>; })}</tbody></table>}
     </div>
     <div className="term-foot">
       <span className="term-foot-info">{footer ? `(${footer})` : ""}{copied ? ` · ${t("common.copied")}` : ""}</span>

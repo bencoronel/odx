@@ -42,6 +42,11 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
   const { t } = useTranslation();
   const [listWidth, setListWidth] = useListWidth("odx.environments.listWidth");
   const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", focusId ?? null);
+  // Requests from elsewhere (an approval, the command palette) select even when the page is already open.
+  // Closing the create form would drop its draft, so a request arriving meanwhile only selects behind it and says so.
+  const [focusHint, setFocusHint] = useState<string | null>(null);
+  useEffect(() => setFocusHint(null), [creating]);
+  useEffect(() => { if (focusId) { setSelectedId(focusId); setFocusHint(focusId); } }, [focusId, setSelectedId]);
   const [filter, setFilter] = useWindowState("environments.filter", "");
   const [tagFilter, setTagFilter] = useWindowState<string[]>("environments.tags", []);
   // Tags differing only in case are one tag, shown with the first spelling.
@@ -72,7 +77,7 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
   // Ctrl+F or / focuses the search; Ctrl+N starts a new environment.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || document.querySelector('[role="alertdialog"]')) return;
+      if (event.altKey || document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
       // Shift is allowed alone: "/" needs it on layouts such as Spanish (Shift+7).
       const command = event.ctrlKey || event.metaKey;
       if (command && event.shiftKey) return;
@@ -147,6 +152,7 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
       </ul>
     </aside>
     <section className="detail-pane">
+      {creating && focusHint && <p className="banner info compact" role="status"><Icon name="alert" />{t("environments.focusWhileCreating", { name: envs.find((env) => env.id === focusHint)?.name ?? "" })}</p>}
       {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} draftRef={draftRef} cancel={() => setCreating(false)} save={async (draft, tags) => { setSelectedId((await save(draft, tags)).id); }} />
         : selected && <EnvironmentDetail key={selected.id} env={selected} busy={busy} pendingCount={pending.filter((p) => p.environment_id === selected.id).length} envNames={envs.map((e) => e.name)} allTags={allTags}
           refresh={refresh}
@@ -308,6 +314,8 @@ function ConnectionPanel({ env, busy, pendingCount, update }: { env: Environment
     (["name", "url", "database", "login"] as const).some((field) => values[field].trim() !== env[field])
     || values.protocol !== env.protocol || values.secret !== ""
   );
+  // The backend refuses to send the saved key to a different server, database or user.
+  const retarget = values !== null && (["url", "database", "login"] as const).some((field) => values[field].trim() !== env[field]);
   const proxyChanged = proxy !== null && proxyView !== null
     && JSON.stringify(proxyChoice(proxy)) !== JSON.stringify(proxyChoice(proxyState(proxyView)));
   const changed = connectionChanged || proxyChanged;
@@ -334,7 +342,7 @@ function ConnectionPanel({ env, busy, pendingCount, update }: { env: Environment
     if (pendingCount > 0) setConfirming(true); else void save().catch(() => undefined);
   }}>
     <header className="panel-header"><PanelTitle title={t("environmentForm.connection")} collapsed={collapsed && !values} toggle={() => setCollapsed(!collapsed)}>{values && <RevokeNotice />}</PanelTitle>
-      {(!collapsed || values !== null) && <PanelActions busy={busy} editing={values !== null} start={start} cancel={cancel} canSave={changed && values !== null && connectionComplete(values, false) && !invalidProxy} />}
+      {(!collapsed || values !== null) && <PanelActions busy={busy} editing={values !== null} start={start} cancel={cancel} canSave={changed && values !== null && connectionComplete(values, retarget) && !invalidProxy} />}
     </header>
     <ApprovalDialog open={confirming} busy={busy} tone="warn"
       title={t("environments.saveConnection")}
@@ -361,7 +369,7 @@ function ConnectionPanel({ env, busy, pendingCount, update }: { env: Environment
           ? <ProtocolSelect className="inline-input" value={values.protocol} onChange={(protocol) => setValues({ ...values, protocol })} />
           : <>{protocolLabels[env.protocol] ? t(protocolLabels[env.protocol] as "environmentForm.protocols.legacy_jsonrpc") : env.protocol}{env.protocol === "auto" && env.detected_protocol && protocolLabels[env.detected_protocol] && <> · {t(protocolLabels[env.detected_protocol] as "environmentForm.protocols.legacy_jsonrpc")}</>}</>}</dd></div>
         <div><dt><Icon name="key" />{t("environmentForm.credential")}</dt><dd>{values
-          ? <input className="inline-input" aria-label={t("environmentForm.apiKey")} type="password" autoComplete="new-password" placeholder={t("environmentForm.keepSecretPlaceholder")} value={values.secret} onChange={(e) => setValues({ ...values, secret: e.target.value })} />
+          ? <input className="inline-input" aria-label={t("environmentForm.apiKey")} type="password" autoComplete="new-password" required={retarget} placeholder={t(retarget ? "environmentForm.newTargetSecretPlaceholder" : "environmentForm.keepSecretPlaceholder")} value={values.secret} onChange={(e) => setValues({ ...values, secret: e.target.value })} />
           : env.has_secret ? <span className="secret-mask" aria-label={t("environmentForm.savedCredential")} data-tip={t("environmentForm.savedCredentialHint")}>••••••••••••</span> : <span className="text-warn">{t("environmentForm.noCredential")}</span>}</dd></div>
         <div><dt><Icon name="shield" />{t("proxy.title")}</dt><dd className="mono">{values && proxy && proxyView
           ? <span className="row gap-2">

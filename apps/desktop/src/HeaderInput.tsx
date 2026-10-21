@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 // https://www.iana.org/assignments/http-fields/field-names.csv
 import standardHeaderNames from "./http-header-names.json";
 export const headerNames = standardHeaderNames;
-export const reservedHeaderNames = ["host", "content-length", "transfer-encoding", "connection", "trailer", "upgrade", "proxy-authorization", "proxy-connection", "te"];
+export const reservedHeaderNames = ["accept-encoding", "host", "content-length", "transfer-encoding", "connection", "trailer", "upgrade", "proxy-authorization", "proxy-connection", "te"];
 export const headerValues = new Map<string, string[]>([
   ["accept", ["application/json", "*/*"]],
   // The transport does not decompress responses; omit gzip/br suggestions.

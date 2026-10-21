@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));
 const envs: Environment[] = ["A", "B"].map((name) => ({
   id: name, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [],
+  protocol: "legacy_jsonrpc", context: {}, write_mode: "approval", has_secret: true, tags: [],
 }));
 beforeEach(() => {
   vi.resetAllMocks();
@@ -141,6 +141,31 @@ it("asks for confirmation only when the core answers confirmation_required", asy
   expect(sent()[2]).toMatchObject({ environment_id: "A", method: "action_custom", confirmed: true });
 });
 
+it("says the environment is read-only instead of asking to confirm a write it would refuse", async () => {
+  requireConfirmation([]);
+  const blocked = [{ ...envs[0], write_mode: "read_only" as const }, { ...envs[1], write_mode: "temporary" as const, write_until: "2000-01-01T00:00:00Z" }];
+  const { rerender } = render(<ShellPage envs={blocked} />);
+  command("\\c A");
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  const sent = () => vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.model !== "ir.model");
+  command("call res.partner action_custom [[1]]");
+  expect(await within(panel()).findByText(/A is read-only: this write was not sent/)).toBeTruthy();
+  expect(screen.queryByText("Send to A? [y/N]")).toBeNull();
+  expect(sent()).toEqual([expect.objectContaining({ confirmed: false })]);
+  command("\\c B");
+  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  command("call res.partner action_custom [[1]]");
+  expect(await within(panel()).findByText(/temporary write window for B has expired/)).toBeTruthy();
+  // A window that closes while the prompt is open blocks the answer too; the core stays the final check.
+  rerender(<ShellPage envs={[blocked[0], { ...blocked[1], write_until: "2999-01-01T00:00:00Z" }]} />);
+  command("call res.partner action_custom [[1]]");
+  expect(await screen.findByText("Send to B? [y/N]")).toBeTruthy();
+  rerender(<ShellPage envs={blocked} />);
+  command("y");
+  expect(await within(panel()).findAllByText(/temporary write window for B has expired/)).toHaveLength(2);
+  expect(sent().filter((call) => call.confirmed)).toHaveLength(0);
+});
+
 it("supports keyboard navigation and always keeps one session after closing tabs", () => {
   render(<ShellPage envs={envs} />);
   fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
@@ -184,6 +209,47 @@ it("drops all sessions and their output when the vault is locked and unlocked ag
     command("\\context");
     expect(within(panel()).getByText("{}", { exact: true })).toBeTruthy();
   } finally { localStorage.removeItem("odx.page"); }
+});
+
+it("saves pending session changes before locking the vault", async () => {
+  let status = "unlocked";
+  vi.mocked(ipc.status).mockImplementation(async () => status);
+  vi.mocked(ipc.environments).mockResolvedValue(envs);
+  vi.mocked(ipc.approvals).mockResolvedValue([]);
+  vi.mocked(ipc.clients).mockResolvedValue([]);
+  vi.mocked(ipc.serviceStatus).mockResolvedValue(null as never);
+  vi.mocked(ipc.lock).mockImplementation(async () => { status = "locked"; });
+  vi.mocked(ipc.saveShellSessions).mockImplementation(async () => { if (status === "locked") throw { code: "locked" }; });
+  localStorage.setItem("odx.page", "shell");
+  try {
+    render(<App />);
+    await screen.findByRole("textbox", { name: "Command" });
+    await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    command("\\context {\"lang\":\"es_ES\"}");
+    // Lock within the save delay: the change is saved first, while the vault still accepts it.
+    fireEvent.click(screen.getByRole("button", { name: "Lock vault" }));
+    await screen.findByLabelText(/^Master password/);
+    const saves = vi.mocked(ipc.saveShellSessions).mock;
+    expect(saves.calls.at(-1)?.[0]).toContain("es_ES");
+    expect(saves.invocationCallOrder.at(-1)).toBeLessThan(vi.mocked(ipc.lock).mock.invocationCallOrder[0]);
+  } finally { localStorage.removeItem("odx.page"); }
+});
+
+it("does not save every tab just because the active tab changed", async () => {
+  render(<ShellPage envs={envs} />);
+  await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 2000 });
+  vi.mocked(ipc.saveShellSessions).mockClear();
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  expect(ipc.saveShellSessions).not.toHaveBeenCalled();
+  // The next save records it.
+  command("\\context");
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 2000 });
+  const saved = JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0]);
+  expect(saved.activeId).toBe(saved.tabs[0].id);
 });
 
 it("uses distinct tab targets and switches to exactly one panel on click", () => {

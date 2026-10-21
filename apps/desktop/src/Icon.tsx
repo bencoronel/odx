@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 export type IconName = "server" | "check" | "clients" | "activity" | "settings" | "lock" | "unlock" | "sun" | "moon" | "refresh" | "arrow" | "shield"
-  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown" | "filter";
+  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown" | "filter" | "monitor";
 
 const paths: Record<IconName, string> = {
   server: "M4 4h16v6H4z M4 14h16v6H4z M8 7h.01 M8 17h.01",
@@ -41,6 +41,7 @@ const paths: Record<IconName, string> = {
   rows: "M4 4h16v7H4z M4 13h16v7H4z M7 7.5h6 M7 16.5h6",
   caretUp: "M7 14l5-5 5 5",
   caretDown: "M7 10l5 5 5-5",
+  monitor: "M3 4h18v12H3z M8 20h8 M12 16v4",
 };
 
 export function Icon({ name, className, style }: { name: IconName; className?: string; style?: CSSProperties }) {

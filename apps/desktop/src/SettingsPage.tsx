@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import SettingsTable from "./SettingsTable";
 import ProxyPanel from "./ProxyPanel";
 import PasswordPage from "./PasswordPage";
-import LanguageSelector from "./LanguageSelector";
+import { LanguageSelect } from "./LanguageSelector";
+import { UpdatesPanel } from "./Updates";
 import PanelTitle, { useCollapsed } from "./PanelTitle";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { Icon } from "./Icon";
@@ -12,13 +13,14 @@ import { i18n } from "./i18n";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { usePreventUnload } from "./windowState";
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "system";
 
 function ThemeSelector({ theme, change }: { theme: Theme; change: (theme: Theme) => void }) {
   const { t } = useTranslation();
   return <div className="segmented" role="group" aria-label={t("settingsPage.themeLabel")}>
     <button type="button" aria-pressed={theme === "light"} onClick={() => change("light")}><Icon name="sun" />{t("settingsPage.light")}</button>
     <button type="button" aria-pressed={theme === "dark"} onClick={() => change("dark")}><Icon name="moon" />{t("settingsPage.dark")}</button>
+    <button type="button" aria-pressed={theme === "system"} onClick={() => change("system")}><Icon name="monitor" />{t("settingsPage.system")}</button>
   </div>;
 }
 
@@ -33,37 +35,51 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
   changePassword: (current: string, next: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const jump = (id: string) => {
+    const heading = document.getElementById(id);
+    heading?.scrollIntoView?.({ block: "start" });
+    heading?.focus({ preventScroll: true });
+  };
   return <div className="page-scroll"><div className="settings">
+    <nav className="settings-nav" aria-label={t("settingsPage.sections")}>
+      {sections.map(([id, key]) => <button key={id} type="button" className="btn sm ghost" onClick={() => jump(id)}>{t(key)}</button>)}
+    </nav>
     <section className="settings-group" aria-labelledby="settings-general">
-      <h2 id="settings-general" className="settings-group-title">{t("settingsPage.general")}</h2>
-      <LanguageSelector />
+      <h2 id="settings-general" className="settings-group-title" tabIndex={-1}>{t("settingsPage.general")}</h2>
       <section className="panel">
-        <header className="panel-header"><h3>{t("settingsPage.appearance")}</h3></header>
-        <div className="setting-row"><div><strong>{t("settingsPage.theme")}</strong><p className="hint">{t("settingsPage.remembered")}</p></div><ThemeSelector theme={theme} change={setTheme} /></div>
+        <header className="panel-header"><h3>{t("settingsPage.appearance")}</h3><span className="hint">{t("settingsPage.remembered")}</span></header>
+        <div className="setting-row"><strong>{t("settings.language.label")}</strong><LanguageSelect /></div>
+        <div className="setting-row"><strong>{t("settingsPage.theme")}</strong><ThemeSelector theme={theme} change={setTheme} /></div>
       </section>
+      <UpdatesPanel />
     </section>
     <section className="settings-group" aria-labelledby="settings-connection">
-      <h2 id="settings-connection" className="settings-group-title">{t("settingsPage.odooConnection")}</h2>
+      <h2 id="settings-connection" className="settings-group-title" tabIndex={-1}>{t("settingsPage.odooConnection")}</h2>
       <ProxyPanel pendingCount={pendingCount} onSaved={onHeadersSaved} />
       <SettingsTable kind="headers" pendingCount={pendingCount} onSaved={onHeadersSaved} />
       <SettingsTable kind="context" pendingCount={pendingCount} onSaved={onContextSaved} />
     </section>
     <section className="settings-group" aria-labelledby="settings-execution">
-      <h2 id="settings-execution" className="settings-group-title">{t("settingsPage.executionStorage")}</h2>
+      <h2 id="settings-execution" className="settings-group-title" tabIndex={-1}>{t("settingsPage.executionStorage")}</h2>
       <LimitsPanel />
+      <FixedLimits />
     </section>
     <section className="settings-group" aria-labelledby="settings-security">
-      <h2 id="settings-security" className="settings-group-title">{t("settingsPage.security")}</h2>
+      <h2 id="settings-security" className="settings-group-title" tabIndex={-1}>{t("settingsPage.security")}</h2>
       <section className="panel">
         <header className="panel-header"><h3>{t("unlock.vault")}</h3></header>
-        <div className="setting-row"><div><strong>{t("settingsPage.lockNow")}</strong><p className="hint">{t("settingsPage.lockHint")}</p></div><button className="btn" disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</button></div>
+        <div className="setting-row"><div><strong>{t("settingsPage.lockNow")}</strong><p className="hint">{t("settingsPage.lockHint")}{pendingCount > 0 && ` ${t("settingsPage.lockPending", { count: pendingCount })}`}</p></div><button className="btn" disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</button></div>
         <header className="panel-header panel-foot"><h3>{t("unlock.password")}</h3></header>
         <PasswordPage busy={busy} change={changePassword} />
       </section>
     </section>
-    <FixedLimits />
   </div></div>;
 }
+
+const sections = [
+  ["settings-general", "settingsPage.general"], ["settings-connection", "settingsPage.odooConnection"],
+  ["settings-execution", "settingsPage.executionStorage"], ["settings-security", "settingsPage.security"],
+] as const;
 
 type SettingsPageText = "settingsPage.groups.concurrency.title" | "settingsPage.groups.concurrency.hint" | "settingsPage.groups.total" | "settingsPage.groups.perEnvironment" | "settingsPage.groups.calls" | "settingsPage.groups.timeout.title" | "settingsPage.groups.timeout.hint" | "settingsPage.groups.perRequest" | "settingsPage.groups.seconds" | "settingsPage.groups.approval.title" | "settingsPage.groups.approval.hint" | "settingsPage.groups.validity" | "settingsPage.groups.minutes" | "settingsPage.groups.activity.title" | "settingsPage.groups.activity.hint" | "settingsPage.groups.age" | "settingsPage.groups.days" | "settingsPage.groups.size" | "settingsPage.groups.mib" | "settingsPage.groups.output.title" | "settingsPage.groups.output.hint" | "settingsPage.groups.totalSize" | "settingsPage.groups.hours";
 type Field = { key: keyof Settings; label: SettingsPageText; unit: SettingsPageText };
@@ -124,6 +140,7 @@ function LimitsPanel() {
   const next = valid ? Object.fromEntries(Object.entries(draft).map(([k, v]) => [k, Number(v)])) as Settings : null;
   const changed = next !== null && (Object.keys(next) as (keyof Settings)[]).some((k) => next[k] !== view.settings[k]);
   const shrinks = next !== null && retentionKeys.some((k) => next[k] < view.settings[k]);
+  const dirty = (Object.keys(draft) as (keyof Settings)[]).some((k) => draft[k] !== String(view.settings[k]));
 
   async function save() {
     if (!next) return;
@@ -147,27 +164,30 @@ function LimitsPanel() {
   }}>
     <header className="panel-header"><h3>{t("settingsPage.limits")}</h3>
       <span className="row gap-2">
-        <button type="button" className="btn sm" disabled={saving || !(Object.keys(draft) as (keyof Settings)[]).some((k) => draft[k] !== String(view.settings[k]))} onClick={() => { setDraft(toDraft(view.settings)); setMessage(null); }}>{t("common.discard")}</button>
+        {dirty && !saving && <span className="hint">{t("common.unsaved")}</span>}
+        <button type="button" className="btn sm" disabled={saving || !dirty} onClick={() => { setDraft(toDraft(view.settings)); setMessage(null); }}>{t("common.discard")}</button>
         <button type="submit" className="btn sm primary" disabled={saving || !valid || !changed}>{saving ? t("common.saving") : t("common.save")}</button>
       </span>
     </header>
     <div className="panel-body">
       <p className="hint">{t("settingsPage.limitsHint")}</p>
-      {groups.map((group) => <fieldset key={group.title} className="limits-group" disabled={saving}>
+      {/* Next to the header buttons, not below the last group where it may be off-screen. */}
+      {message && <p className={`banner ${"error" in message ? "danger" : "ok"}`} role={"error" in message ? "alert" : "status"}><Icon name={"error" in message ? "alert" : "check"} />{"error" in message ? formatAppError(message.error) : t(message.key)}</p>}
+      {groups.map((group, index) => <fieldset key={group.title} className="limits-group" disabled={saving}>
         <legend><strong>{t(group.title as SettingsPageText)}</strong></legend>
-        <p className="hint">{t(group.hint as SettingsPageText)}</p>
+        <p className="hint" id={`limits-group-${index}-hint`}>{t(group.hint as SettingsPageText)}</p>
         <div className="row gap-2">{group.fields.map((field) => {
           const { min, max } = view.bounds[field.key];
           const id = `setting-${field.key}`;
-          return <label key={field.key} className="field" htmlFor={id}><span>{t(field.label)} ({t(field.unit)})</span>
+          // The hint sits outside the label so it is a description, not part of the field's name.
+          return <div key={field.key} className="field"><label htmlFor={id}>{t(field.label)} ({t(field.unit)})</label>
             <input id={id} className="w-28" type="number" inputMode="numeric" min={min} max={max} step={1} value={draft[field.key]}
-              aria-invalid={errors[field.key] ? true : undefined} aria-describedby={`${id}-hint`}
+              aria-invalid={errors[field.key] ? true : undefined} aria-describedby={`${id}-hint limits-group-${index}-hint`}
               onChange={(e) => { setDraft({ ...draft, [field.key]: e.target.value }); setMessage(null); }} />
             <small id={`${id}-hint`} className={`hint ${errors[field.key] ? "text-danger" : ""}`}>{errors[field.key] || t("settingsPage.defaultRange", { value: view.defaults[field.key], min, max })}</small>
-          </label>;
+          </div>;
         })}</div>
       </fieldset>)}
-      {message && <p className={`banner ${"error" in message ? "danger" : "ok"}`} role={"error" in message ? "alert" : "status"}><Icon name={"error" in message ? "alert" : "check"} />{"error" in message ? formatAppError(message.error) : t(message.key)}</p>}
     </div>
     <ApprovalDialog
       open={confirming}

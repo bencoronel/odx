@@ -150,6 +150,60 @@ it("moves between sections with Ctrl+1…6 keeping the service status", async ()
   expect(screen.getByRole("button", { name: "Environments" }).getAttribute("aria-current")).toBe("page");
 });
 
+it("keeps page and environment shortcuts from acting behind the command palette", async () => {
+  render(<App />);
+  await within(await screen.findByRole("contentinfo", { name: "Service status" })).findByText(/MCP active/);
+  fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+  const input = screen.getByRole("combobox");
+  fireEvent.keyDown(input, { key: "2", ctrlKey: true });
+  fireEvent.keyDown(input, { key: "n", ctrlKey: true });
+  // The modal palette hides the page from the accessibility tree.
+  expect(screen.getByRole("button", { name: "Environments", hidden: true }).getAttribute("aria-current")).toBe("page");
+  expect(screen.queryByRole("heading", { name: "New environment", hidden: true })).toBeNull();
+  fireEvent.keyDown(input, { key: "k", ctrlKey: true });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.keyDown(window, { key: "2", ctrlKey: true });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Approvals" }).getAttribute("aria-current")).toBe("page"));
+});
+
+it("opens the command palette only while unlocked and loads the chosen page on demand", async () => {
+  vi.mocked(ipc.status).mockResolvedValue("locked");
+  const { unmount } = render(<App />);
+  await screen.findByRole("heading", { name: "Vault locked" });
+  fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  unmount();
+  vi.mocked(ipc.status).mockResolvedValue("unlocked");
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Command palette" }));
+  const input = screen.getByRole("combobox");
+  fireEvent.change(input, { target: { value: "settings" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(await screen.findByRole("heading", { name: "Language and appearance" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+});
+
+it("follows the system theme live by default and keeps an explicit choice", async () => {
+  let listener: (() => void) | undefined;
+  const query = { matches: false, addEventListener: (_: string, f: () => void) => { listener = f; }, removeEventListener: vi.fn() };
+  const matchMedia = vi.fn(() => query);
+  vi.stubGlobal("matchMedia", matchMedia);
+  localStorage.removeItem("odx.theme");
+  localStorage.setItem("odx.page", "settings");
+  try {
+    render(<App />);
+    const system = await screen.findByRole("button", { name: "System" });
+    expect(system.getAttribute("aria-pressed")).toBe("true");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    query.matches = true;
+    act(() => listener?.());
+    expect(document.documentElement.dataset.theme).toBe("light");
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("odx.theme")).toBe("dark");
+  } finally { vi.unstubAllGlobals(); localStorage.removeItem("odx.theme"); }
+});
+
 it("approves a write in place and reports a refresh failure without blocking", async () => {
   vi.mocked(ipc.approvals).mockResolvedValue([{ id: "p1", environment_id: "e", environment_name: "A", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300_000).toISOString() }]);
   localStorage.setItem("odx.page", "approvals");

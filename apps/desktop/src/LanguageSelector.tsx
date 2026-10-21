@@ -9,14 +9,3 @@ export function LanguageSelect({ className }: { className?: string }) {
     options={[{ value: "en", label: t("settings.language.english") }, { value: "es", label: t("settings.language.spanish") }]}
     onChange={(language) => { void setLanguage(language); }} />;
 }
-
-export default function LanguageSelector() {
-  const { t } = useTranslation();
-  return <section className="panel">
-    <header className="panel-header"><h3>{t("settings.language.title")}</h3></header>
-    <div className="setting-row">
-      <div><strong>{t("settings.language.label")}</strong><p className="hint">{t("settings.language.hint")}</p></div>
-      <LanguageSelect />
-    </div>
-  </section>;
-}

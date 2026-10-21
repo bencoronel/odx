@@ -133,3 +133,26 @@ it("localizes a structured activity error live while retaining its redacted deta
   await setLanguage("es");
   expect(screen.getByText("Odoo devolvió un error.")).toBeTruthy();
 });
+
+it("keeps loaded pages when the app refreshes and stops offering more past the row cap", async () => {
+  const page = (from: number, count: number) => ({ events: Array.from({ length: count }, (_, i) => event(`m${from + i}`)), next_cursor: { at: from + count, key: `k${from + count}` }, complete: true });
+  const calls = vi.spyOn(ipc, "activity").mockImplementation(async (cursor) => cursor ? page(cursor.at, 500) : page(0, 500));
+  const { rerender } = render(<ActivityPage envs={[]} refreshKey={1} />);
+  await screen.findByText("m0");
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  await screen.findByText("m999");
+  rerender(<ActivityPage envs={[]} refreshKey={2} />);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.getByText("m999")).toBeTruthy();
+  expect(calls).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  expect(screen.getByText(/latest 1,?000 records/)).toBeTruthy();
+});
+
+it("reloads the first page when the app refreshes and no extra page is shown", async () => {
+  const calls = fakeCore(rows);
+  const { rerender } = render(<ActivityPage envs={[]} refreshKey={1} />);
+  await screen.findByText("res.users");
+  rerender(<ActivityPage envs={[]} refreshKey={2} />);
+  await waitFor(() => expect(calls).toHaveBeenCalledTimes(2));
+});

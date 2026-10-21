@@ -80,6 +80,7 @@ const codeKeys: Record<string, string> = {
   "validation.environment.temporary_deadline_required": "errors.validation.environmentTemporaryDeadlineRequired",
   "validation.environment.url_invalid": "errors.validation.environmentUrlInvalid",
   "validation.environment.url_restricted": "errors.validation.environmentUrlRestricted",
+  "validation.environment.secret_required": "errors.validation.environmentSecretRequired",
   "validation.environment.tag_too_long": "errors.validation.environmentTagTooLong",
   "validation.environment.too_many_tags": "errors.validation.environmentTooManyTags",
   "validation.environment.favicon_url_not_allowed": "errors.validation.environmentFaviconUrlNotAllowed",
@@ -174,8 +175,4 @@ export function formatAppError(error: ErrorState): string {
   const key = codeKeys[error.code] ?? "errors.unknown";
   const translated = i18n.t(key as never, error.params ?? {});
   return error.detail ? `${translated}\n${i18n.t("errors.technicalDetail")}: ${error.detail}` : translated;
-}
-
-export function appErrorMessage(code: string, params?: Record<string, string | number>): string {
-  return formatAppError({ code, params });
 }

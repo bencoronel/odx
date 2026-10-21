@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { formatDateTime } from "./i18n/format";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 
+/** Ten core pages; past this, narrow the filters instead of growing an unvirtualized table. */
+const MAX_EVENTS = 1000;
 const outcomes: Record<string, { label: string; tone: string }> = {
   succeeded: { label: "activity.outcomes.succeeded", tone: "ok" },
   attempted: { label: "activity.outcomes.attempted", tone: "neutral" },
@@ -82,6 +84,9 @@ export default function ActivityPage({ envs, refreshKey }: { envs: Environment[]
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
+  // App refreshes reload the first page like the timer, so pages loaded with "Load more" are kept.
+  const shownKey = useRef(refreshKey);
+  useEffect(() => { if (shownKey.current !== refreshKey) { shownKey.current = refreshKey; if (!extra.current) setTick((n) => n + 1); } }, [refreshKey]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -92,7 +97,7 @@ export default function ActivityPage({ envs, refreshKey }: { envs: Environment[]
       .then((page) => { if (current === generation.current) { setEvents(page.events); setNext(page.next_cursor ?? null); setComplete(page.complete); } })
       .catch((reason) => { if (current === generation.current) setError(normalizeAppError(reason)); })
       .finally(() => { if (current === generation.current) setLoading(false); });
-  }, [filter, refreshKey, reload]);
+  }, [filter, reload]);
 
   async function more() {
     if (next === null) return;
@@ -153,7 +158,8 @@ export default function ActivityPage({ envs, refreshKey }: { envs: Environment[]
           </td></tr>}</Fragment>;
         })}</tbody>
       </table>
-      {next !== null && <div className="panel-body row justify-end"><button className="btn sm" disabled={loading} onClick={() => void more()}>{loading ? t("common.loading") : t("activity.loadMore")}</button></div>}
+      {next !== null && events.length >= MAX_EVENTS && <p className="panel-body hint">{t("activity.limitReached", { count: MAX_EVENTS })}</p>}
+      {next !== null && events.length < MAX_EVENTS && <div className="panel-body row justify-end"><button className="btn sm" disabled={loading} onClick={() => void more()}>{loading ? t("common.loading") : t("activity.loadMore")}</button></div>}
     </section>}
   </div></div>;
 }

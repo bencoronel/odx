@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { Icon } from "./Icon";
 import Select from "./Select";
-import { ipc, type ProxyInput, type ProxyView } from "./ipc";
+import { ipc, type ProxyView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type AppError, type ErrorState } from "./appError";
 import { usePreventUnload } from "./windowState";
@@ -26,7 +26,7 @@ export function draftFromView(view: ProxyView): ProxyDraft {
   return { kind, host: match?.[2] ?? "", port: match?.[3] ?? defaultPorts[kind], username: view.username, password: view.password };
 }
 
-export function proxyInput(draft: ProxyDraft): ProxyInput {
+export function proxyInput(draft: ProxyDraft): ProxyView {
   const host = draft.host.trim();
   const bracketed = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return { url: `${draft.kind}://${bracketed}:${draft.port.trim()}`, username: draft.username, password: draft.password };
@@ -43,19 +43,24 @@ export function proxyError(draft: ProxyDraft): ErrorState | null {
 }
 
 /** Saved proxy credentials arrive as placeholders and remain hidden. */
-export function ProxyFields({ idPrefix, value, change }: { idPrefix: string; value: ProxyDraft; change: (draft: ProxyDraft) => void }) {
+export function ProxyFields({ idPrefix, value, change, error }: { idPrefix: string; value: ProxyDraft; change: (draft: ProxyDraft) => void;
+  /** Shown by the caller in an element with id `${idPrefix}-error`; marks the field it refers to. */
+  error?: ErrorState | null }) {
   const { t } = useTranslation();
+  const code = error && typeof error === "object" ? error.code : "";
+  const field = code.includes("host") ? "host" : code.includes("port") ? "port" : code.includes("username") ? "username" : "";
+  const invalid = (name: string) => field === name ? { "aria-invalid": true, "aria-describedby": `${idPrefix}-error` } : {};
   const credential = (key: "username" | "password") => (text: string) =>
     change({ ...value, [key]: value[key] === PROXY_MASK ? text.replaceAll("•", "") : text });
   const masked = (text: string) => text === PROXY_MASK ? "secret-mask" : "";
   const tip = t("proxy.savedSecret");
   return <div className="form-grid">
     <label className="field" htmlFor={`${idPrefix}-host`}><span>{t("proxy.host")}</span>
-      <input id={`${idPrefix}-host`} aria-label={t("proxy.hostLabel")} className="mono" required spellCheck={false} value={value.host} placeholder="proxy.example.com" onChange={(e) => change({ ...value, host: e.target.value })} /></label>
+      <input id={`${idPrefix}-host`} aria-label={t("proxy.hostLabel")} className="mono" required spellCheck={false} {...invalid("host")} value={value.host} placeholder="proxy.example.com" onChange={(e) => change({ ...value, host: e.target.value })} /></label>
     <label className="field" htmlFor={`${idPrefix}-port`}><span>{t("proxy.port")}</span>
-      <input id={`${idPrefix}-port`} aria-label={t("proxy.portLabel")} className="mono w-28" required inputMode="numeric" value={value.port} onChange={(e) => change({ ...value, port: e.target.value })} /></label>
+      <input id={`${idPrefix}-port`} aria-label={t("proxy.portLabel")} className="mono w-28" required inputMode="numeric" {...invalid("port")} value={value.port} onChange={(e) => change({ ...value, port: e.target.value })} /></label>
     <label className="field" htmlFor={`${idPrefix}-username`}><span>{t("proxy.usernameOptional")}</span>
-      <input id={`${idPrefix}-username`} aria-label={t("proxy.usernameLabel")} className={masked(value.username)} autoComplete="off" spellCheck={false} value={value.username} data-tip={value.username === PROXY_MASK ? tip : undefined} onChange={(e) => credential("username")(e.target.value)} /></label>
+      <input id={`${idPrefix}-username`} aria-label={t("proxy.usernameLabel")} className={masked(value.username)} {...invalid("username")} autoComplete="off" spellCheck={false} value={value.username} data-tip={value.username === PROXY_MASK ? tip : undefined} onChange={(e) => credential("username")(e.target.value)} /></label>
     <label className="field" htmlFor={`${idPrefix}-password`}><span>{t("proxy.passwordOptional")}</span>
       <input id={`${idPrefix}-password`} aria-label={t("proxy.passwordLabel")} type="password" autoComplete="new-password" value={value.password} data-tip={value.password === PROXY_MASK ? tip : undefined} onChange={(e) => credential("password")(e.target.value)} /></label>
   </div>;
@@ -72,7 +77,7 @@ export function withKind(draft: ProxyDraft, kind: ProxyKind): ProxyDraft {
   return { ...draft, kind, port: draft.port === defaultPorts[draft.kind] ? defaultPorts[kind] : draft.port };
 }
 
-const signature = (input: ProxyInput | null) => JSON.stringify(input);
+const signature = (input: ProxyView | null) => JSON.stringify(input);
 
 /** Saving the global proxy revokes pending approvals in inheriting environments. */
 export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount?: number; onSaved?: () => void | Promise<void> }) {
@@ -117,6 +122,7 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
   }}>
     <header className="panel-header"><h3>{t("proxy.title")}</h3>
       <span className="row gap-2">
+        {changed && !saving && <span className="hint">{t("common.unsaved")}</span>}
         <button type="button" className="btn sm" disabled={saving || !changed} onClick={() => { reset(stored); setMessage(null); }}>{t("common.discard")}</button>
         <button type="submit" className="btn sm primary" disabled={saving || !changed || Boolean(invalid)}>{saving ? t("common.saving") : t("common.save")}</button>
       </span>
@@ -125,9 +131,9 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
       <p className="hint">{t("proxy.help")}</p>
       <label className="field" htmlFor="proxy-kind"><span>{t("proxy.type")}</span>
         <ProxyKindSelect id="proxy-kind" className="w-48" allowNone value={draft?.kind ?? "none"} change={(kind) => { setMessage(null); setDraft(kind === "none" ? null : draft ? withKind(draft, kind) : emptyProxy(kind)); }} /></label>
-      {draft && <ProxyFields idPrefix="proxy" value={draft} change={(d) => { setMessage(null); setDraft(d); }} />}
+      {draft && <ProxyFields idPrefix="proxy" value={draft} error={changed ? invalid : null} change={(d) => { setMessage(null); setDraft(d); }} />}
       {draft?.kind === "socks5h" && <p className="hint">{t("proxy.socksHint")}</p>}
-      {changed && invalid && <p className="hint text-danger" role="alert">{formatAppError(invalid)}</p>}
+      {changed && invalid && <p id="proxy-error" className="hint text-danger" role="alert">{formatAppError(invalid)}</p>}
       {message && <p className={`banner ${message.failed ? "danger" : "ok"}`} role={message.failed ? "alert" : "status"}><Icon name={message.failed ? "alert" : "check"} />{message.failed ? formatAppError(message.error) : t(message.key)}</p>}
     </fieldset>
     <ApprovalDialog open={confirming} busy={saving} tone="warn"

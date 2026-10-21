@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, Suspense, type ErrorInfo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 class Boundary extends Component<{ children: ReactNode; reloadLabel: string; failedMessage: string }, { failed: boolean }> {
@@ -18,5 +18,5 @@ class Boundary extends Component<{ children: ReactNode; reloadLabel: string; fai
 
 export function PageLoadBoundary({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  return <Boundary reloadLabel={t("common.retry")} failedMessage={t("app.errors.pageLoadFailed")}>{children}</Boundary>;
+  return <Boundary reloadLabel={t("common.retry")} failedMessage={t("app.errors.pageLoadFailed")}><Suspense fallback={null}>{children}</Suspense></Boundary>;
 }

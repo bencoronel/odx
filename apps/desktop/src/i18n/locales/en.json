@@ -34,13 +34,12 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "hourShort": "h",
-    "minuteShort": "min"
+    "minuteShort": "min",
+    "unsaved": "Unsaved changes"
   },
   "settings": {
     "language": {
-      "title": "Language",
       "label": "Interface language",
-      "hint": "Remembered on this device.",
       "english": "English",
       "spanish": "Spanish"
     }
@@ -227,7 +226,9 @@
     "saveWarning": "Save warning",
     "onSave": "When saving",
     "revokeEnvironmentRequests": "Pending requests for this environment are revoked and Odoo is reauthenticated.",
-    "revokeAllRequests": "Pending requests for all environments are revoked and Odoo is reauthenticated."
+    "revokeAllRequests": "Pending requests for all environments are revoked and Odoo is reauthenticated.",
+    "globalHeadersHint": "Sent with every request to Odoo. Each environment can override them. Changes are saved when you leave a field.",
+    "globalContextHint": "Added to the context of every Odoo call, for example lang or tz. Each environment can override any key. Changes are saved when you leave a field."
   },
   "environmentForm": {
     "errors": {
@@ -252,16 +253,15 @@
     "unchanged": "Unchanged",
     "keepCredentialHint": "Leave blank to keep the saved credential.",
     "credentialHint": "Encrypted in the vault and never shown to clients.",
-    "json2Hint": "JSON-2 requires Odoo 19 and an API key.",
     "createTitle": "New environment",
     "createAction": "Create environment",
     "readOnlyHint": "It will be created in read-only mode.",
     "connection": "Connection",
     "context": "Context",
-    "optionalJson": "Optional · JSON object",
     "environmentContext": "Environment context",
     "credential": "Credential",
     "keepSecretPlaceholder": "Leave blank to keep the saved credential.",
+    "newTargetSecretPlaceholder": "API key required for the new URL, database or user",
     "savedCredential": "Saved credential",
     "savedCredentialHint": "Credential saved\nEncrypted in the vault and never shown",
     "noCredential": "No credential",
@@ -276,17 +276,21 @@
   },
   "settingsPage": {
     "general": "General",
-    "appearance": "Appearance",
+    "appearance": "Language and appearance",
+    "sections": "Settings sections",
     "theme": "Theme",
     "remembered": "Remembered on this device.",
     "light": "Light",
     "dark": "Dark",
+    "system": "System",
     "themeLabel": "Interface theme",
     "odooConnection": "Odoo connection",
     "executionStorage": "Execution and storage",
     "security": "Security",
     "lockNow": "Lock now",
     "lockHint": "Closes access to Odoo and revokes pending requests.",
+    "lockPending_one": "{{count}} pending approval will be revoked.",
+    "lockPending_other": "{{count}} pending approvals will be revoked.",
     "rangeError": "Must be between {{min}} and {{max}}",
     "concurrencyError": "Cannot exceed the global limit",
     "limits": "Limits and retention",
@@ -343,7 +347,7 @@
       "agentResponse": "Agent response",
       "binaryDownload": "Binary download",
       "exportedFile": "Exported file",
-      "wait": "wait",
+      "wait": "Result wait",
       "activity": "Activity",
       "auditQueue": "Audit queue"
     },
@@ -541,6 +545,7 @@
   "environments": {
     "emptyTitle": "No environments",
     "emptyHint": "Add a connection to an Odoo instance. Environments start in read-only mode.",
+    "focusWhileCreating": "Finish or cancel the new environment to show {{name}}.",
     "listLabel": "Environment list",
     "filterPlaceholder": "Filter environments",
     "filterLabel": "Filter environments",
@@ -648,7 +653,8 @@
     "revokedClient": "Revoked client",
     "revoked": "Revoked",
     "detailsFor": "Details for {{operation}}",
-    "loadMore": "Load more"
+    "loadMore": "Load more",
+    "limitReached": "Showing the latest {{count}} records. Narrow the filters to see older ones."
   },
   "shell": {
     "initial": "Odx Terminal · \\c <environment> to connect · \\? for help",
@@ -666,6 +672,8 @@
     "offline": "offline",
     "connected": "Connected to {{name}} ({{database}}{{version}} · {{latency}} ms).",
     "confirmPrompt": "Send to {{name}}? [y/N]",
+    "readOnlyWrite": "{{name}} is read-only: this write was not sent. Change its write mode in Environments to allow writes.",
+    "writeWindowExpired": "The temporary write window for {{name}} has expired: this write was not sent. Enable writes again in Environments.",
     "historyCleared": "History cleared.",
     "noCommandMatches": "No commands match.",
     "emptyHistory": "History is empty.",
@@ -936,6 +944,7 @@
       "environmentTemporaryDeadlineRequired": "Temporary write access requires a future deadline.",
       "environmentUrlInvalid": "Enter a valid environment URL.",
       "environmentUrlRestricted": "Use an HTTP(S) URL without credentials, query parameters, or a fragment.",
+      "environmentSecretRequired": "Enter the API key again: a new URL, database or user needs its own key.",
       "environmentFaviconUrlNotAllowed": "This favicon URL is outside the environment's website.",
       "environmentApiKeyHeaderInvalid": "The API key cannot be used in a JSON-2 authorization header.",
       "environmentDatabaseHeaderInvalid": "The database name cannot be used in a JSON-2 header.",
@@ -1044,6 +1053,33 @@
   "desktop": {
     "trayUnavailable": "System tray unavailable. Closing the window locks the vault and stops Odx.",
     "notificationsUnavailable": "Desktop notifications are unavailable. New requests appear only in Approvals and the status bar."
+  },
+  "updates": {
+    "title": "Updates",
+    "version": "Version {{version}}",
+    "check": "Check for updates",
+    "checking": "Checking…",
+    "upToDate": "Odx is up to date.",
+    "available": "Odx {{version}} is available.",
+    "install": "Update and restart",
+    "installing": "Updating…",
+    "openReleases": "Open release page",
+    "manual": "This installation cannot update itself. Download the new version from the release page.",
+    "checkFailed": "Could not check for updates. Check your connection and try again.",
+    "installFailed": "The update could not be installed. The current version keeps running."
+  },
+  "palette": {
+    "title": "Command palette",
+    "description": "Search pages, environments and actions",
+    "placeholder": "Go to a page or environment…",
+    "results": "Commands",
+    "empty": "No matches.",
+    "open": "Search",
+    "hint": "Command palette\nCtrl+K",
+    "goTo": "Go to {{page}}",
+    "showEnvironment": "Show {{name}}",
+    "openInShell": "Open {{name}} in Terminal",
+    "lock": "Lock vault"
   },
   "contextMenu": {
     "label": "Text actions",

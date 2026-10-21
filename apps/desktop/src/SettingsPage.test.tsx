@@ -103,3 +103,17 @@ it("reports a locked or failing backend instead of showing stale values", async 
   expect((await screen.findByRole("alert")).textContent).toContain("The vault is locked.");
   expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
 });
+
+it("names each limit by its label only, describes it with its range, and jumps between sections", async () => {
+  render(<SettingsPage theme="dark" setTheme={vi.fn()} busy={false} pendingCount={2} onContextSaved={vi.fn()} onHeadersSaved={vi.fn()} lock={vi.fn()} changePassword={vi.fn()} />);
+  await screen.findByRole("form", { name: "Limits and retention" });
+  const total = within(form()).getByRole("spinbutton", { name: "Total (calls)" });
+  expect(total.getAttribute("aria-describedby")).toContain("setting-global_concurrency-hint");
+  expect(screen.getByText(/2 pending approvals will be revoked/)).toBeTruthy();
+  expect(within(form()).queryByText("Unsaved changes")).toBeNull();
+  fireEvent.change(total, { target: { value: "8" } });
+  expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
+  const nav = screen.getByRole("navigation", { name: "Settings sections" });
+  fireEvent.click(within(nav).getByRole("button", { name: "Security" }));
+  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Security" }));
+});
