@@ -515,7 +515,10 @@
     "saveRevokes": "Al guardar se revocan las solicitudes pendientes de estos agentes.",
     "connect": "Conectar un agente",
     "client": "Cliente",
-    "jsonHint": "Para otros clientes MCP: añade este bloque a su configuración de servidores."
+    "jsonHint": "Para otros clientes MCP: añade este bloque a su configuración de servidores.",
+    "title": "MCP local",
+    "description": "Los agentes de este equipo (Claude Code, Codex…) se conectan por stdio. Elige qué pueden hacer y cómo conectarlos.",
+    "connectHint": "Comando o configuración para añadir ODX a tu agente."
   },
   "proxy": {
     "errors": {
@@ -1141,7 +1144,15 @@
     "goTo": "Ir a {{page}}",
     "openInShell": "Abrir {{name}} en la Terminal",
     "lock": "Bloquear almacén",
-    "showEnvironment": "Mostrar {{name}}"
+    "groups": {
+      "pages": "Páginas",
+      "environments": "Entornos",
+      "actions": "Acciones"
+    },
+    "shell": "Terminal",
+    "keysMove": "moverse",
+    "keysOpen": "abrir",
+    "keysShell": "abrir en la Terminal"
   },
   "contextMenu": {
     "label": "Acciones de texto",

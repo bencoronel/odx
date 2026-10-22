@@ -515,7 +515,10 @@
     "saveRevokes": "Saving revokes the pending requests from these agents.",
     "connect": "Connect an agent",
     "client": "Client",
-    "jsonHint": "For other MCP clients: add this block to their server configuration."
+    "jsonHint": "For other MCP clients: add this block to their server configuration.",
+    "title": "Local MCP",
+    "description": "Agents on this computer (Claude Code, Codex…) connect over stdio. Choose what they may do and how to connect them.",
+    "connectHint": "Command or configuration to add ODX to your agent."
   },
   "proxy": {
     "errors": {
@@ -1141,7 +1144,15 @@
     "goTo": "Go to {{page}}",
     "openInShell": "Open {{name}} in Terminal",
     "lock": "Lock vault",
-    "showEnvironment": "Show {{name}}"
+    "groups": {
+      "pages": "Pages",
+      "environments": "Environments",
+      "actions": "Actions"
+    },
+    "shell": "Terminal",
+    "keysMove": "move",
+    "keysOpen": "open",
+    "keysShell": "open in Terminal"
   },
   "contextMenu": {
     "label": "Text actions",

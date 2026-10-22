@@ -3,6 +3,7 @@ import type { Environment, Pending } from "./ipc";
 import { EnvIcon } from "./EnvIcon";
 import { ListResizer, useListWidth } from "./ListResizer";
 import { Icon } from "./Icon";
+import SearchField from "./SearchField";
 import { formatRemaining, relativeTime, useNow } from "./time";
 import { useTranslation } from "react-i18next";
 import { formatDateTime } from "./i18n/format";
@@ -136,9 +137,9 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   };
 
   const toolbar = <div className="list-toolbar">
-    <label className="search"><Icon name="search" /><input ref={search} type="search" aria-keyshortcuts="Control+F /" placeholder={t("approvals.filterPlaceholder")} aria-label={t("approvals.filterLabel")} value={filter}
-      onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && filter) { event.preventDefault(); setFilter(""); } }} />{!filter && <kbd className="search-kbd" aria-hidden="true">/</kbd>}</label>
-    {query && <span className="hint" role="status">{t("approvals.filterCount", { shown: visible.length, total: pending.length })}</span>}
+    <SearchField inputRef={search} value={filter} onChange={setFilter} label={t("approvals.filterLabel")} placeholder={t("approvals.filterPlaceholder")} shortcut
+      filtered={!!query} count={{ shown: visible.length, total: pending.length, text: t("approvals.filterCount", { shown: visible.length, total: pending.length }) }}
+      inputProps={{ "aria-keyshortcuts": "Control+F /" }} />
   </div>;
   const item = selected;
   const expired = !!item && remainingOf(item) <= 0;
@@ -155,7 +156,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
         <h2>{t("approvals.emptyTitle")}</h2>
         <p>{t("approvals.emptyHint")}</p>
       </div>
-      : !item ? <ul className="env-list"><li className="list-empty">{t("approvals.noMatches")}<button type="button" className="btn sm" onClick={() => setFilter("")}>{t("approvals.clearFilter")}</button></li></ul>
+      : !item ? <ul className="env-list"><li className="list-empty"><span className="list-empty-icon"><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><button type="button" className="btn sm" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</button></li></ul>
       : <ul className="env-list approval-list" role="listbox" aria-multiselectable="true" aria-label={t("approvals.listLabel")} ref={list}>
         {visible.map((p) => {
           if (!fresh.current.has(p.id)) fresh.current.set(p.id, mounted.current);

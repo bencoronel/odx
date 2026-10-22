@@ -125,7 +125,7 @@ it("filters by model, method, environment or client and keeps keys within the ma
   expect(document.activeElement).toBe(search);
   fireEvent.change(search, { target: { value: "SALE" } });
   expect(screen.getAllByRole("option").map((o) => o.getAttribute("aria-label"))).toEqual(["write on sale.order, A"]);
-  expect(screen.getByText("1 of 3").getAttribute("role")).toBe("status");
+  expect(screen.getAllByRole("status").some((s) => s.textContent?.includes("1 of 3"))).toBe(true);
   search.blur();
   fireEvent.keyDown(document.body, { key: "a" });
   expect(decide).toHaveBeenCalledWith(expect.objectContaining({ id: "s" }), true);

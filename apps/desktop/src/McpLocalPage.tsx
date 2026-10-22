@@ -16,8 +16,10 @@ export default function McpLocalPage({ clients, services, envs, busy, update }: 
   busy: boolean;
   update: (id: string, ...client: Parameters<SaveClient>) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const local = clients.find((client) => client.local_stdio);
   return <div className="page-scroll"><div className="clients">
+    <header className="settings-head"><h2>{t("mcpLocal.title")}</h2><p className="hint">{t("mcpLocal.description")}</p></header>
     <Summary local={local} services={services} />
     {/* Remount after each save so the form starts from the stored permissions. */}
     {local && <Permissions key={[local.all_environments, ...local.environment_ids, ...local.capabilities].join()} local={local} envs={envs} busy={busy}
@@ -59,14 +61,13 @@ function Permissions({ local, envs, busy, save }: {
     setError("");
     try { await save(scope.allEnvs ? null : scope.selected, scope.caps); } catch (reason) { setError(normalizeAppError(reason)); } finally { setSaving(false); }
   }}>
-    <header className="panel-header"><h3>{t("mcpLocal.permissions")}</h3>
+    <header className="panel-header"><div><h3>{t("mcpLocal.permissions")}</h3><p className="hint">{t("mcpLocal.permissionsHint")}</p></div>
       {changed && <span className="row gap-2">
         <button type="button" className="btn sm" disabled={locked} onClick={() => { setScope(scopeOf(local)); setError(""); }}>{t("common.discard")}</button>
         <button type="submit" className="btn sm primary" disabled={locked || !scopeValid(scope)}>{saving ? t("common.saving") : t("common.save")}</button>
       </span>}
     </header>
     <fieldset className="panel-body stack-sm" disabled={locked}>
-      <p className="hint">{t("mcpLocal.permissionsHint")}</p>
       {envs.length === 0 && <p className="banner warn compact"><Icon name="alert" />{t("clients.noEnvironmentsYet")}</p>}
       <ScopeFields scope={scope} change={setScope} envs={envs} />
       {changed && <p className="hint">{t("mcpLocal.saveRevokes")}</p>}
@@ -92,7 +93,7 @@ function Connect({ services, used }: { services: ServiceStatus; used: boolean })
   const [collapsed, setCollapsed] = useCollapsed("mcp-stdio-setup", used);
   const [target, setTarget] = useState<keyof typeof targets>("claude");
   return <section className="panel" aria-label={t("mcpLocal.connect")}>
-    <header className="panel-header"><PanelTitle title={t("mcpLocal.connect")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /></header>
+    <header className="panel-header"><div><PanelTitle title={t("mcpLocal.connect")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /><p className="hint">{t("mcpLocal.connectHint")}</p></div></header>
     {!collapsed && <div className="panel-body stack-sm">
       <div className="segmented mcp-targets" role="radiogroup" aria-label={t("mcpLocal.client")}>
         {(Object.keys(targets) as (keyof typeof targets)[]).map((key) => <button key={key} type="button" role="radio" aria-checked={target === key} aria-pressed={target === key} onClick={() => setTarget(key)}>{targets[key].label}</button>)}

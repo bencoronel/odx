@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ipc, type AuditPayload, type ActivityCursor, type ActivityEvent, type ActivityFilter, type Environment } from "./ipc";
 import { Icon } from "./Icon";
+import SearchField from "./SearchField";
 import Select from "./Select";
 import { useTranslation } from "react-i18next";
 import { formatDateTime } from "./i18n/format";
@@ -114,7 +115,7 @@ export default function ActivityPage({ envs, refreshKey }: { envs: Environment[]
 
   return <div className="page-scroll"><div className="activity">
     <div className="activity-toolbar">
-      <label className="search grow"><Icon name="search" /><input type="search" placeholder={t("activity.searchPlaceholder")} aria-label={t("activity.searchLabel")} value={q} onChange={(e) => setQ(e.target.value)} /></label>
+      <SearchField className="grow" value={q} onChange={setQ} label={t("activity.searchLabel")} placeholder={t("activity.searchPlaceholder")} />
       <Select className="input sm-select" label={t("common.environment")} value={filter.environment_id ?? ""} options={[
         { value: "", label: t("activity.allEnvironments") },
         ...envs.map((env) => ({ value: env.id, label: env.name })),
