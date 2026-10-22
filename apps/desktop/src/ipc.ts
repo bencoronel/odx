@@ -25,10 +25,15 @@ export type HistoryEntry = { at:string;environment?:string|null;command:string }
 export type HeaderEntry = { name:string;value:string;enabled:boolean };
 export type HeaderSettings = { headers:HeaderEntry[];inherited:HeaderEntry[] };
 /** Same shape read and saved. */
-export type ProxyView = { url:string;username:string;password:string };
-export type ProxyMode = "inherit"|"custom"|"direct";
-export type EnvironmentProxyView = { mode:ProxyMode;proxy?:ProxyView|null;inherited?:string|null };
-export type EnvironmentProxyInput = { mode:"inherit" } | { mode:"direct" } | ({ mode:"custom" } & ProxyView);
+export type ProxyInput = { name:string;url:string;username:string;password:string };
+export type ProxyView = ProxyInput & { id:string;environments:number };
+/** `default` is the id of the proxy environments use by default; null means direct. */
+export type ProxiesView = { proxies:ProxyView[];default:string|null };
+/** A proxy test that reached the server; `server_version` is null when it answered without one. */
+export type ProxyTest = { latency_ms:number;server_version:string|null };
+export type ProxyMode = "inherit"|"profile"|"direct";
+export type EnvironmentProxyView = { mode:ProxyMode;id?:string|null };
+export type EnvironmentProxyInput = { mode:"inherit" } | { mode:"direct" } | { mode:"profile";id:string };
 export type ContextEntry = { name:string;value:unknown;enabled:boolean };
 export type ContextSettings = { entries:ContextEntry[];inherited:Record<string,unknown> };
 /** Settings, editable only in the desktop window. */
@@ -43,10 +48,12 @@ export const ipc = {
  saveContext:(entries:ContextEntry[],environmentId?:string)=>invoke<void>("context_set",{environmentId:environmentId ?? null,entries}),
  headers:(environmentId?:string)=>invoke<HeaderSettings>("headers_get",{environmentId:environmentId ?? null}),
  saveHeaders:(headers:HeaderEntry[],environmentId?:string)=>invoke<void>("headers_set",{environmentId:environmentId ?? null,headers}),
- proxy:()=>invoke<ProxyView|null>("proxy_get"), saveProxy:(proxy:ProxyView|null)=>invoke<void>("proxy_set",{proxy}),
- environmentProxy:(id:string)=>invoke<EnvironmentProxyView>("environment_proxy_get",{id}), saveEnvironmentProxy:(id:string,proxy:EnvironmentProxyView)=>invoke<void>("environment_proxy_set",{id,proxy}),
+ proxies:()=>invoke<ProxiesView>("proxies_get"), saveProxy:(id:string|null,proxy:ProxyInput)=>invoke<string>("proxy_save",{id,proxy}),
+ deleteProxy:(id:string)=>invoke<void>("proxy_delete",{id}), testProxy:(id:string|null,proxy:ProxyInput,url:string)=>invoke<ProxyTest>("proxy_test",{id,proxy,url}),
+ setDefaultProxy:(id:string|null)=>invoke<void>("proxy_default_set",{id}),
+ environmentProxy:(id:string)=>invoke<EnvironmentProxyView>("environment_proxy_get",{id}), saveEnvironmentProxy:(id:string,proxy:EnvironmentProxyInput)=>invoke<void>("environment_proxy_set",{id,proxy}),
  status:()=>invoke<string>("vault_status"), create:(password:string)=>invoke<void>("vault_create",{password}), unlock:(password:string)=>invoke<void>("vault_unlock",{password}), changePassword:(currentPassword:string,newPassword:string)=>invoke<void>("vault_change_password",{currentPassword,newPassword}), lock:()=>invoke<void>("vault_lock"), reset:()=>invoke<void>("vault_reset"),
- environments:()=>invoke<Environment[]>("environments_list"), saveEnvironment:(draft:EnvironmentDraft)=>invoke<Environment>("environment_save",{draft}), updateEnvironment:(id:string,draft:EnvironmentDraft)=>invoke<Environment>("environment_update",{id,draft}), cloneEnvironment:(id:string,newName:string)=>invoke<Environment>("environment_clone",{id,newName}), deleteEnvironment:(id:string,confirmed:boolean)=>invoke<void>("environment_delete",{id,confirmed}), openUrl:(id:string,record?:{model:string;id:number})=>invoke<void>("environment_open_url",{id,record:record ?? null}), check:(id:string)=>invoke<Health>("environment_check",{id}), checkDraft:(draft:EnvironmentDraft)=>invoke<Health>("environment_check_draft",{draft}), databases:(url:string)=>invoke<string[]>("environment_databases",{url}), setTags:(id:string,tags:string[])=>invoke<Environment>("environment_tags_set",{id,tags}), mode:(id:string,mode:WriteMode,minutes?:number)=>invoke<void>("environment_write_mode",{id,mode,minutes}),
+ environments:()=>invoke<Environment[]>("environments_list"), saveEnvironment:(draft:EnvironmentDraft)=>invoke<Environment>("environment_save",{draft}), updateEnvironment:(id:string,draft:EnvironmentDraft)=>invoke<Environment>("environment_update",{id,draft}), cloneEnvironment:(id:string,newName:string)=>invoke<Environment>("environment_clone",{id,newName}), deleteEnvironment:(id:string,confirmed:boolean)=>invoke<void>("environment_delete",{id,confirmed}), openUrl:(id:string,record?:{model:string;id:number})=>invoke<void>("environment_open_url",{id,record:record ?? null}), check:(id:string)=>invoke<Health>("environment_check",{id}), checkDraft:(draft:EnvironmentDraft,proxy?:EnvironmentProxyInput)=>invoke<Health>("environment_check_draft",{draft,proxy:proxy ?? null}), databases:(url:string)=>invoke<string[]>("environment_databases",{url}), setTags:(id:string,tags:string[])=>invoke<Environment>("environment_tags_set",{id,tags}), mode:(id:string,mode:WriteMode,minutes?:number)=>invoke<void>("environment_write_mode",{id,mode,minutes}),
  serviceStatus:()=>invoke<ServiceStatus>("service_status"), activity:(cursor:ActivityCursor|null,filter:ActivityFilter)=>invoke<ActivityPage>("activity_list",{cursor,filter}), shell:(call:ShellCall)=>invoke<ShellResult>("shell_call",{call}), shellHistory:()=>invoke<HistoryEntry[]>("shell_history_list"), shellHistoryAdd:(command:string,environment?:string)=>invoke<void>("shell_history_add",{command,environment}), shellHistoryClear:()=>invoke<void>("shell_history_clear"), shellExport:(name:string,content:string)=>invoke<string>("shell_export",{name,content}), shellSessions:()=>invoke<string|null>("shell_sessions_load"), saveShellSessions:(data:string)=>invoke<void>("shell_sessions_save",{data}), clients:()=>invoke<Client[]>("clients_list"), updateClient:(id:string,label:string,environmentIds:string[]|null,capabilities:Capability[])=>invoke<Client>("client_update",{id,label,environmentIds,capabilities}),
  approvals:()=>invoke<Pending[]>("approvals_list"), decide:(id:string,approve:boolean,reason?:string)=>invoke<unknown>("approval_decide",{id,approve,reason:reason || null}),
  rules:(environmentId?:string)=>invoke<Rule[]>("rules_list",{environmentId:environmentId ?? null}), saveRule:(draft:RuleDraft)=>invoke<Rule>("rule_save",{draft}), deleteRule:(id:string)=>invoke<void>("rule_delete",{id})

@@ -57,7 +57,7 @@ impl OdooClient {
         let proxy = match &env.proxy {
             EnvironmentProxy::Custom(p) => Some(p),
             EnvironmentProxy::Direct => None,
-            EnvironmentProxy::Inherit => {
+            EnvironmentProxy::Inherit | EnvironmentProxy::Profile { .. } => {
                 return Err(OdxError::validation(
                     "validation.proxy.configuration_invalid",
                     "unresolved environment proxy",

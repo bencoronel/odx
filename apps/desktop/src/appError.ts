@@ -102,6 +102,10 @@ const codeKeys: Record<string, string> = {
   "validation.proxy.password_reentry": "errors.validation.proxyPasswordReentry",
   "validation.proxy.password_requires_username": "errors.validation.proxyPasswordRequiresUsername",
   "validation.proxy.host_invalid": "proxy.errors.host",
+  "validation.proxy.name_invalid": "proxy.errors.name",
+  "validation.proxy.name_taken": "proxy.errors.nameTaken",
+  "validation.proxy.in_use": "proxy.errors.inUse",
+  "validation.proxy.not_found": "proxy.errors.notFound",
   "validation.proxy.port_invalid": "proxy.errors.port",
   "validation.proxy.username_invalid": "proxy.errors.userColon",
   "validation.proxy.password_missing_username": "proxy.errors.passwordNeedsUser",
@@ -150,7 +154,7 @@ const codeKeys: Record<string, string> = {
   output_too_large: "errors.codes.responseTooLarge",
   output_storage_error: "errors.codes.persistence",
 };
-const safeParameterNames = new Set(["status", "kind", "limitMiB", "setting", "min", "max", "limit"]);
+const safeParameterNames = new Set(["status", "kind", "limitMiB", "setting", "min", "max", "limit", "count"]);
 
 /** Parse only the structured desktop IPC contract. Arbitrary exception text is never trusted as detail. */
 export function normalizeAppError(reason: unknown): AppError {

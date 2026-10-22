@@ -389,9 +389,13 @@ pub async fn environment_check(
 #[tauri::command]
 pub async fn environment_check_draft(
     draft: EnvironmentDraft,
+    proxy: Option<odx_core::proxy::EnvironmentProxyInput>,
     core: State<'_, Arc<Core>>,
 ) -> Result<odx_core::HealthReport, AppError> {
-    core.check_draft(draft).await.map_err(AppError::from)
+    let proxy = proxy.unwrap_or(odx_core::proxy::EnvironmentProxyInput::Inherit);
+    core.check_draft_with_proxy(draft, proxy)
+        .await
+        .map_err(AppError::from)
 }
 #[tauri::command]
 pub async fn environment_databases(
@@ -515,19 +519,43 @@ pub async fn headers_set(
         .map_err(AppError::from)
 }
 
-/// Global proxy with credential placeholders.
+/// Named proxies with credential placeholders.
 #[tauri::command]
-pub async fn proxy_get(
+pub async fn proxies_get(
     core: State<'_, Arc<Core>>,
-) -> Result<Option<odx_core::proxy::ProxyView>, AppError> {
-    core.proxy().await.map_err(AppError::from)
+) -> Result<odx_core::proxy::ProxiesView, AppError> {
+    core.proxies().await.map_err(AppError::from)
 }
 #[tauri::command]
-pub async fn proxy_set(
-    proxy: Option<odx_core::proxy::ProxyInput>,
+pub async fn proxy_save(
+    id: Option<String>,
+    proxy: odx_core::proxy::ProxyInput,
+    core: State<'_, Arc<Core>>,
+) -> Result<String, AppError> {
+    core.save_proxy(id, proxy).await.map_err(AppError::from)
+}
+/// Reach an environment URL through an unsaved proxy.
+#[tauri::command]
+pub async fn proxy_test(
+    id: Option<String>,
+    proxy: odx_core::proxy::ProxyInput,
+    url: String,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::proxy::ProxyTestReport, AppError> {
+    core.test_proxy(id, proxy, &url)
+        .await
+        .map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn proxy_delete(id: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+    core.delete_proxy(&id).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn proxy_default_set(
+    id: Option<String>,
     core: State<'_, Arc<Core>>,
 ) -> Result<(), AppError> {
-    core.set_proxy(proxy).await.map_err(AppError::from)
+    core.set_default_proxy(id).await.map_err(AppError::from)
 }
 #[tauri::command]
 pub async fn environment_proxy_get(

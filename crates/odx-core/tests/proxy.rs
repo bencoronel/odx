@@ -9,12 +9,51 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use support::proxy::{HIDDEN_HOST, TestProxy, closed_port, digest_proxy, http_proxy, socks_proxy};
 
+/// Save the proxy called `name`, creating it if needed; returns its id.
+pub async fn named(
+    core: &odx_core::Core,
+    name: &str,
+    mut input: odx_core::proxy::ProxyInput,
+) -> odx_core::error::Result<String> {
+    input.name = name.into();
+    let id = core
+        .proxies()
+        .await?
+        .proxies
+        .into_iter()
+        .find(|p| p.name == name)
+        .map(|p| p.id);
+    core.save_proxy(id, input).await
+}
+/// The default proxy, saved as "General"; `None` makes the default direct.
+pub async fn set_global(
+    core: &odx_core::Core,
+    input: Option<odx_core::proxy::ProxyInput>,
+) -> odx_core::error::Result<()> {
+    let id = match input {
+        Some(input) => Some(named(core, "General", input).await?),
+        None => None,
+    };
+    core.set_default_proxy(id).await
+}
+/// A proxy of the environment's own, saved as "Own <id>" and selected for it.
+pub async fn set_own(
+    core: &odx_core::Core,
+    env: &str,
+    input: odx_core::proxy::ProxyInput,
+) -> odx_core::error::Result<()> {
+    let id = named(core, &format!("Own {env}"), input).await?;
+    core.set_environment_proxy(env, odx_core::proxy::EnvironmentProxyInput::Profile { id })
+        .await
+}
+
 const PROTOCOLS: [Protocol; 3] = [Protocol::LegacyJsonrpc, Protocol::Xmlrpc, Protocol::Json2];
 const USER: &str = "fixture-proxy-user";
 const PASSWORD: &str = "fixture-proxy-pass";
 
 fn proxy(url: &str) -> ProxyInput {
     ProxyInput {
+        name: String::new(),
         url: url.into(),
         username: String::new(),
         password: String::new(),
@@ -22,6 +61,7 @@ fn proxy(url: &str) -> ProxyInput {
 }
 fn proxy_with_auth(url: &str, user: &str, password: &str) -> ProxyInput {
     ProxyInput {
+        name: String::new(),
         url: url.into(),
         username: user.into(),
         password: password.into(),
@@ -76,7 +116,7 @@ async fn assert_all_egress_through(general: &TestProxy, scheme: &str) {
     // Without a proxy, hidden-name DNS fails, proving there is no alternate route.
     let report = core.check_environment(&ids[0]).await.unwrap();
     assert_eq!(report.network_error.as_deref(), Some("dns"), "{report:?}");
-    core.set_proxy(Some(proxy(&general.url(scheme))))
+    set_global(&core, Some(proxy(&general.url(scheme))))
         .await
         .unwrap();
     let client = flow::client(&core).await;
@@ -176,7 +216,7 @@ async fn https_destinations_tunnel_through_connect_and_socks_and_keep_tls_verifi
             ))
             .await
             .unwrap();
-        core.set_proxy(Some(proxy(&proxy_url))).await.unwrap();
+        set_global(&core, Some(proxy(&proxy_url))).await.unwrap();
         let report = core.check_environment(&env.id).await.unwrap();
         // Tunnel succeeds but the certificate is untrusted: classify as tls.
         assert_eq!(report.network_error.as_deref(), Some("tls"), "{report:?}");
@@ -217,23 +257,22 @@ async fn custom_environment_proxy_overrides_the_general_one_and_direct_bypasses_
         core.check_environment(&direct.id).await.unwrap().status,
         "ok"
     );
-    core.set_proxy(Some(proxy(&general.url("http"))))
+    set_global(&core, Some(proxy(&general.url("http"))))
         .await
         .unwrap();
-    core.set_environment_proxy(
-        &custom.id,
-        EnvironmentProxyInput::Custom(proxy(&own.url("socks5h"))),
-    )
-    .await
-    .unwrap();
+    set_own(&core, &custom.id, proxy(&own.url("socks5h")))
+        .await
+        .unwrap();
     core.set_environment_proxy(&direct.id, EnvironmentProxyInput::Direct)
         .await
         .unwrap();
-    let view = core.environment_proxy(&inherit.id).await.unwrap();
-    assert_eq!(
-        view.inherited.as_deref(),
-        Some(general.url("http").as_str())
-    );
+    let view = core.proxies().await.unwrap();
+    let default = view
+        .proxies
+        .iter()
+        .find(|p| Some(&p.id) == view.default.as_ref())
+        .unwrap();
+    assert_eq!(default.url, general.url("http"));
 
     let before = (general.log.connections(), own.log.connections());
     assert_eq!(
@@ -274,7 +313,7 @@ async fn custom_environment_proxy_overrides_the_general_one_and_direct_bypasses_
             .any(|e| e.starts_with("POST http://odoo.invalid"))
     );
     // Removing the global proxy restores direct access; the hidden name stops resolving.
-    core.set_proxy(None).await.unwrap();
+    set_global(&core, None).await.unwrap();
     let report = core.check_environment(&inherit.id).await.unwrap();
     assert_eq!(report.network_error.as_deref(), Some("dns"), "{report:?}");
     assert_eq!(
@@ -308,7 +347,7 @@ async fn proxy_authentication_is_required_and_rejections_are_proxy_errors() {
         (socks.url("socks5h"), "socks5h"),
     ] {
         for (user, password) in [("", ""), (USER, "fixture-wrong-pass")] {
-            core.set_proxy(Some(proxy_with_auth(&url, user, password)))
+            set_global(&core, Some(proxy_with_auth(&url, user, password)))
                 .await
                 .unwrap();
             // HTTP forwarding/HTTPS CONNECT return 407; SOCKS rejects the method or credentials.
@@ -333,7 +372,7 @@ async fn proxy_authentication_is_required_and_rejections_are_proxy_errors() {
             assert!(error.message.contains("proxy"), "{error:?}");
             assert!(!error.message.contains("fixture-wrong-pass"), "{error:?}");
         }
-        core.set_proxy(Some(proxy_with_auth(&url, USER, PASSWORD)))
+        set_global(&core, Some(proxy_with_auth(&url, USER, PASSWORD)))
             .await
             .unwrap();
         assert_eq!(
@@ -373,11 +412,14 @@ async fn an_unreachable_proxy_fails_without_falling_back_to_a_direct_connection(
     let client = flow::client(&core).await;
     let port = closed_port().await;
     for scheme in ["http", "socks5h"] {
-        core.set_proxy(Some(proxy_with_auth(
-            &format!("{scheme}://127.0.0.1:{port}"),
-            USER,
-            PASSWORD,
-        )))
+        set_global(
+            &core,
+            Some(proxy_with_auth(
+                &format!("{scheme}://127.0.0.1:{port}"),
+                USER,
+                PASSWORD,
+            )),
+        )
         .await
         .unwrap();
         let report = core.check_environment(&env.id).await.unwrap();
@@ -438,7 +480,7 @@ async fn changing_a_proxy_revokes_pending_requests_and_invalidates_authenticatio
     let (call_a, pending_a) = flow::queue(&core, &writer, "write", write("A")).await;
     let (call_b, pending_b) = flow::queue(&core, &writer, "write", write("B")).await;
     // Global proxy changes affect inheriting environments only.
-    core.set_proxy(Some(proxy(&general.url("http"))))
+    set_global(&core, Some(proxy(&general.url("http"))))
         .await
         .unwrap();
     assert!(core.decide(&pending_a.id, true).await.is_err());
@@ -452,7 +494,7 @@ async fn changing_a_proxy_revokes_pending_requests_and_invalidates_authenticatio
     assert!(general.log.connections() > 0);
     // Saving identical proxy settings changes nothing.
     let (call_a, pending_a) = flow::queue(&core, &writer, "write", write("A")).await;
-    core.set_proxy(Some(proxy(&general.url("http"))))
+    set_global(&core, Some(proxy(&general.url("http"))))
         .await
         .unwrap();
     let pending: Vec<String> = core
@@ -464,12 +506,9 @@ async fn changing_a_proxy_revokes_pending_requests_and_invalidates_authenticatio
         .collect();
     assert!(pending.contains(&pending_a.id) && pending.contains(&pending_b.id));
     // B's custom proxy change revokes only B's requests.
-    core.set_environment_proxy(
-        &b.id,
-        EnvironmentProxyInput::Custom(proxy(&own.url("http"))),
-    )
-    .await
-    .unwrap();
+    set_own(&core, &b.id, proxy(&own.url("http")))
+        .await
+        .unwrap();
     assert_eq!(flow::error_code(call_b).await, "approval_revoked");
     core.decide(&pending_a.id, true).await.unwrap();
     call_a.await.unwrap().unwrap();
@@ -486,26 +525,29 @@ async fn proxy_credentials_never_leave_the_backend() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("vault.sqlite3");
     let core = Core::new(&path).unwrap();
-    assert!(core.proxy().await.is_err(), "locked");
+    assert!(core.proxies().await.is_err(), "locked");
     core.create("fictional master password").await.unwrap();
-    assert!(core.proxy().await.unwrap().is_none());
+    assert!(core.proxies().await.unwrap().proxies.is_empty());
     let env = core
         .save_environment(draft("A", &hidden(&sim.url), Protocol::LegacyJsonrpc))
         .await
         .unwrap();
     let url = proxy_server.url("http");
-    core.set_proxy(Some(proxy_with_auth(&url, USER, PASSWORD)))
+    set_global(&core, Some(proxy_with_auth(&url, USER, PASSWORD)))
         .await
         .unwrap();
-    core.set_environment_proxy(
-        &env.id,
-        EnvironmentProxyInput::Custom(proxy_with_auth(&url, USER, PASSWORD)),
-    )
-    .await
-    .unwrap();
-    let general = core.proxy().await.unwrap().unwrap();
+    set_own(&core, &env.id, proxy_with_auth(&url, USER, PASSWORD))
+        .await
+        .unwrap();
+    let proxies = core.proxies().await.unwrap();
+    let general = proxies
+        .proxies
+        .iter()
+        .find(|p| p.name == "General")
+        .unwrap()
+        .clone();
     let local = core.environment_proxy(&env.id).await.unwrap();
-    let shown = serde_json::to_string(&general).unwrap() + &serde_json::to_string(&local).unwrap();
+    let shown = serde_json::to_string(&proxies).unwrap() + &serde_json::to_string(&local).unwrap();
     assert!(
         !shown.contains(USER) && !shown.contains(PASSWORD),
         "{shown}"
@@ -513,20 +555,29 @@ async fn proxy_credentials_never_leave_the_backend() {
     assert_eq!(general.url, url);
     assert_eq!(general.username, odx_core::headers::MASK);
     assert_eq!(general.password, odx_core::headers::MASK);
-    assert_eq!(local.mode, ProxyMode::Custom);
+    assert_eq!(local.mode, ProxyMode::Profile);
     // Saving placeholders preserves credentials and authentication.
-    let back = local.proxy.unwrap();
-    core.set_environment_proxy(
+    let back = proxies
+        .proxies
+        .iter()
+        .find(|p| Some(&p.id) == local.id.as_ref())
+        .unwrap()
+        .clone();
+    set_own(
+        &core,
         &env.id,
-        EnvironmentProxyInput::Custom(proxy_with_auth(&back.url, &back.username, &back.password)),
+        proxy_with_auth(&back.url, &back.username, &back.password),
     )
     .await
     .unwrap();
-    core.set_proxy(Some(proxy_with_auth(
-        &general.url,
-        &general.username,
-        &general.password,
-    )))
+    set_global(
+        &core,
+        Some(proxy_with_auth(
+            &general.url,
+            &general.username,
+            &general.password,
+        )),
+    )
     .await
     .unwrap();
     assert_eq!(core.check_environment(&env.id).await.unwrap().status, "ok");
@@ -571,22 +622,14 @@ async fn proxy_credentials_never_leave_the_backend() {
         "ok"
     );
     // Reject placeholders without saved credentials.
-    reopened
-        .set_environment_proxy(&env.id, EnvironmentProxyInput::Inherit)
-        .await
-        .unwrap();
     assert!(
-        reopened
-            .set_environment_proxy(
-                &env.id,
-                EnvironmentProxyInput::Custom(proxy_with_auth(
-                    &url,
-                    odx_core::headers::MASK,
-                    odx_core::headers::MASK
-                )),
-            )
-            .await
-            .is_err()
+        named(
+            &reopened,
+            "Fresh",
+            proxy_with_auth(&url, odx_core::headers::MASK, odx_core::headers::MASK),
+        )
+        .await
+        .is_err()
     );
 }
 
@@ -607,19 +650,17 @@ async fn proxy_urls_are_validated_without_echoing_credentials() {
         "127.0.0.1:3128",
         "",
     ] {
-        let error = core.set_proxy(Some(proxy(url))).await.unwrap_err();
+        let error = set_global(&core, Some(proxy(url))).await.unwrap_err();
         assert!(!error.to_string().contains("fixture-url-pass"), "{url}");
     }
     // Reject passwords without usernames and colons in Basic usernames.
     for (user, password) in [("", PASSWORD), ("a:b", PASSWORD)] {
-        let error = core
-            .set_proxy(Some(proxy_with_auth(
-                "http://127.0.0.1:3128",
-                user,
-                password,
-            )))
-            .await
-            .unwrap_err();
+        let error = set_global(
+            &core,
+            Some(proxy_with_auth("http://127.0.0.1:3128", user, password)),
+        )
+        .await
+        .unwrap_err();
         assert!(!error.to_string().contains(PASSWORD));
     }
     for url in [
@@ -628,14 +669,78 @@ async fn proxy_urls_are_validated_without_echoing_credentials() {
         "socks5h://[::1]:1080",
         "HTTP://Proxy.Example.Test:80",
     ] {
-        core.set_proxy(Some(proxy(url))).await.unwrap();
+        set_global(&core, Some(proxy(url))).await.unwrap();
     }
-    assert_eq!(
-        core.proxy().await.unwrap().unwrap().url,
-        "http://proxy.example.test:80"
-    );
-    let value: Value = serde_json::to_value(core.proxy().await.unwrap()).unwrap();
+    let proxies = core.proxies().await.unwrap();
+    assert_eq!(proxies.proxies.len(), 1, "saved over the same proxy");
+    assert_eq!(proxies.proxies[0].url, "http://proxy.example.test:80");
+    let value: Value = serde_json::to_value(&proxies.proxies[0]).unwrap();
     assert_eq!(value["username"], "");
+    // Names are required and unique, ignoring case.
+    let unnamed = core
+        .save_proxy(None, proxy("http://127.0.0.1:3128"))
+        .await
+        .unwrap_err();
+    assert_eq!(unnamed.code(), "validation.proxy.name_invalid");
+    let mut taken = proxy("http://127.0.0.1:3128");
+    taken.name = "general".into();
+    assert_eq!(
+        core.save_proxy(None, taken).await.unwrap_err().code(),
+        "validation.proxy.name_taken"
+    );
+}
+
+#[tokio::test]
+async fn proxies_in_use_cannot_be_deleted_and_the_default_can_be_cleared() {
+    let (core, _tmp) = core().await;
+    let env = core
+        .save_environment(draft("A", "https://a.test", Protocol::LegacyJsonrpc))
+        .await
+        .unwrap();
+    set_own(&core, &env.id, proxy("http://own.test:3128"))
+        .await
+        .unwrap();
+    set_global(&core, Some(proxy("http://general.test:3128")))
+        .await
+        .unwrap();
+    let view = core.proxies().await.unwrap();
+    let own = view
+        .proxies
+        .iter()
+        .find(|p| p.name.starts_with("Own"))
+        .unwrap()
+        .id
+        .clone();
+    let general = view.default.clone().unwrap();
+    let counts: Vec<_> = view
+        .proxies
+        .iter()
+        .map(|p| (p.name.starts_with("Own"), p.environments))
+        .collect();
+    assert!(
+        counts.contains(&(true, 1)) && counts.contains(&(false, 0)),
+        "{counts:?}"
+    );
+    let error = core.delete_proxy(&own).await.unwrap_err();
+    assert_eq!(error.code(), "validation.proxy.in_use");
+    // Unknown proxies are rejected instead of silently connecting directly.
+    let unknown = core
+        .set_environment_proxy(
+            &env.id,
+            EnvironmentProxyInput::Profile {
+                id: "missing".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(unknown.code(), "validation.proxy.not_found");
+    core.delete_proxy(&general).await.unwrap();
+    assert!(core.proxies().await.unwrap().default.is_none());
+    core.set_environment_proxy(&env.id, EnvironmentProxyInput::Inherit)
+        .await
+        .unwrap();
+    core.delete_proxy(&own).await.unwrap();
+    assert!(core.proxies().await.unwrap().proxies.is_empty());
 }
 
 #[tokio::test]
@@ -657,13 +762,10 @@ async fn editing_the_connection_keeps_the_environment_proxy() {
         ))
         .await
         .unwrap();
-    core.set_environment_proxy(
+    set_own(
+        &core,
         &custom.id,
-        EnvironmentProxyInput::Custom(proxy_with_auth(
-            "http://proxy.example.test:3128",
-            USER,
-            PASSWORD,
-        )),
+        proxy_with_auth("http://proxy.example.test:3128", USER, PASSWORD),
     )
     .await
     .unwrap();
@@ -679,8 +781,12 @@ async fn editing_the_connection_keeps_the_environment_proxy() {
         core.update_environment(&env.id, changed).await.unwrap();
     }
     let view = core.environment_proxy(&custom.id).await.unwrap();
-    assert_eq!(view.mode, ProxyMode::Custom);
-    let kept = view.proxy.unwrap();
+    assert_eq!(view.mode, ProxyMode::Profile);
+    let proxies = core.proxies().await.unwrap().proxies;
+    let kept = proxies
+        .iter()
+        .find(|p| Some(&p.id) == view.id.as_ref())
+        .unwrap();
     assert_eq!(kept.url, "http://proxy.example.test:3128");
     assert!(!kept.username.is_empty(), "credentials kept (shown masked)");
     assert_eq!(
@@ -700,18 +806,24 @@ async fn a_digest_only_proxy_is_reached_through_a_relay_started_on_demand() {
         .await
         .unwrap();
     // Accepted Basic credentials never probe for Digest.
-    core.set_proxy(Some(proxy_with_auth(&basic.url("http"), USER, PASSWORD)))
-        .await
-        .unwrap();
+    set_global(
+        &core,
+        Some(proxy_with_auth(&basic.url("http"), USER, PASSWORD)),
+    )
+    .await
+    .unwrap();
     assert_eq!(core.check_environment(&env.id).await.unwrap().status, "ok");
     assert!(
         basic.log.entries().iter().all(|e| !e.starts_with("407")),
         "{:?}",
         basic.log.entries()
     );
-    core.set_proxy(Some(proxy_with_auth(&digest.url("http"), USER, PASSWORD)))
-        .await
-        .unwrap();
+    set_global(
+        &core,
+        Some(proxy_with_auth(&digest.url("http"), USER, PASSWORD)),
+    )
+    .await
+    .unwrap();
     let report = core.check_environment(&env.id).await.unwrap();
     assert_eq!(report.status, "ok", "{report:?} {:?}", digest.log.entries());
     let entries = digest.log.entries();
@@ -752,11 +864,10 @@ async fn a_digest_only_proxy_is_reached_through_a_relay_started_on_demand() {
         .await
         .unwrap();
     let tunnel_only = digest_proxy(USER, PASSWORD).await;
-    core.set_proxy(Some(proxy_with_auth(
-        &tunnel_only.url("http"),
-        USER,
-        PASSWORD,
-    )))
+    set_global(
+        &core,
+        Some(proxy_with_auth(&tunnel_only.url("http"), USER, PASSWORD)),
+    )
     .await
     .unwrap();
     let report = core.check_environment(&tls.id).await.unwrap();
@@ -773,9 +884,12 @@ async fn a_digest_only_proxy_is_reached_through_a_relay_started_on_demand() {
     );
 
     let wrong = digest_proxy(USER, "fixture-wrong-pass").await;
-    core.set_proxy(Some(proxy_with_auth(&wrong.url("http"), USER, PASSWORD)))
-        .await
-        .unwrap();
+    set_global(
+        &core,
+        Some(proxy_with_auth(&wrong.url("http"), USER, PASSWORD)),
+    )
+    .await
+    .unwrap();
     let report = core.check_environment(&env.id).await.unwrap();
     assert_eq!(report.network_error.as_deref(), Some("proxy"), "{report:?}");
     assert!(!wrong.log.entries().iter().any(|e| e.starts_with("CONNECT")));
@@ -789,4 +903,83 @@ async fn a_digest_only_proxy_is_reached_through_a_relay_started_on_demand() {
         .unwrap_err();
     assert!(error.message.contains("Digest"), "{error:?}");
     assert!(!activity_dump(&core).await.contains(PASSWORD));
+}
+
+#[tokio::test]
+async fn testing_a_proxy_reaches_the_server_only_through_it() {
+    let sim = support::simulator().await;
+    let proxy_server = http_proxy(Some((USER, PASSWORD))).await;
+    let (core, _tmp) = core().await;
+    let url = hidden(&sim.url);
+    let good = proxy_with_auth(&proxy_server.url("http"), USER, PASSWORD);
+    // Only the proxy resolves the hidden host, so any answer proves the route.
+    let before = proxy_server.log.connections();
+    core.test_proxy(None, good, &url).await.unwrap();
+    assert!(proxy_server.log.connections() > before);
+    // Wrong credentials and dead proxies are proxy errors, never a direct fallback.
+    let wrong = proxy_with_auth(&proxy_server.url("http"), USER, "fixture-wrong-pass");
+    let error = core.test_proxy(None, wrong, &url).await.unwrap_err();
+    assert_eq!(error.code(), "upstream.network");
+    assert!(
+        error.to_string().contains("proxy") && !error.to_string().contains("fixture-wrong-pass"),
+        "{error}"
+    );
+    let dead = proxy(&format!("http://127.0.0.1:{}", closed_port().await));
+    assert!(core.test_proxy(None, dead, &url).await.is_err());
+    // A saved proxy is tested with its stored credentials behind the mask.
+    let id = named(
+        &core,
+        "Office",
+        proxy_with_auth(&proxy_server.url("http"), USER, PASSWORD),
+    )
+    .await
+    .unwrap();
+    let masked = proxy_with_auth(
+        &proxy_server.url("http"),
+        odx_core::headers::MASK,
+        odx_core::headers::MASK,
+    );
+    assert!(core.test_proxy(Some(id), masked, &url).await.is_ok());
+    // Testing saves nothing.
+    assert_eq!(core.proxies().await.unwrap().proxies.len(), 1);
+}
+
+#[tokio::test]
+async fn a_draft_is_checked_through_the_proxy_chosen_for_it() {
+    let sim = support::simulator().await;
+    let (core, _tmp) = core().await;
+    // The default proxy is dead, so only a direct check reaches the simulator.
+    set_global(
+        &core,
+        Some(proxy(&format!("http://127.0.0.1:{}", closed_port().await))),
+    )
+    .await
+    .unwrap();
+    let inherited = core
+        .check_draft(draft("New", &sim.url, Protocol::LegacyJsonrpc))
+        .await
+        .unwrap();
+    assert_eq!(
+        inherited.network_error.as_deref(),
+        Some("proxy"),
+        "{inherited:?}"
+    );
+    let direct = core
+        .check_draft_with_proxy(
+            draft("New", &sim.url, Protocol::LegacyJsonrpc),
+            EnvironmentProxyInput::Direct,
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct.status, "ok", "{direct:?}");
+    let unknown = core
+        .check_draft_with_proxy(
+            draft("New", &sim.url, Protocol::LegacyJsonrpc),
+            EnvironmentProxyInput::Profile {
+                id: "missing".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(unknown.code(), "validation.proxy.not_found");
 }

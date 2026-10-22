@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import { Icon } from "./Icon";
 import Select from "./Select";
-import { ipc, type ProxyView } from "./ipc";
+import { ipc, type Environment, type ProxiesView, type ProxyInput, type ProxyTest, type ProxyView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type AppError, type ErrorState } from "./appError";
 import { usePreventUnload } from "./windowState";
@@ -12,7 +12,6 @@ export const PROXY_MASK = "••••••••••••";
 
 export type ProxyKind = "http" | "https" | "socks5h";
 export type ProxyDraft = { kind: ProxyKind; host: string; port: string; username: string; password: string };
-type ProxyMessage = { key: "proxy.saved" | "proxy.disabled"; failed: false } | { error: AppError; failed: true };
 export const proxyKindLabels: Record<ProxyKind, string> = { http: "HTTP", https: "HTTPS", socks5h: "SOCKS5" };
 const proxyKindOptions = (Object.keys(proxyKindLabels) as ProxyKind[]).map((kind) => ({ value: kind, label: proxyKindLabels[kind] }));
 const defaultPorts: Record<ProxyKind, string> = { http: "3128", https: "3128", socks5h: "1080" };
@@ -20,13 +19,13 @@ const defaultPorts: Record<ProxyKind, string> = { http: "3128", https: "3128", s
 export const emptyProxy = (kind: ProxyKind = "http"): ProxyDraft => ({ kind, host: "", port: defaultPorts[kind], username: "", password: "" });
 
 /** The backend normalizes URLs to `scheme://host:port`. */
-export function draftFromView(view: ProxyView): ProxyDraft {
+export function draftFromView(view: Omit<ProxyInput, "name">): ProxyDraft {
   const match = /^(http|https|socks5h):\/\/(\[[^\]]+\]|[^:/]+):(\d+)$/.exec(view.url);
   const kind = (match?.[1] ?? "http") as ProxyKind;
   return { kind, host: match?.[2] ?? "", port: match?.[3] ?? defaultPorts[kind], username: view.username, password: view.password };
 }
 
-export function proxyInput(draft: ProxyDraft): ProxyView {
+export function proxyInput(draft: ProxyDraft): Omit<ProxyInput, "name"> {
   const host = draft.host.trim();
   const bracketed = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return { url: `${draft.kind}://${bracketed}:${draft.port.trim()}`, username: draft.username, password: draft.password };
@@ -66,10 +65,9 @@ export function ProxyFields({ idPrefix, value, change, error }: { idPrefix: stri
   </div>;
 }
 
-export function ProxyKindSelect({ id, value, change, allowNone, className }: { id: string; value: ProxyKind | "none"; change: (kind: ProxyKind | "none") => void; allowNone?: boolean; className?: string }) {
+export function ProxyKindSelect({ id, value, change, className }: { id: string; value: ProxyKind; change: (kind: ProxyKind) => void; className?: string }) {
   const { t } = useTranslation();
-  const options = allowNone ? [{ value: "none" as const, label: t("proxy.none") }, ...proxyKindOptions] : proxyKindOptions;
-  return <Select id={id} className={className} label={t("proxy.kind")} value={value} options={options} onChange={change} />;
+  return <Select id={id} className={className} label={t("proxy.kind")} value={value} options={proxyKindOptions} onChange={change} />;
 }
 
 /** Preserve host and credentials; update the port only if it was the default. */
@@ -77,70 +75,134 @@ export function withKind(draft: ProxyDraft, kind: ProxyKind): ProxyDraft {
   return { ...draft, kind, port: draft.port === defaultPorts[draft.kind] ? defaultPorts[kind] : draft.port };
 }
 
-const signature = (input: ProxyView | null) => JSON.stringify(input);
+type Editing = { id: string | null; name: string; draft: ProxyDraft };
+type TestState = { running: true } | { result: ProxyTest } | { error: AppError };
 
-/** Saving the global proxy revokes pending approvals in inheriting environments. */
+/** Reach one environment's server through the proxy being edited, before saving it. */
+function ProxyTester({ id, draft, invalid }: { id: string | null; draft: ProxyDraft; invalid: boolean }) {
+  const { t } = useTranslation();
+  const [envs, setEnvs] = useState<Environment[] | null>(null);
+  const [target, setTarget] = useState("");
+  const [state, setState] = useState<TestState | null>(null);
+  useEffect(() => { ipc.environments().then((list) => { setEnvs(list); setTarget((current) => current || list[0]?.id || ""); }, () => setEnvs([])); }, []);
+  // Any edit makes the last result stale.
+  useEffect(() => setState(null), [draft]);
+  if (!envs?.length) return envs ? <p className="hint">{t("proxy.testNeedsEnvironment")}</p> : null;
+  const url = envs.find((env) => env.id === target)?.url ?? envs[0].url;
+  const run = () => {
+    setState({ running: true });
+    ipc.testProxy(id, { name: "", ...proxyInput(draft) }, url).then((result) => setState({ result }), (e) => setState({ error: normalizeAppError(e) }));
+  };
+  return <div className="proxy-test">
+    <span className="row gap-2">
+      <Select className="proxy-test-target" label={t("proxy.testTarget")} value={target} options={envs.map((env) => ({ value: env.id, label: env.name }))} onChange={setTarget} />
+      <button type="button" className="btn sm" disabled={invalid || (state !== null && "running" in state)} onClick={run}>
+        <Icon name={state && "running" in state ? "refresh" : "plug"} className={state && "running" in state ? "spin" : undefined} />{t("proxy.test")}</button>
+    </span>
+    {state && "result" in state && <p className="text-ok proxy-test-result" role="status"><Icon name="check" />{state.result.server_version
+      ? t("proxy.testOkVersion", { latency: state.result.latency_ms, version: state.result.server_version })
+      : t("proxy.testOk", { latency: state.result.latency_ms })}</p>}
+    {state && "error" in state && <p className="text-danger proxy-test-result" role="alert"><Icon name="alert" />{formatAppError(state.error)}</p>}
+  </div>;
+}
+
+/** Named proxies and the default one. Changes that move an environment to another proxy revoke its pending approvals. */
 export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount?: number; onSaved?: () => void | Promise<void> }) {
   const { t } = useTranslation();
-  const [stored, setStored] = useState<ProxyView | null | undefined>(undefined);
-  const [draft, setDraft] = useState<ProxyDraft | null>(null);
-  const [loadError, setLoadError] = useState<AppError | null>(null);
-  const [message, setMessage] = useState<ProxyMessage | null>(null);
+  const [view, setView] = useState<ProxiesView | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  usePreventUnload(saving || confirming || (stored !== undefined
-    && JSON.stringify(draft) !== JSON.stringify(stored ? draftFromView(stored) : null)));
-  const reset = (view: ProxyView | null) => { setStored(view); setDraft(view ? draftFromView(view) : null); };
-  useEffect(() => { ipc.proxy().then(reset).catch((e) => setLoadError(normalizeAppError(e))); }, []);
-  if (loadError) return <section className="panel"><header className="panel-header"><h3>{t("proxy.title")}</h3></header>
-    <p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(loadError)}</p></section>;
-  if (stored === undefined) return <section className="panel" aria-busy="true"><header className="panel-header"><h3>{t("proxy.title")}</h3></header></section>;
+  const [confirm, setConfirm] = useState<(() => Promise<void>) | null>(null);
+  const [deleting, setDeleting] = useState<ProxyView | null>(null);
+  usePreventUnload(saving || confirm !== null || editing !== null);
+  useEffect(() => { ipc.proxies().then(setView).catch((e) => setError(normalizeAppError(e))); }, []);
+  if (!view) return <section className="panel" aria-busy={!error}><header className="panel-header"><h3>{t("proxy.list")}</h3></header>
+    {error && <div className="panel-body"><p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}</section>;
 
-  const next = draft ? proxyInput(draft) : null;
-  const initial = stored ? proxyInput(draftFromView(stored)) : null;
-  const changed = signature(next) !== signature(initial);
-  const invalid = draft ? proxyError(draft) : null;
-
-  async function save() {
-    setSaving(true);
-    setMessage(null);
-    try {
-      await ipc.saveProxy(next);
-      reset(await ipc.proxy());
-      setMessage({ key: next ? "proxy.saved" : "proxy.disabled", failed: false });
-      await onSaved?.();
-    } catch (e) {
-      setMessage({ error: normalizeAppError(e), failed: true });
-      throw e;
-    } finally { setSaving(false); }
-  }
-
-  return <form className="panel" aria-label={t("proxy.egressLabel")} autoComplete="off" onSubmit={(event) => {
-    event.preventDefault();
-    if (!changed || saving || invalid) return;
-    if (pendingCount > 0) setConfirming(true); else void save().catch(() => undefined);
-  }}>
-    <header className="panel-header"><h3>{t("proxy.title")}</h3>
-      <span className="row gap-2">
-        {changed && !saving && <span className="hint">{t("common.unsaved")}</span>}
-        <button type="button" className="btn sm" disabled={saving || !changed} onClick={() => { reset(stored); setMessage(null); }}>{t("common.discard")}</button>
-        <button type="submit" className="btn sm primary" disabled={saving || !changed || Boolean(invalid)}>{saving ? t("common.saving") : t("common.save")}</button>
-      </span>
-    </header>
-    <fieldset className="panel-body" disabled={saving}>
-      <p className="hint">{t("proxy.help")}</p>
-      <label className="field" htmlFor="proxy-kind"><span>{t("proxy.type")}</span>
-        <ProxyKindSelect id="proxy-kind" className="w-48" allowNone value={draft?.kind ?? "none"} change={(kind) => { setMessage(null); setDraft(kind === "none" ? null : draft ? withKind(draft, kind) : emptyProxy(kind)); }} /></label>
-      {draft && <ProxyFields idPrefix="proxy" value={draft} error={changed ? invalid : null} change={(d) => { setMessage(null); setDraft(d); }} />}
-      {draft?.kind === "socks5h" && <p className="hint">{t("proxy.socksHint")}</p>}
-      {changed && invalid && <p id="proxy-error" className="hint text-danger" role="alert">{formatAppError(invalid)}</p>}
-      {message && <p className={`banner ${message.failed ? "danger" : "ok"}`} role={message.failed ? "alert" : "status"}><Icon name={message.failed ? "alert" : "check"} />{message.failed ? formatAppError(message.error) : t(message.key)}</p>}
+  /** Run a change, asking first when it may revoke pending approvals. */
+  const run = (action: () => Promise<void>, revokes = true) => {
+    const go = async () => {
+      setSaving(true);
+      setError(null);
+      try { await action(); setView(await ipc.proxies()); await onSaved?.(); }
+      catch (e) { setError(normalizeAppError(e)); throw e; }
+      finally { setSaving(false); }
+    };
+    if (revokes && pendingCount > 0) setConfirm(() => go); else void go().catch(() => undefined);
+  };
+  const invalid = editing ? proxyError(editing.draft) ?? (editing.name.trim() ? null : { code: "validation.proxy.name_invalid" }) : null;
+  const save = () => {
+    if (!editing || invalid) return;
+    const { id, name, draft } = editing;
+    run(async () => { await ipc.saveProxy(id, { name: name.trim(), ...proxyInput(draft) }); setEditing(null); }, id !== null);
+  };
+  const add = () => { setError(null); setEditing({ id: null, name: "", draft: emptyProxy() }); };
+  const busy = saving || editing !== null;
+  const proxies = [...view.proxies].sort((a, b) => a.name.localeCompare(b.name));
+  const title = editing?.id ? t("proxy.editTitle", { name: editing.name }) : t("proxy.newTitle");
+  const editor = editing && <form className="proxy-editor" aria-label={title} autoComplete="off" onSubmit={(e) => { e.preventDefault(); save(); }}>
+    <fieldset disabled={saving} className="proxy-body">
+      <strong>{title}</strong>
+      <div className="form-grid">
+        <label className="field"><span>{t("proxy.name")}</span><input autoFocus required maxLength={100} value={editing.name} placeholder={t("proxy.namePlaceholder")} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></label>
+        <label className="field" htmlFor="proxy-kind"><span>{t("proxy.type")}</span>
+          <ProxyKindSelect id="proxy-kind" value={editing.draft.kind} change={(kind) => setEditing({ ...editing, draft: withKind(editing.draft, kind) })} /></label>
+      </div>
+      <ProxyFields idPrefix="proxy" value={editing.draft} error={invalid} change={(draft) => setEditing({ ...editing, draft })} />
+      {editing.draft.kind === "socks5h" && <p className="hint">{t("proxy.socksHint")}</p>}
+      {invalid && <p id="proxy-error" className="hint text-danger">{formatAppError(invalid)}</p>}
+      <div className="proxy-editor-foot">
+        <ProxyTester id={editing.id} draft={editing.draft} invalid={Boolean(proxyError(editing.draft))} />
+        <span className="grow" />
+        <button type="button" className="btn sm" onClick={() => { setEditing(null); setError(null); }}>{t("common.cancel")}</button>
+        <button type="submit" className="btn sm primary" disabled={saving || Boolean(invalid)}>{saving ? t("common.saving") : editing.id ? t("common.save") : t("proxy.create")}</button>
+      </div>
     </fieldset>
-    <ApprovalDialog open={confirming} busy={saving} tone="warn"
+  </form>;
+
+  return <section className="panel" aria-label={t("proxy.list")}>
+    <header className="panel-header"><div><h3>{t("proxy.list")}</h3><p className="hint">{t("proxy.help")}</p></div>
+      {proxies.length > 0 && <button type="button" className="btn sm" disabled={busy} onClick={add}><Icon name="plus" />{t("proxy.add")}</button>}
+    </header>
+    {proxies.length === 0 && !editing && <div className="empty proxy-empty">
+      <span className="empty-icon"><Icon name="shield" /></span>
+      <p>{t("proxy.empty")}</p>
+      <div className="row"><button type="button" className="btn sm primary" onClick={add}><Icon name="plus" />{t("proxy.add")}</button></div>
+    </div>}
+    {proxies.length > 0 && <ul className="proxy-list" aria-label={t("proxy.list")}>{proxies.map((p) => {
+      if (editing?.id === p.id) return <li key={p.id}>{editor}</li>;
+      const { kind, host, port } = draftFromView(p);
+      const isDefault = view.default === p.id;
+      return <li key={p.id} className="setting-row">
+        <span className="tile"><Icon name={kind === "socks5h" ? "shield" : "globe"} /></span>
+        <div>
+          <strong className="row gap-2">{p.name}{isDefault && <span className="chip chip-tone tone-info">{t("proxy.isDefault")}</span>}</strong>
+          <p className="hint proxy-meta"><span className="mono">{proxyKindLabels[kind]} · {host}:{port}</span>
+            {p.username && <span><Icon name="key" />{t("proxy.withCredentials")}</span>}
+            <span>{p.environments ? t("proxy.usedBy", { count: p.environments }) : t("proxy.unused")}</span></p>
+        </div>
+        <span className="row gap-2">
+          <button type="button" className="btn sm ghost" disabled={busy} onClick={() => run(() => ipc.setDefaultProxy(isDefault ? null : p.id))}>{isDefault ? t("proxy.clearDefault") : t("proxy.makeDefault")}</button>
+          <button type="button" className="icon-btn sm" disabled={busy} aria-label={t("proxy.edit", { name: p.name })} data-tip={t("common.edit")} onClick={() => { setError(null); setEditing({ id: p.id, name: p.name, draft: draftFromView(p) }); }}><Icon name="pencil" /></button>
+          <button type="button" className="icon-btn sm" disabled={busy || p.environments > 0} aria-label={t("proxy.delete", { name: p.name })} data-tip={p.environments ? t("proxy.inUseTip", { count: p.environments }) : t("common.delete")} onClick={() => setDeleting(p)}><Icon name="trash" /></button>
+        </span>
+      </li>;
+    })}</ul>}
+    {editing?.id === null && editor}
+    {error && <div className="panel-body"><p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
+    <p className="hint proxy-notes"><Icon name="alert" />{t("proxy.notes")}</p>
+    <ApprovalDialog open={confirm !== null} busy={saving} tone="warn"
       title={t("proxy.saveTitle")}
       description={t("proxy.pendingWarning", { count: pendingCount })}
       confirmLabel={t("settingsTable.saveAndRevoke")}
-      onOpenChange={(open) => { if (!open && !saving) setConfirming(false); }}
-      onConfirm={async () => { await save(); setConfirming(false); }} />
-  </form>;
+      onOpenChange={(open) => { if (!open && !saving) setConfirm(null); }}
+      onConfirm={async () => { if (confirm) await confirm(); setConfirm(null); }} />
+    <ApprovalDialog open={deleting !== null} busy={saving} destructive
+      title={t("proxy.deleteTitle")}
+      description={deleting ? `${t("proxy.deleteWarning", { name: deleting.name })}${view.default === deleting.id ? ` ${t("proxy.deleteDefaultWarning")}` : ""}` : ""}
+      confirmLabel={t("common.delete")}
+      onOpenChange={(open) => { if (!open && !saving) setDeleting(null); }}
+      onConfirm={async () => { const target = deleting; setDeleting(null); if (target) run(() => ipc.deleteProxy(target.id), view.default === target.id); }} />
+  </section>;
 }

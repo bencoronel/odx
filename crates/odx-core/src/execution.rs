@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::{Mutex, oneshot};
 use uuid::Uuid;
 /// Shared limits key for unsaved drafts; per-call random ids would grow the slot map forever.
-const DRAFT_SLOTS: &str = "\0draft";
+pub(crate) const DRAFT_SLOTS: &str = "\0draft";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentView {
@@ -1007,7 +1007,26 @@ impl Core {
     }
     /// Check an unsaved draft like a new environment (global headers and proxy) without persisting anything.
     pub async fn check_draft(&self, draft: EnvironmentDraft) -> Result<HealthReport> {
-        let env = self.draft_connection(draft.into_environment()?).await?;
+        self.check_draft_with_proxy(draft, crate::proxy::EnvironmentProxyInput::Inherit)
+            .await
+    }
+    /// Check a draft through the proxy the new environment will use.
+    pub async fn check_draft_with_proxy(
+        &self,
+        draft: EnvironmentDraft,
+        proxy: crate::proxy::EnvironmentProxyInput,
+    ) -> Result<HealthReport> {
+        let mut env = draft.into_environment()?;
+        {
+            let s = self.inner.lock().await;
+            env.proxy = s
+                .vault
+                .as_ref()
+                .ok_or(OdxError::Locked)?
+                .data()
+                .chosen_proxy(proxy)?;
+        }
+        let env = self.draft_connection(env).await?;
         let started = std::time::Instant::now();
         let permits = self.limits.acquire(DRAFT_SLOTS).await?;
         let resolved = match env.protocol {

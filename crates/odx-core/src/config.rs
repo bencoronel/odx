@@ -224,8 +224,10 @@ pub(crate) struct VaultData {
     pub clients: Vec<crate::clients::ClientGrant>,
     pub rules: Vec<crate::policy::Rule>,
     pub settings: Settings,
-    /// Global outbound proxy; `None` means direct.
-    pub proxy: Option<crate::proxy::ProxySettings>,
+    /// Named outbound proxies.
+    pub proxies: Vec<crate::proxy::ProxyProfile>,
+    /// Proxy for environments that use the default; `None` means direct.
+    pub default_proxy: Option<String>,
     /// Saved expiry clock floor, restored on unlock.
     pub clock_floor: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -333,6 +335,11 @@ struct StoredVaultData {
     #[serde(default)]
     settings: Settings,
     #[serde(default)]
+    proxies: Vec<crate::proxy::ProxyProfile>,
+    #[serde(default)]
+    default_proxy: Option<String>,
+    /// Old single global proxy, migrated to `proxies` on load.
+    #[serde(default, skip_serializing)]
     proxy: Option<crate::proxy::ProxySettings>,
     #[serde(default)]
     clock_floor: Option<chrono::DateTime<chrono::Utc>>,
@@ -427,7 +434,9 @@ impl Serialize for VaultData {
             clients: self.clients.clone(),
             rules: self.rules.clone(),
             settings: self.settings,
-            proxy: self.proxy.clone(),
+            proxies: self.proxies.clone(),
+            default_proxy: self.default_proxy.clone(),
+            proxy: None,
             clock_floor: self.clock_floor,
         }
         .serialize(serializer)
@@ -439,7 +448,7 @@ impl<'de> Deserialize<'de> for VaultData {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         let stored = StoredVaultData::deserialize(deserializer)?;
-        Ok(Self {
+        let mut data = Self {
             global_disabled_context: stored.global_disabled_context,
             global_headers: stored.global_headers,
             environments: stored
@@ -451,9 +460,12 @@ impl<'de> Deserialize<'de> for VaultData {
             clients: stored.clients,
             rules: stored.rules,
             settings: stored.settings,
-            proxy: stored.proxy,
+            proxies: stored.proxies,
+            default_proxy: stored.default_proxy,
             clock_floor: stored.clock_floor,
-        })
+        };
+        data.migrate_legacy_proxies(stored.proxy);
+        Ok(data)
     }
 }
 

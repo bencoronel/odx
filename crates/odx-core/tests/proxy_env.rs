@@ -59,13 +59,19 @@ fn system_proxy_variables_are_ignored() {
         let report = core.check_environment(&hidden.id).await.unwrap();
         assert_eq!(report.network_error.as_deref(), Some("dns"), "{report:?}");
         // Configured global proxy applies even to NO_PROXY targets.
-        core.set_proxy(Some(ProxyInput {
-            url: configured.url("http"),
-            username: String::new(),
-            password: String::new(),
-        }))
-        .await
-        .unwrap();
+        let id = core
+            .save_proxy(
+                None,
+                ProxyInput {
+                    name: "General".into(),
+                    url: configured.url("http"),
+                    username: String::new(),
+                    password: String::new(),
+                },
+            )
+            .await
+            .unwrap();
+        core.set_default_proxy(Some(id)).await.unwrap();
         assert_eq!(
             core.check_environment(&hidden.id).await.unwrap().status,
             "ok"

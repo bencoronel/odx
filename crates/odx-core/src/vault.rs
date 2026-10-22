@@ -77,7 +77,8 @@ impl Vault {
             clients: vec![crate::clients::new_stdio_grant()],
             rules: vec![],
             settings: Default::default(),
-            proxy: None,
+            proxies: vec![],
+            default_proxy: None,
             clock_floor: None,
         };
         // Build in a temporary file and publish atomically to avoid partial databases.

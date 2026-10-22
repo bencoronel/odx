@@ -1,4 +1,4 @@
-//! Global and per-environment outbound proxies: inherit, custom or direct. Admin-only configuration and credentials are hidden from API/MCP clients.
+//! Named outbound proxies; one may be the default. Environments use the default, a named proxy or a direct connection. Admin-only configuration and credentials are hidden from API/MCP clients.
 use crate::{
     Core,
     config::{Environment, VaultData},
@@ -26,12 +26,24 @@ impl PartialEq for ProxySettings {
     }
 }
 
-/// Environment proxy; connection_environment resolves Inherit before use.
+/// A named proxy saved in settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ProxyProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub settings: ProxySettings,
+}
+
+/// Stored: Inherit (the default proxy), Profile or Direct. connection_environment resolves it to Custom or Direct before use; stored Custom only exists in old vaults and is migrated on load.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub(crate) enum EnvironmentProxy {
     #[default]
     Inherit,
+    Profile {
+        id: String,
+    },
     Custom(ProxySettings),
     Direct,
 }
@@ -40,13 +52,15 @@ pub(crate) enum EnvironmentProxy {
 #[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
     Inherit,
-    Custom,
+    Profile,
     Direct,
 }
 
 /// Window input; MASK preserves saved username/password values.
 #[derive(Deserialize)]
 pub struct ProxyInput {
+    #[serde(default)]
+    pub name: String,
     pub url: String,
     #[serde(default)]
     pub username: String,
@@ -62,6 +76,7 @@ impl Drop for ProxyInput {
 impl std::fmt::Debug for ProxyInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProxyInput")
+            .field("name", &self.name)
             .field("url", &self.url)
             .field("username", &"[redacted]")
             .field("password", &"[redacted]")
@@ -73,33 +88,56 @@ impl std::fmt::Debug for ProxyInput {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum EnvironmentProxyInput {
     Inherit,
-    Custom(ProxyInput),
+    Profile { id: String },
     Direct,
 }
 
 /// Window view with MASK for saved credentials, or empty if absent.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProxyView {
+    pub id: String,
+    pub name: String,
     pub url: String,
     pub username: String,
     pub password: String,
+    /// Environments that select this proxy by name; they block deletion.
+    pub environments: usize,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxiesView {
+    pub proxies: Vec<ProxyView>,
+    /// Id of the default proxy; None means environments that use the default connect directly.
+    pub default: Option<String>,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvironmentProxyView {
     pub mode: ProxyMode,
-    /// Custom proxy only.
-    pub proxy: Option<ProxyView>,
-    /// Inherited global proxy URL; None means direct.
-    pub inherited: Option<String>,
+    /// Profile mode only.
+    pub id: Option<String>,
 }
 
-fn view(p: &ProxySettings) -> ProxyView {
+fn view(p: &ProxyProfile, environments: usize) -> ProxyView {
     let mask = |s: &Secret| if s.is_empty() { "" } else { MASK }.to_owned();
     ProxyView {
-        url: p.url.clone(),
-        username: mask(&p.username),
-        password: mask(&p.password),
+        id: p.id.clone(),
+        name: p.name.clone(),
+        url: p.settings.url.clone(),
+        username: mask(&p.settings.username),
+        password: mask(&p.settings.password),
+        environments,
     }
+}
+
+const MAX_NAME: usize = 100;
+fn normalize_name(raw: &str) -> Result<String> {
+    let name = raw.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME || name.chars().any(char::is_control) {
+        return Err(OdxError::validation(
+            "validation.proxy.name_invalid",
+            "proxy name is required, up to 100 characters",
+        ));
+    }
+    Ok(name.to_owned())
 }
 
 /// scheme://host:port with http, https or socks5h and an explicit port.
@@ -167,7 +205,7 @@ fn secret_or_stored(
 }
 
 impl ProxyInput {
-    fn into_settings(self, stored: Option<&ProxySettings>) -> Result<ProxySettings> {
+    fn to_settings(&self, stored: Option<&ProxySettings>) -> Result<ProxySettings> {
         let url = normalize_url(&self.url)?;
         let username = secret_or_stored(
             &self.username,
@@ -207,15 +245,39 @@ impl ProxyInput {
 }
 
 impl VaultData {
-    /// Resolve custom, direct or inherited global proxy.
+    fn selected_by(&self, id: &str) -> usize {
+        self.environments
+            .iter()
+            .filter(|e| matches!(&e.proxy, EnvironmentProxy::Profile { id: p } if p == id))
+            .count()
+    }
+    /// The stored form of a window choice; unknown proxies are rejected.
+    pub(crate) fn chosen_proxy(&self, proxy: EnvironmentProxyInput) -> Result<EnvironmentProxy> {
+        Ok(match proxy {
+            EnvironmentProxyInput::Inherit => EnvironmentProxy::Inherit,
+            EnvironmentProxyInput::Direct => EnvironmentProxy::Direct,
+            EnvironmentProxyInput::Profile { id } => {
+                self.profile(&id).ok_or_else(not_found)?;
+                EnvironmentProxy::Profile { id }
+            }
+        })
+    }
+    fn profile(&self, id: &str) -> Option<&ProxyProfile> {
+        self.proxies.iter().find(|p| p.id == id)
+    }
+    /// Resolve the default or named proxy to its settings; a missing proxy never falls back to direct.
     pub(crate) fn effective_proxy(&self, env: &Environment) -> EnvironmentProxy {
-        match &env.proxy {
-            EnvironmentProxy::Inherit => self
-                .proxy
-                .clone()
-                .map_or(EnvironmentProxy::Direct, EnvironmentProxy::Custom),
-            other => other.clone(),
-        }
+        let id = match &env.proxy {
+            EnvironmentProxy::Inherit => match &self.default_proxy {
+                Some(id) => id,
+                None => return EnvironmentProxy::Direct,
+            },
+            EnvironmentProxy::Profile { id } => id,
+            other => return other.clone(),
+        };
+        self.profile(id).map_or(EnvironmentProxy::Inherit, |p| {
+            EnvironmentProxy::Custom(p.settings.clone())
+        })
     }
     /// Effective proxies in use; drop HTTP clients for unused proxies.
     fn active_proxies(&self) -> Vec<Option<ProxySettings>> {
@@ -226,6 +288,34 @@ impl VaultData {
                 _ => None,
             })
             .collect()
+    }
+    /// Turn the old global proxy and per-environment custom proxies into named proxies.
+    pub(crate) fn migrate_legacy_proxies(&mut self, global: Option<ProxySettings>) {
+        let add = |proxies: &mut Vec<ProxyProfile>, settings: ProxySettings, name: String| {
+            if let Some(p) = proxies.iter().find(|p| p.settings == settings) {
+                return p.id.clone();
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            proxies.push(ProxyProfile {
+                id: id.clone(),
+                name,
+                settings,
+            });
+            id
+        };
+        if let Some(settings) = global {
+            self.default_proxy = Some(add(&mut self.proxies, settings, "Proxy".into()));
+        }
+        for env in &mut self.environments {
+            if let EnvironmentProxy::Custom(settings) = &env.proxy {
+                let id = add(
+                    &mut self.proxies,
+                    settings.clone(),
+                    format!("Proxy {}", env.name),
+                );
+                env.proxy = EnvironmentProxy::Profile { id };
+            }
+        }
     }
 }
 
@@ -262,10 +352,17 @@ impl Environment {
 const MIN_REDACTED_USERNAME: usize = 4;
 
 impl Core {
-    pub async fn proxy(&self) -> Result<Option<ProxyView>> {
+    pub async fn proxies(&self) -> Result<ProxiesView> {
         let s = self.inner.lock().await;
         let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
-        Ok(data.proxy.as_ref().map(view))
+        Ok(ProxiesView {
+            proxies: data
+                .proxies
+                .iter()
+                .map(|p| view(p, data.selected_by(&p.id)))
+                .collect(),
+            default: data.default_proxy.clone(),
+        })
     }
     pub async fn environment_proxy(&self, id: &str) -> Result<EnvironmentProxyView> {
         let s = self.inner.lock().await;
@@ -275,91 +372,224 @@ impl Core {
             .iter()
             .find(|e| e.id == id)
             .ok_or(OdxError::EnvironmentNotFound)?;
-        let (mode, proxy) = match &env.proxy {
-            EnvironmentProxy::Inherit => (ProxyMode::Inherit, None),
-            EnvironmentProxy::Custom(p) => (ProxyMode::Custom, Some(view(p))),
-            EnvironmentProxy::Direct => (ProxyMode::Direct, None),
-        };
-        Ok(EnvironmentProxyView {
-            mode,
-            proxy,
-            inherited: data.proxy.as_ref().map(|p| p.url.clone()),
+        Ok(match &env.proxy {
+            EnvironmentProxy::Profile { id } => EnvironmentProxyView {
+                mode: ProxyMode::Profile,
+                id: Some(id.clone()),
+            },
+            EnvironmentProxy::Direct => EnvironmentProxyView {
+                mode: ProxyMode::Direct,
+                id: None,
+            },
+            _ => EnvironmentProxyView {
+                mode: ProxyMode::Inherit,
+                id: None,
+            },
         })
     }
-    /// Update the global proxy; increment inheriting environment revisions, invalidate authentication and revoke pending approvals. Unchanged settings do nothing.
-    pub async fn set_proxy(&self, proxy: Option<ProxyInput>) -> Result<()> {
+    /// Create (`id` None) or update a named proxy; returns its id.
+    pub async fn save_proxy(&self, id: Option<String>, input: ProxyInput) -> Result<String> {
+        let mut out = String::new();
+        self.change_proxies(|data| {
+            let name = normalize_name(&input.name)?;
+            if data
+                .proxies
+                .iter()
+                .any(|p| Some(&p.id) != id.as_ref() && p.name.to_lowercase() == name.to_lowercase())
+            {
+                return Err(OdxError::validation(
+                    "validation.proxy.name_taken",
+                    "a proxy with this name already exists",
+                ));
+            }
+            match &id {
+                Some(id) => {
+                    let profile = data
+                        .proxies
+                        .iter_mut()
+                        .find(|p| &p.id == id)
+                        .ok_or_else(not_found)?;
+                    profile.settings = input.to_settings(Some(&profile.settings))?;
+                    profile.name = name;
+                    out = id.clone();
+                }
+                None => {
+                    let settings = input.to_settings(None)?;
+                    out = uuid::Uuid::new_v4().to_string();
+                    data.proxies.push(ProxyProfile {
+                        id: out.clone(),
+                        name,
+                        settings,
+                    });
+                }
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(out)
+    }
+    /// Delete a named proxy that no environment selects; deleting the default leaves the default unset (direct).
+    pub async fn delete_proxy(&self, id: &str) -> Result<()> {
+        self.change_proxies(|data| {
+            let users = data.selected_by(id);
+            if users > 0 {
+                return Err(OdxError::validation_with_params(
+                    "validation.proxy.in_use",
+                    serde_json::json!({ "count": users }),
+                    format!("{users} environments use this proxy"),
+                ));
+            }
+            let before = data.proxies.len();
+            data.proxies.retain(|p| p.id != id);
+            if data.proxies.len() == before {
+                return Err(not_found());
+            }
+            if data.default_proxy.as_deref() == Some(id) {
+                data.default_proxy = None;
+            }
+            Ok(())
+        })
+        .await
+    }
+    /// Choose the proxy used by environments that use the default; None connects them directly.
+    pub async fn set_default_proxy(&self, id: Option<String>) -> Result<()> {
+        self.change_proxies(|data| {
+            if let Some(id) = &id
+                && data.profile(id).is_none()
+            {
+                return Err(not_found());
+            }
+            data.default_proxy = id;
+            Ok(())
+        })
+        .await
+    }
+    /// Choose an environment's proxy.
+    pub async fn set_environment_proxy(
+        &self,
+        id: &str,
+        proxy: EnvironmentProxyInput,
+    ) -> Result<()> {
+        self.change_proxies(|data| {
+            let next = data.chosen_proxy(proxy)?;
+            data.environments
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or(OdxError::EnvironmentNotFound)?
+                .proxy = next;
+            Ok(())
+        })
+        .await
+    }
+    /// Apply a proxy change. Environments whose effective proxy changes get a new connection revision, lose cached authentication and have pending approvals revoked. No effective change saves nothing.
+    async fn change_proxies(
+        &self,
+        change: impl FnOnce(&mut VaultData) -> Result<()>,
+    ) -> Result<()> {
         let mut s = self.inner.lock().await;
         let vault = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let next = proxy
-            .map(|p| p.into_settings(vault.data().proxy.as_ref()))
-            .transpose()?;
-        if next == vault.data().proxy {
+        let old = vault.data();
+        let mut next = old.clone();
+        change(&mut next)?;
+        let same_proxy = |a: &Environment, b: &Environment| a.proxy == b.proxy;
+        if next.proxies == old.proxies
+            && next.default_proxy == old.default_proxy
+            && next
+                .environments
+                .iter()
+                .zip(&old.environments)
+                .all(|(a, b)| same_proxy(a, b))
+        {
             return Ok(());
         }
-        let ids = vault.update(|data| {
-            data.proxy = next;
-            Ok(data
-                .environments
-                .iter_mut()
-                .filter(|e| e.proxy == EnvironmentProxy::Inherit)
-                .map(|e| {
-                    e.revision += 1;
-                    e.detected_protocol = None;
-                    e.id.clone()
-                })
-                .collect::<Vec<_>>())
+        let ids: Vec<String> = next
+            .environments
+            .iter()
+            .filter(|e| {
+                old.environments
+                    .iter()
+                    .find(|o| o.id == e.id)
+                    .is_none_or(|o| old.effective_proxy(o) != next.effective_proxy(e))
+            })
+            .map(|e| e.id.clone())
+            .collect();
+        vault.update(|data| {
+            *data = next;
+            for env in data.environments.iter_mut().filter(|e| ids.contains(&e.id)) {
+                env.revision += 1;
+                env.detected_protocol = None;
+            }
+            Ok(())
         })?;
         let active = vault.data().active_proxies();
         self.odoo.retain_clients(&active);
         self.environment_changed(s, &ids).await;
         Ok(())
     }
-    /// Update an environment proxy and increment its connection revision.
-    pub async fn set_environment_proxy(
+}
+
+/// A proxy test that reached the Odoo server.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyTestReport {
+    pub latency_ms: u64,
+    /// None when the server answered but did not report its version.
+    pub server_version: Option<String>,
+}
+
+impl Core {
+    /// Reach `url` through an unsaved proxy (`id` resolves masked credentials). Any answer from the server proves the proxy works; only network and proxy failures are errors.
+    pub async fn test_proxy(
         &self,
-        id: &str,
-        proxy: EnvironmentProxyInput,
-    ) -> Result<()> {
-        let mut s = self.inner.lock().await;
-        let vault = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let current = vault
-            .data()
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .ok_or(OdxError::EnvironmentNotFound)?
-            .proxy
-            .clone();
-        let next = match proxy {
-            EnvironmentProxyInput::Inherit => EnvironmentProxy::Inherit,
-            EnvironmentProxyInput::Direct => EnvironmentProxy::Direct,
-            EnvironmentProxyInput::Custom(input) => {
-                let stored = match &current {
-                    EnvironmentProxy::Custom(p) => Some(p),
-                    _ => None,
-                };
-                EnvironmentProxy::Custom(input.into_settings(stored)?)
-            }
+        id: Option<String>,
+        input: ProxyInput,
+        url: &str,
+    ) -> Result<ProxyTestReport> {
+        crate::config::validate_url(url)?;
+        let (settings, headers, active) = {
+            let s = self.inner.lock().await;
+            let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+            let stored = id
+                .as_deref()
+                .and_then(|id| data.profile(id))
+                .map(|p| &p.settings);
+            (
+                input.to_settings(stored)?,
+                crate::headers::merge(&data.global_headers, &[]),
+                data.active_proxies(),
+            )
         };
-        if next == current {
-            return Ok(());
-        }
-        vault.update(|data| {
-            let env = data
-                .environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            env.proxy = next;
-            env.revision += 1;
-            env.detected_protocol = None;
-            Ok(())
-        })?;
-        let active = vault.data().active_proxies();
+        let env = Environment {
+            id: uuid::Uuid::new_v4().to_string(),
+            url: url.trim_end_matches('/').into(),
+            protocol: crate::config::Protocol::LegacyJsonrpc,
+            headers,
+            proxy: EnvironmentProxy::Custom(settings),
+            ..Default::default()
+        };
+        let permits = self.limits.acquire(crate::execution::DRAFT_SLOTS).await?;
+        let started = std::time::Instant::now();
+        let result = self.odoo.version(&env).await;
+        let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        drop(permits);
+        // Drop the client built for this unsaved proxy.
         self.odoo.retain_clients(&active);
-        self.environment_changed(s, &[id.to_owned()]).await;
-        Ok(())
+        self.odoo.invalidate_environment(&env.id).await;
+        match result {
+            Ok(server_version) => Ok(ProxyTestReport {
+                latency_ms,
+                server_version,
+            }),
+            Err(error @ OdxError::Network { .. }) => Err(error),
+            Err(_) => Ok(ProxyTestReport {
+                latency_ms,
+                server_version: None,
+            }),
+        }
     }
+}
+
+fn not_found() -> OdxError {
+    OdxError::validation("validation.proxy.not_found", "proxy not found")
 }
 
 #[cfg(test)]
@@ -407,14 +637,20 @@ mod tests {
     #[test]
     fn debug_and_views_never_show_credentials() {
         let input = ProxyInput {
+            name: "Office".into(),
             url: "http://h:1".into(),
             username: "fixture-user".into(),
             password: "fixture-pass".into(),
         };
         assert!(!format!("{input:?}").contains("fixture-"));
-        let settings = input.into_settings(None).unwrap();
+        let settings = input.to_settings(None).unwrap();
         assert!(!format!("{settings:?}").contains("fixture-"));
-        let shown = serde_json::to_string(&view(&settings)).unwrap();
+        let profile = ProxyProfile {
+            id: "p".into(),
+            name: "Office".into(),
+            settings,
+        };
+        let shown = serde_json::to_string(&view(&profile, 0)).unwrap();
         assert!(!shown.contains("fixture-"));
     }
     #[test]
@@ -430,7 +666,70 @@ mod tests {
             .unwrap()
             .remove("proxy");
         let restored: VaultData = serde_json::from_value(old).unwrap();
-        assert!(restored.proxy.is_none());
+        assert!(restored.proxies.is_empty() && restored.default_proxy.is_none());
         assert_eq!(restored.environments[0].proxy, EnvironmentProxy::Inherit);
+    }
+    #[test]
+    fn old_global_and_custom_proxies_become_named_proxies() {
+        let settings = |url: &str| ProxySettings {
+            url: url.into(),
+            username: Secret::new("fixture-user").unwrap(),
+            password: Secret::new("fixture-pass").unwrap(),
+        };
+        let env = |id: &str, proxy| Environment {
+            id: id.into(),
+            name: id.into(),
+            proxy,
+            ..Default::default()
+        };
+        let data = VaultData {
+            environments: vec![
+                env("a", EnvironmentProxy::Custom(settings("http://a:1"))),
+                env("b", EnvironmentProxy::Custom(settings("http://g:1"))),
+                env("c", EnvironmentProxy::Direct),
+                env("d", EnvironmentProxy::Inherit),
+            ],
+            ..Default::default()
+        };
+        let mut old = serde_json::to_value(data).unwrap();
+        old["proxy"] = serde_json::to_value(settings("http://g:1")).unwrap();
+        let restored: VaultData = serde_json::from_value(old).unwrap();
+        let names: Vec<_> = restored.proxies.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Proxy", "Proxy a"]);
+        let global = &restored.proxies[0];
+        assert_eq!(restored.default_proxy.as_ref(), Some(&global.id));
+        let modes: Vec<_> = restored
+            .environments
+            .iter()
+            .map(|e| e.proxy.clone())
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                EnvironmentProxy::Profile {
+                    id: restored.proxies[1].id.clone()
+                },
+                EnvironmentProxy::Profile {
+                    id: global.id.clone()
+                },
+                EnvironmentProxy::Direct,
+                EnvironmentProxy::Inherit,
+            ]
+        );
+        // Every environment resolves to the same settings it used before.
+        assert_eq!(
+            restored.effective_proxy(&restored.environments[1]),
+            EnvironmentProxy::Custom(settings("http://g:1"))
+        );
+        assert_eq!(
+            restored.effective_proxy(&restored.environments[3]),
+            EnvironmentProxy::Custom(settings("http://g:1"))
+        );
+        assert!(
+            serde_json::to_value(&restored)
+                .unwrap()
+                .get("proxy")
+                .is_none()
+        );
     }
 }

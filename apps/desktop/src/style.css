@@ -716,6 +716,7 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 /* Sticks to the top of .page-scroll; the negative margin cancels its top padding. */
 .settings-nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; margin: -16px 0 -12px; padding: 12px 0 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
 .settings-group-title { scroll-margin-top: 60px; }
+.proxy-body { display: grid; gap: 10px; }
 .settings .props.compact > div { grid-template-columns: 170px minmax(0, 1fr); }
 
 /* Unlock */
@@ -849,3 +850,19 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .env-list-tags .chip.match { color: var(--accent); border-color: var(--accent); }
 .list-empty .btn { margin-top: 8px; }
 .list-empty { display: grid; justify-items: center; }
+.proxy-list > li + li, .proxy-list + .proxy-editor { border-top: 1px solid var(--border); }
+.proxy-list .setting-row { gap: 12px; }
+.proxy-list .setting-row > div { flex: 1; }
+.proxy-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.proxy-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.proxy-meta .icon { width: 12px; height: 12px; }
+.proxy-editor { padding: 14px; background: var(--surface-2); border-top: 1px solid var(--border); }
+.proxy-list > li:first-child > .proxy-editor { border-top: 0; }
+.proxy-empty { padding: 28px 24px; }
+.proxy-editor-foot { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+.proxy-test { display: grid; gap: 6px; min-width: 0; }
+.proxy-test-target { width: 180px; }
+.proxy-test-result { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+.proxy-test-result .icon { flex: none; width: 13px; height: 13px; }
+.proxy-notes { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); font-size: var(--fs-xs); line-height: 1.5; }
+.proxy-notes .icon { flex: none; width: 13px; height: 13px; margin-top: 2px; }
