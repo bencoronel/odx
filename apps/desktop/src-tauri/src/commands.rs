@@ -547,6 +547,22 @@ pub async fn proxy_test(
         .map_err(AppError::from)
 }
 #[tauri::command]
+pub async fn tag_colors_get(
+    core: State<'_, Arc<Core>>,
+) -> Result<std::collections::BTreeMap<String, String>, AppError> {
+    core.tag_colors().await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn tag_color_set(
+    tag: String,
+    color: Option<String>,
+    core: State<'_, Arc<Core>>,
+) -> Result<(), AppError> {
+    core.set_tag_color(&tag, color.as_deref())
+        .await
+        .map_err(AppError::from)
+}
+#[tauri::command]
 pub async fn proxy_delete(id: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
     core.delete_proxy(&id).await.map_err(AppError::from)
 }

@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "./Icon";
-import type { Environment } from "./ipc";
+import type { Environment, WriteMode } from "./ipc";
+import { modeIcons, modeLabels, modeTone } from "./ModeSelect";
 import { sameTag, uniqueTags } from "./TagEditor";
+import { tagColor, useTagColors } from "./tagColors";
 
-/** Filter button with a panel to pick tags (all must match) and the free-writes filter. */
-export default function EnvironmentFilters({ envs, tags, setTags, writableOnly, setWritableOnly }: {
+export const WRITE_MODES: WriteMode[] = ["read_only", "approval", "temporary", "permanent"];
+
+/** Filter button with a panel to pick tags (all must match) and write modes (any may match). */
+export default function EnvironmentFilters({ envs, tags, setTags, modes, setModes }: {
   envs: Environment[];
   tags: string[];
   setTags: (tags: string[]) => void;
-  writableOnly: boolean;
-  setWritableOnly: (value: boolean) => void;
+  modes: WriteMode[];
+  setModes: (modes: WriteMode[]) => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -22,12 +26,13 @@ export default function EnvironmentFilters({ envs, tags, setTags, writableOnly, 
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
+  const colors = useTagColors();
   const allTags = uniqueTags(envs.flatMap((env) => env.tags)).sort((a, b) => a.localeCompare(b));
   const count = (tag: string) => envs.filter((env) => env.tags.some((other) => sameTag(other, tag))).length;
   const checked = (tag: string) => tags.some((other) => sameTag(other, tag));
   const q = query.trim().toLowerCase();
   const listed = allTags.filter((tag) => !q || tag.toLowerCase().includes(q));
-  const active = tags.length + (writableOnly ? 1 : 0);
+  const active = tags.length + modes.length;
   const toggle = (tag: string) => setTags(checked(tag) ? tags.filter((other) => !sameTag(other, tag)) : [...tags, tag]);
 
   return <div className="filter-menu" ref={root} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
@@ -43,16 +48,22 @@ export default function EnvironmentFilters({ envs, tags, setTags, writableOnly, 
           : <ul className="filter-options" aria-label={t("environments.tagFilter")}>
             {listed.map((tag) => <li key={tag}><label className="filter-option">
               <input type="checkbox" checked={checked(tag)} onChange={() => toggle(tag)} />
-              <span className="truncate">{tag}</span><span className="filter-count">{count(tag)}</span>
+              <span className={`tag-dot tone-${tagColor(colors, tag)}`} aria-hidden="true" /><span className="truncate">{tag}</span><span className="filter-count">{count(tag)}</span>
             </label></li>)}
             {listed.length === 0 && <li className="hint">{t("environments.noMatches")}</li>}
           </ul>}
       </div>
       <div className="filter-section">
         <span className="filter-heading">{t("environments.writeMode")}</span>
-        <label className="filter-option"><input type="checkbox" checked={writableOnly} onChange={(e) => setWritableOnly(e.target.checked)} /><span>{t("environments.freeWrites")}</span></label>
+        <ul className="filter-options" aria-label={t("environments.modeFilter")}>
+          {WRITE_MODES.map((mode) => <li key={mode}><label className="filter-option">
+            <input type="checkbox" checked={modes.includes(mode)} onChange={() => setModes(modes.includes(mode) ? modes.filter((m) => m !== mode) : [...modes, mode])} />
+            <span className={`filter-mode tone-${modeTone[mode]}`} aria-hidden="true"><Icon name={modeIcons[mode]} /></span>
+            <span className="truncate">{t(modeLabels[mode] as "mode.readOnly")}</span><span className="filter-count">{envs.filter((env) => env.write_mode === mode).length}</span>
+          </label></li>)}
+        </ul>
       </div>
-      {active > 0 && <div className="filter-footer"><button type="button" className="btn sm ghost" onClick={() => { setTags([]); setWritableOnly(false); }}>{t("environments.clearFilters")}</button></div>}
+      {active > 0 && <div className="filter-footer"><button type="button" className="btn sm ghost" onClick={() => { setTags([]); setModes([]); }}>{t("environments.clearFilters")}</button></div>}
     </div>}
   </div>;
 }

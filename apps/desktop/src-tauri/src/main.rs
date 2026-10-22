@@ -154,6 +154,8 @@ fn main() {
             commands::proxy_save,
             commands::proxy_delete,
             commands::proxy_test,
+            commands::tag_colors_get,
+            commands::tag_color_set,
             commands::proxy_default_set,
             commands::environment_proxy_get,
             commands::environment_proxy_set,

@@ -35,7 +35,8 @@
     "disabled": "Desactivado",
     "hourShort": "h",
     "minuteShort": "min",
-    "unsaved": "Cambios sin guardar"
+    "unsaved": "Cambios sin guardar",
+    "clearSearch": "Borrar búsqueda"
   },
   "settings": {
     "language": {
@@ -228,7 +229,14 @@
     "revokeEnvironmentRequests": "Se revocan las solicitudes pendientes de este entorno y se vuelve a autenticar con Odoo.",
     "revokeAllRequests": "Se revocan las solicitudes pendientes de todos los entornos y se vuelve a autenticar con Odoo.",
     "globalHeadersHint": "Se envían en cada petición a Odoo. Cada entorno puede sustituirlas. Los cambios se guardan al salir del campo.",
-    "globalContextHint": "Se añade al contexto de cada llamada a Odoo, por ejemplo lang o tz. Cada entorno puede sustituir cualquier clave. Los cambios se guardan al salir del campo."
+    "globalContextHint": "Se añade al contexto de cada llamada a Odoo, por ejemplo lang o tz. Cada entorno puede sustituir cualquier clave. Los cambios se guardan al salir del campo.",
+    "environmentContextHint": "Se añade a cada llamada de este entorno y sustituye las claves globales.",
+    "environmentHeadersHint": "Se envían en cada petición de este entorno y sustituyen a las globales.",
+    "ownContext_one": "{{count}} clave propia",
+    "ownContext_other": "{{count}} claves propias",
+    "ownHeaders_one": "{{count}} cabecera propia",
+    "ownHeaders_other": "{{count}} cabeceras propias",
+    "onlyInherited": "Solo valores globales"
   },
   "environmentForm": {
     "errors": {
@@ -273,6 +281,12 @@
     "testOk": "Conexión correcta · Odoo {{version}} · {{latency}} ms",
     "databasesFound_one": "El servidor tiene 1 base de datos; puedes elegirla o escribir otra.",
     "databasesFound_other": "El servidor tiene {{count}} bases de datos; elige una o escribe otra.",
+    "serverTitle": "Servidor",
+    "serverHint": "Dónde está Odoo y qué base de datos usar.",
+    "accessTitle": "Acceso",
+    "accessHint": "El usuario de Odoo con el que actúan los clientes MCP/API. Usa uno con solo los permisos que necesiten.",
+    "identityTitle": "Nombre y organización",
+    "identityHint": "Cómo te refieres tú y los clientes MCP/API a este entorno.",
     "proxyHint": "Elige un proxy guardado o conexión directa. Los proxies se gestionan en Ajustes."
   },
   "settingsPage": {
@@ -581,7 +595,7 @@
     "emptyHint": "Añade la conexión a una instancia de Odoo. Los entornos se crean en solo lectura.",
     "focusWhileCreating": "Termina o cancela el nuevo entorno para ver {{name}}.",
     "listLabel": "Lista de entornos",
-    "filterPlaceholder": "Filtrar entornos",
+    "filterPlaceholder": "Filtrar, o # para etiquetas",
     "filterLabel": "Filtrar entornos",
     "checkAll": "Comprobar todos los entornos",
     "checkAllHint": "Comprobar todos\nVuelve a medir la conexión de cada entorno",
@@ -629,8 +643,25 @@
     "filterCount": "{{shown}} de {{total}} entornos",
     "noDefaultProxy": "directo",
     "missingProxy": "Proxy inexistente",
-    "removeWriteFilter": "Quitar filtro de escritura libre",
-    "freeWrites": "Escritura libre"
+    "writeModeHint": "Qué pueden hacer los clientes MCP/API en este entorno.",
+    "connectionHint": "Servidor, credenciales y proxy de este entorno.",
+    "proxySummary": "Proxy: {{proxy}}",
+    "moreActions": "Más acciones",
+    "tagColor": "Color de {{tag}}",
+    "tagColorTip": "Cambiar color",
+    "colors": {
+      "neutral": "Gris",
+      "info": "Azul",
+      "ok": "Verde",
+      "warn": "Amarillo",
+      "danger": "Rojo",
+      "accent": "Morado"
+    },
+    "filterByTag": "Filtrar por esta etiqueta",
+    "modeFilter": "Filtrar por modo de escritura",
+    "removeModeFilter": "Quitar filtro {{mode}}",
+    "noMatchesHint": "Prueba con otra búsqueda o quita algún filtro.",
+    "noEnvironmentMatches": "Ningún entorno coincide"
   },
   "headerInput": {
     "suggestionsFor": "Sugerencias para {{field}}",

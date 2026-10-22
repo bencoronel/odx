@@ -88,7 +88,6 @@ export default function App() {
   const [clients, setClients] = useState<Client[]>([]);
   const [services, setServices] = useState<ServiceStatus | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [writableOnly, setWritableOnly] = useWindowState("app.writableOnly", false);
   const [approvalFilter, setApprovalFilter] = useWindowState("app.approvalFilter", "");
   // Environment to show when Environments opens from elsewhere (an approval).
   const [environmentFocus, setEnvironmentFocus] = useState<string | null>(null);
@@ -273,19 +272,18 @@ export default function App() {
         creating={creatingEnvironment}
         setCreating={setCreatingEnvironment}
         draftRef={environmentDraft}
-        save={(draft, tags) => mutate(async () => {
+        save={(draft, tags, proxy) => mutate(async () => {
           const created = await ipc.saveEnvironment(draft);
           setCreatingEnvironment(false);
-          // The environment already exists; report a tag failure without reopening the form.
+          // The environment already exists; report a tag or proxy failure without reopening the form.
           if (tags.length) await ipc.setTags(created.id, tags).catch((reason) => setError(normalizeAppError(reason)));
+          if (proxy.mode !== "inherit") await ipc.saveEnvironmentProxy(created.id, proxy).catch((reason) => setError(normalizeAppError(reason)));
           return created;
         })}
         update={(id, draft) => mutate(() => ipc.updateEnvironment(id, draft))}
         remove={(id) => run(() => ipc.deleteEnvironment(id, true))}
         clone={(id, name) => mutate(() => ipc.cloneEnvironment(id, name))}
         openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }}
-        writableOnly={writableOnly}
-        setWritableOnly={setWritableOnly}
         changeMode={(env, mode) => {
           if (mode === "temporary" || mode === "permanent") { setMinutes("60"); setModeDecision({ environment: env, mode }); }
           else void run(() => ipc.mode(env.id, mode));

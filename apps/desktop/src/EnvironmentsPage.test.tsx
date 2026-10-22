@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, it, vi } from "vitest";
 import EnvironmentsPage from "./EnvironmentsPage";
 import { ipc, type Environment } from "./ipc";
-vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", proxy: null, inherited: null }), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("./HealthChip", () => ({ HealthChip: () => null, HealthDot: () => null, checkHealth: vi.fn(), forgetHealth: vi.fn() }));
 afterEach(() => {
   cleanup();
@@ -10,7 +10,7 @@ afterEach(() => {
 });
 const env: Environment = { id: "fixture", name: "Fixture", url: "https://example.test", database: "fixture-db", login: "fixture-user", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [] };
 function page() {
-  return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} writableOnly={false} setWritableOnly={vi.fn()} changeMode={vi.fn()} />;
+  return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} changeMode={vi.fn()} />;
 }
 it("starts with only write mode expanded and hides Edit in collapsed sections", async () => {
   render(page());
@@ -41,15 +41,20 @@ it("preserves an explicitly expanded preference", () => {
 // Clone, delete and rotate credentials.
 type Props = Partial<Parameters<typeof EnvironmentsPage>[0]>;
 function withProps(props: Props) {
-  return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} writableOnly={false} setWritableOnly={vi.fn()} changeMode={vi.fn()} {...props} />;
+  return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} changeMode={vi.fn()} {...props} />;
 }
 const dialog = () => screen.getByRole("alertdialog");
+/** Clone and delete live in the "More actions" menu. */
+function menuAction(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  fireEvent.click(within(screen.getByRole("menu", { name: "More actions" })).getByRole("menuitem", { name }));
+}
 
 it("clones with a new name, starting read-only without the original's permissions", async () => {
   const other: Environment = { ...env, id: "other", name: "Fixture (copy)" };
   const clone = vi.fn(async (_id: string, name: string): Promise<Environment> => ({ ...env, id: "clone-id", name, write_mode: "read_only" }));
   render(withProps({ envs: [{ ...env, write_mode: "permanent" }, other], clone }));
-  fireEvent.click(screen.getByRole("button", { name: "Duplicate environment" }));
+  menuAction("Duplicate environment");
   const text = dialog().textContent!;
   expect(text).toContain("read-only");
   expect(text).toContain("does not inherit the original permissions");
@@ -71,20 +76,35 @@ it("clones with a new name, starting read-only without the original's permission
 it("deletes only after explicit confirmation that warns about revoked requests", async () => {
   const remove = vi.fn().mockResolvedValue(true);
   render(withProps({ remove }));
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  menuAction("Delete environment");
   expect(dialog().textContent).toContain("their pending requests will be revoked");
   expect(dialog().textContent).toContain("This cannot be undone");
   expect(dialog().textContent).toContain("fixture-db");
   fireEvent.click(within(dialog()).getByRole("button", { name: "Back" }));
   expect(remove).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  menuAction("Delete environment");
   fireEvent.click(within(dialog()).getByRole("button", { name: "Delete environment" }));
   await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
 });
 
+it("clones and deletes from the list's context menu", async () => {
+  const remove = vi.fn().mockResolvedValue(true);
+  render(withProps({ remove }));
+  fireEvent.contextMenu(screen.getByRole("option", { name: /Fixture/ }), { clientX: 10, clientY: 10 });
+  const menu = screen.getByRole("menu", { name: "Fixture" });
+  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in Terminal", "Duplicate environment", "Delete environment"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete environment" }));
+  expect(screen.queryByRole("menu", { name: "Fixture" })).toBeNull();
+  fireEvent.click(within(dialog()).getByRole("button", { name: "Delete environment" }));
+  await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+  fireEvent.contextMenu(screen.getByRole("option", { name: /Fixture/ }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("menu", { name: "Fixture" })).toBeNull();
+});
+
 it("keeps the dialog open with an error when deletion fails", async () => {
   render(withProps({ remove: vi.fn().mockResolvedValue(false) }));
-  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  menuAction("Delete environment");
   fireEvent.click(within(dialog()).getByRole("button", { name: "Delete environment" }));
   expect((await within(dialog()).findByRole("alert")).textContent).toContain("Could not delete the environment.");
 });
@@ -141,7 +161,7 @@ function chooseOption(label: string, option: string) {
 }
 
 it("ignores unchanged submissions and disables Save again when edits are reverted", async () => {
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", proxy: null, inherited: null });
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", id: null });
   vi.mocked(ipc.saveEnvironmentProxy).mockClear();
   const update = vi.fn();
   render(withProps({ update }));
@@ -158,9 +178,9 @@ it("ignores unchanged submissions and disables Save again when edits are reverte
   expect(save.disabled).toBe(false);
   chooseOption("Protocol", "JSON-RPC");
   expect(save.disabled).toBe(true);
-  chooseOption("Environment proxy", "Direct");
+  chooseOption("Environment proxy", "Direct connection");
   expect(save.disabled).toBe(false);
-  chooseOption("Environment proxy", "Inherit (no global proxy (direct))");
+  chooseOption("Environment proxy", "Default (direct)");
   expect(save.disabled).toBe(true);
   fireEvent.submit(proxyForm());
   expect(update).not.toHaveBeenCalled();
@@ -168,54 +188,47 @@ it("ignores unchanged submissions and disables Save again when edits are reverte
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
-it("shows which proxy is inherited and switches the environment to direct", async () => {
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", proxy: null, inherited: "http://proxy.example.test:3128" });
+const office = { id: "office", name: "Office", url: "http://proxy.example.test:3128", username: "", password: "", environments: 0 };
+const vpn = { id: "vpn", name: "VPN", url: "socks5h://vpn.example.test:1080", username: "••••••••••••", password: "••••••••••••", environments: 1 };
+
+it("shows the default proxy and switches the environment to a named proxy or direct", async () => {
+  vi.mocked(ipc.saveEnvironmentProxy).mockClear();
+  vi.mocked(ipc.proxies).mockResolvedValue({ proxies: [office, vpn], default: "office" });
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", id: null });
   const update = vi.fn().mockResolvedValue({ ...env });
   render(withProps({ update }));
   fireEvent.click(screen.getByRole("button", { name: "Expand Connection" }));
-  expect((await within(proxyForm()).findByText("Inherit · http://proxy.example.test:3128"))).toBeTruthy();
+  expect(await within(proxyForm()).findByText("Default (Office)")).toBeTruthy();
   fireEvent.click(within(proxyForm()).getByRole("button", { name: "Edit" }));
-  fireEvent.click(within(proxyForm()).getByRole("combobox", { name: "Environment proxy" }));
-  expect(within(screen.getByRole("listbox", { name: "Environment proxy" })).getAllByRole("option").map((o) => o.textContent)).toEqual(["Inherit (http://proxy.example.test:3128)", "Custom", "Direct"]);
-  fireEvent.mouseDown(screen.getByRole("option", { name: "Direct" }));
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "direct", proxy: null, inherited: "http://proxy.example.test:3128" });
+  fireEvent.click(await within(proxyForm()).findByRole("combobox", { name: "Environment proxy" }));
+  expect(within(screen.getByRole("listbox", { name: "Environment proxy" })).getAllByRole("option").map((o) => o.textContent)).toEqual(["Default (Office)", "Office", "VPN", "Direct connection"]);
+  fireEvent.mouseDown(screen.getByRole("option", { name: "VPN" }));
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "profile", id: "vpn" });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(ipc.saveEnvironmentProxy).toHaveBeenCalledWith("fixture", { mode: "direct" }));
+  await waitFor(() => expect(ipc.saveEnvironmentProxy).toHaveBeenCalledWith("fixture", { mode: "profile", id: "vpn" }));
   expect(update).toHaveBeenCalledTimes(1);
-  expect(await within(proxyForm()).findByText("Direct")).toBeTruthy();
+  expect(await within(proxyForm()).findByText("VPN")).toBeTruthy();
+  // Credentials are never part of the environment form.
+  expect(within(proxyForm()).queryByLabelText("Proxy password")).toBeNull();
+  vi.mocked(ipc.proxies).mockResolvedValue({ proxies: [], default: null });
 });
 
-it("configures an own proxy with masked credentials and only saves the proxy when it changed", async () => {
+it("only saves the proxy when it changed", async () => {
   vi.mocked(ipc.saveEnvironmentProxy).mockClear();
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", proxy: null, inherited: null });
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", id: null });
   const update = vi.fn().mockResolvedValue({ ...env });
   render(withProps({ update }));
   fireEvent.click(screen.getByRole("button", { name: "Expand Connection" }));
-  expect(await within(proxyForm()).findByText("Inherit · no global proxy (direct)")).toBeTruthy();
+  expect(await within(proxyForm()).findByText("Default (direct)")).toBeTruthy();
   fireEvent.click(within(proxyForm()).getByRole("button", { name: "Edit" }));
-  // An unchanged proxy only saves the edited connection.
   fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
   expect(ipc.saveEnvironmentProxy).not.toHaveBeenCalled();
-  await waitFor(() => expect(within(proxyForm()).queryByRole("combobox", { name: "Environment proxy" })).toBeNull());
-  fireEvent.click(within(proxyForm()).getByRole("button", { name: "Edit" }));
-  chooseOption("Environment proxy", "Custom");
-  chooseOption("Proxy type", "SOCKS5");
-  fireEvent.change(within(proxyForm()).getByLabelText("Proxy host"), { target: { value: "own.example.test" } });
-  fireEvent.change(within(proxyForm()).getByLabelText("Proxy username"), { target: { value: "fixture-proxy-user" } });
-  fireEvent.change(within(proxyForm()).getByLabelText("Proxy password"), { target: { value: "fixture-proxy-pass" } });
-  expect((within(proxyForm()).getByLabelText("Proxy password") as HTMLInputElement).type).toBe("password");
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "custom", proxy: { url: "socks5h://own.example.test:1080", username: "••••••••••••", password: "••••••••••••" }, inherited: null });
-  fireEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(ipc.saveEnvironmentProxy).toHaveBeenCalledWith("fixture", { mode: "custom", url: "socks5h://own.example.test:1080", username: "fixture-proxy-user", password: "fixture-proxy-pass" }));
-  expect(await within(proxyForm()).findByText("Custom · socks5h://own.example.test:1080")).toBeTruthy();
-  expect(document.body.innerHTML).not.toContain("fixture-proxy-pass");
-  expect(document.body.innerHTML).not.toContain("fixture-proxy-user");
 });
 
 it("asks before saving the connection when the environment has pending requests", async () => {
-  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", proxy: null, inherited: null });
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", id: null });
   const update = vi.fn().mockResolvedValue({ ...env });
   const pending = [{ id: "p1", environment_id: "fixture", environment_name: "Fixture", model: "res.partner", method: "write", args: [], kwargs: {}, context: {}, created_at: "2026-10-16T00:00:00Z", expires_at: "2026-10-16T00:00:00Z" }];
   render(withProps({ update, pending }));
@@ -237,11 +250,50 @@ it("keeps the environment being edited when the filter excludes it", () => {
   render(withProps({ envs: [env, other] }));
   fireEvent.click(within(screen.getByRole("form", { name: "Connection" })).getByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
-  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "other" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Filter environments" }), { target: { value: "other" } });
   expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
-  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "nothing" } });
-  expect(screen.getByText("No matches")).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: "Filter environments" }), { target: { value: "nothing" } });
+  expect(screen.getByText("No matching environments")).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
+});
+
+it("filters by any of the chosen write modes and shows them as chips", () => {
+  const envs: Environment[] = (["read_only", "approval", "temporary", "permanent"] as const).map((write_mode) => ({ ...env, id: write_mode, name: write_mode, write_mode }));
+  render(withProps({ envs }));
+  const list = screen.getByRole("listbox", { name: "Environments" });
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  const modes = within(screen.getByRole("dialog", { name: "Filters" })).getByRole("list", { name: "Filter by write mode" });
+  expect(within(modes).getAllByRole("checkbox").map((box) => box.closest("label")!.textContent)).toEqual(["Read-only1", "Approval required1", "Temporary writes1", "Permanent writes1"]);
+  fireEvent.click(within(modes).getByRole("checkbox", { name: /Temporary/ }));
+  fireEvent.click(within(modes).getByRole("checkbox", { name: /Permanent/ }));
+  expect(within(list).getAllByRole("option").map((o) => o.querySelector("strong")!.textContent)).toEqual(["permanent", "temporary"]);
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter Permanent writes" }));
+  expect(within(list).getAllByRole("option")).toHaveLength(1);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Filter environments" }), { key: "Backspace" });
+  expect(within(list).getAllByRole("option")).toHaveLength(4);
+});
+
+it("adds tag filters from the search with # and from the list, and removes them with Backspace", () => {
+  const a: Environment = { ...env, id: "a", name: "Alpha", tags: ["prod", "Cliente A"] };
+  const b: Environment = { ...env, id: "b", name: "Beta", tags: ["staging", "Cliente A"] };
+  render(withProps({ envs: [a, b] }));
+  const list = screen.getByRole("listbox", { name: "Environments" });
+  const search = screen.getByRole("combobox", { name: "Filter environments" });
+  fireEvent.change(search, { target: { value: "#st" } });
+  // A tag query does not filter the list by its text.
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  const suggestions = screen.getByRole("listbox", { name: "Filter by tag" });
+  expect(within(suggestions).getAllByRole("option").map((o) => o.textContent)).toEqual(["staging"]);
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect((search as HTMLInputElement).value).toBe("");
+  expect(screen.queryByRole("listbox", { name: "Filter by tag" })).toBeNull();
+  expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([expect.stringContaining("Beta")]);
+  expect(screen.getByRole("status").textContent).toContain("1 of 2 environments");
+  fireEvent.keyDown(search, { key: "Backspace" });
+  expect(within(list).getAllByRole("option")).toHaveLength(2);
+  fireEvent.click(within(within(list).getAllByRole("option")[0]).getByText("prod"));
+  expect(screen.getByRole("button", { name: "Remove filter prod" })).toBeTruthy();
+  expect(within(list).getAllByRole("option")).toHaveLength(1);
 });
 
 it("filters by tags and edits the selected environment's tags", async () => {
@@ -269,7 +321,7 @@ it("filters by tags and edits the selected environment's tags", async () => {
   expect(within(list).getAllByRole("option")).toHaveLength(2);
   expect(screen.queryByRole("button", { name: "Remove filter Cliente A" })).toBeNull();
   // Text search also matches tags.
-  fireEvent.change(screen.getByRole("searchbox", { name: "Filter environments" }), { target: { value: "staging" } });
+  fireEvent.change(screen.getByRole("combobox", { name: "Filter environments" }), { target: { value: "staging" } });
   expect(within(list).getAllByRole("option")).toHaveLength(1);
 
   fireEvent.click(screen.getByRole("button", { name: "Remove tag prod" }));
@@ -278,9 +330,8 @@ it("filters by tags and edits the selected environment's tags", async () => {
 });
 
 it("summarizes and clears filters, shows host and tags, and moves with arrow keys", () => {
-  const setWritableOnly = vi.fn();
   const envs: Environment[] = ["Gamma", "Alpha", "Beta"].map((name) => ({ ...env, id: name, name, url: `https://${name.toLowerCase()}.example.test`, tags: name === "Beta" ? ["a", "b", "c", "d"] : [] }));
-  render(withProps({ envs, setWritableOnly }));
+  render(withProps({ envs }));
   const list = screen.getByRole("listbox", { name: "Environments" });
   const options = () => within(list).getAllByRole("option");
   expect(options().map((o) => o.querySelector("strong")!.textContent)).toEqual(["Alpha", "Beta", "Gamma"]);
@@ -292,12 +343,11 @@ it("summarizes and clears filters, shows host and tags, and moves with arrow key
   expect(document.activeElement).toBe(options()[1]);
   expect(options()[1].getAttribute("aria-selected")).toBe("true");
 
-  const search = screen.getByRole("searchbox", { name: "Filter environments" });
+  const search = screen.getByRole("combobox", { name: "Filter environments" });
   fireEvent.change(search, { target: { value: "zzz" } });
   expect(screen.getByRole("status").textContent).toContain("0 of 3 environments");
   fireEvent.click(within(list).getByRole("button", { name: "Clear filters" }));
   expect((search as HTMLInputElement).value).toBe("");
-  expect(setWritableOnly).toHaveBeenCalledWith(false);
   fireEvent.change(search, { target: { value: "gam" } });
   fireEvent.keyDown(search, { key: "Escape" });
   expect((search as HTMLInputElement).value).toBe("");
@@ -326,7 +376,7 @@ it("resizes the list with the keyboard, clamps and remembers the width", () => {
 it("focuses the search with Ctrl+F or / and starts a new environment with Ctrl+N", () => {
   const setCreating = vi.fn();
   render(withProps({ setCreating }));
-  const search = screen.getByRole("searchbox", { name: "Filter environments" });
+  const search = screen.getByRole("combobox", { name: "Filter environments" });
   fireEvent.keyDown(window, { key: "f", ctrlKey: true });
   expect(document.activeElement).toBe(search);
   search.blur();

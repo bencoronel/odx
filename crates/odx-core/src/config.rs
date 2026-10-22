@@ -185,6 +185,8 @@ pub fn validate_url(url: &str) -> Result<()> {
 }
 
 pub const MAX_TAGS: usize = 20;
+/// Tag colors besides the default look.
+pub const TAG_COLORS: [&str; 5] = ["info", "ok", "warn", "danger", "accent"];
 pub const MAX_TAG_CHARS: usize = 32;
 /// Trimmed, nonempty tags without case-insensitive duplicates, keeping first spelling and order.
 pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
@@ -228,6 +230,8 @@ pub(crate) struct VaultData {
     pub proxies: Vec<crate::proxy::ProxyProfile>,
     /// Proxy for environments that use the default; `None` means direct.
     pub default_proxy: Option<String>,
+    /// Lowercase tag → color name; tags without one use the default look.
+    pub tag_colors: std::collections::BTreeMap<String, String>,
     /// Saved expiry clock floor, restored on unlock.
     pub clock_floor: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -338,6 +342,8 @@ struct StoredVaultData {
     proxies: Vec<crate::proxy::ProxyProfile>,
     #[serde(default)]
     default_proxy: Option<String>,
+    #[serde(default)]
+    tag_colors: std::collections::BTreeMap<String, String>,
     /// Old single global proxy, migrated to `proxies` on load.
     #[serde(default, skip_serializing)]
     proxy: Option<crate::proxy::ProxySettings>,
@@ -436,6 +442,7 @@ impl Serialize for VaultData {
             settings: self.settings,
             proxies: self.proxies.clone(),
             default_proxy: self.default_proxy.clone(),
+            tag_colors: self.tag_colors.clone(),
             proxy: None,
             clock_floor: self.clock_floor,
         }
@@ -462,6 +469,7 @@ impl<'de> Deserialize<'de> for VaultData {
             settings: stored.settings,
             proxies: stored.proxies,
             default_proxy: stored.default_proxy,
+            tag_colors: stored.tag_colors,
             clock_floor: stored.clock_floor,
         };
         data.migrate_legacy_proxies(stored.proxy);

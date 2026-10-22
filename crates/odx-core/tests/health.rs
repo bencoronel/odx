@@ -148,11 +148,32 @@ async fn tags_are_normalized_and_persisted() {
         .await
         .unwrap();
     assert_eq!(updated.tags, ["Cliente A", "prod"]);
-    // Tags survive locking and reopening the vault.
+    // Colors are per tag name, ignoring case.
+    core.set_tag_color("cliente a", Some("danger"))
+        .await
+        .unwrap();
+    core.set_tag_color("prod", Some("info")).await.unwrap();
+    assert!(core.set_tag_color("prod", Some("pink")).await.is_err());
+    core.set_tag_color("prod", None).await.unwrap();
+    // Tags survive locking and reopening the vault, and so do their colors.
     core.lock().await;
     core.unlock("fictional master password").await.unwrap();
     assert_eq!(
         core.environments().await.unwrap()[0].tags,
         ["Cliente A", "prod"]
+    );
+    let colors = core.tag_colors().await.unwrap();
+    assert_eq!(
+        colors.into_iter().collect::<Vec<_>>(),
+        [("cliente a".to_owned(), "danger".to_owned())]
+    );
+    // Colors of tags no environment uses are dropped on the next change.
+    core.set_environment_tags(&env.id, &["prod".to_owned()])
+        .await
+        .unwrap();
+    core.set_tag_color("prod", Some("ok")).await.unwrap();
+    assert_eq!(
+        core.tag_colors().await.unwrap().keys().collect::<Vec<_>>(),
+        ["prod"]
     );
 }

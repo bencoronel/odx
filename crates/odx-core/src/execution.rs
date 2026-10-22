@@ -597,6 +597,45 @@ impl Core {
         })?;
         view.ok_or(OdxError::EnvironmentNotFound)
     }
+    pub async fn tag_colors(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let s = self.inner.lock().await;
+        Ok(s.vault
+            .as_ref()
+            .ok_or(OdxError::Locked)?
+            .data()
+            .tag_colors
+            .clone())
+    }
+    /// Color a tag for every environment that has it; `None` restores the default look. Colors of tags no environment uses are dropped.
+    pub async fn set_tag_color(&self, tag: &str, color: Option<&str>) -> Result<()> {
+        let tag = crate::config::normalize_tags(&[tag.to_owned()])?
+            .pop()
+            .ok_or_else(|| {
+                OdxError::validation("validation.environment.tag_required", "tag required")
+            })?
+            .to_lowercase();
+        if color.is_some_and(|c| !crate::config::TAG_COLORS.contains(&c)) {
+            return Err(OdxError::validation(
+                "validation.environment.tag_color_invalid",
+                "unknown tag color",
+            ));
+        }
+        let mut s = self.inner.lock().await;
+        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        v.update(|data| {
+            let used: std::collections::HashSet<String> = data
+                .environments
+                .iter()
+                .flat_map(|e| e.tags.iter().map(|t| t.to_lowercase()))
+                .collect();
+            data.tag_colors.retain(|t, _| used.contains(t));
+            match color {
+                Some(color) => data.tag_colors.insert(tag, color.to_owned()),
+                None => data.tag_colors.remove(&tag),
+            };
+            Ok(())
+        })
+    }
     pub async fn clone_environment(&self, id: &str, new_name: &str) -> Result<EnvironmentView> {
         if new_name.trim().is_empty() {
             return Err(OdxError::validation(

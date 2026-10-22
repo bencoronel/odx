@@ -79,6 +79,7 @@ impl Vault {
             settings: Default::default(),
             proxies: vec![],
             default_proxy: None,
+            tag_colors: Default::default(),
             clock_floor: None,
         };
         // Build in a temporary file and publish atomically to avoid partial databases.

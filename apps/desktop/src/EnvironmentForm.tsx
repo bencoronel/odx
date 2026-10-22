@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { ipc, type EnvironmentDraft, type Health } from "./ipc";
+import { ipc, type EnvironmentDraft, type EnvironmentProxyInput, type Health, type ProxiesView } from "./ipc";
+import { i18n } from "./i18n";
 import HeaderInput from "./HeaderInput";
 import TagEditor from "./TagEditor";
 import { Icon } from "./Icon";
@@ -50,24 +51,34 @@ export function ConnectionFields({ idPrefix, values, change, editing, autoFocus,
   const set = (key: keyof ConnectionValues) => (event: ChangeEvent<HTMLInputElement>) => change({ ...values, [key]: event.target.value });
   // The URL comes first because the database list depends on it; the host is a sensible default name.
   const suggestName = () => { if (!values.name.trim() && !urlError(values.url)) change({ ...values, name: new URL(values.url.trim()).host }); };
-  return <div className="form-grid">
-    <label className="field span-2"><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
-    <div className="field"><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
-      <span className="row gap-2">
-        <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll caseSensitive
-          aria-describedby={`${idPrefix}-database-help`} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
-        <button type="button" className="btn icon-only" disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></button>
-      </span>
-      <small className="hint" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : databases.length ? t("environmentForm.databasesFound", { count: databases.length }) : t("environmentForm.databasesHint")}</small></div>
-    <label className="field"><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
-    <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required={!editing} autoComplete="new-password" value={values.secret} placeholder={editing ? t("environmentForm.unchanged") : undefined} aria-describedby={`${idPrefix}-secret-help`} onChange={set("secret")} /><small className="hint" id={`${idPrefix}-secret-help`}>{editing ? t("environmentForm.keepCredentialHint") : t("environmentForm.credentialHint")}</small></label>
-    <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} aria-describedby={`${idPrefix}-name-help`} onChange={set("name")} /><small className="hint" id={`${idPrefix}-name-help`}>{t("environmentForm.nameHelp")}</small></label>
-    {children}
-    <details className="protocol-options span-2">
-      <summary>{t("environmentForm.advancedOptions")}</summary>
-      <label className="field"><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
-    </details>
-  </div>;
+  const section = (title: string, hint: string, body: ReactNode) => <section className="panel form-section">
+    <header className="panel-header"><div><h3>{title}</h3><p className="hint">{hint}</p></div></header>
+    <div className="panel-body form-grid">{body}</div>
+  </section>;
+  return <>
+    {section(t("environmentForm.serverTitle"), t("environmentForm.serverHint"), <>
+        <label className="field span-2"><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
+        <div className="field span-2"><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
+          <span className="row gap-2">
+            <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll caseSensitive
+              aria-describedby={`${idPrefix}-database-help`} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
+            <button type="button" className="btn icon-only" disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></button>
+          </span>
+          <small className="hint" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : databases.length ? t("environmentForm.databasesFound", { count: databases.length }) : t("environmentForm.databasesHint")}</small></div>
+        <details className="protocol-options span-2">
+          <summary>{t("environmentForm.advancedOptions")}</summary>
+          <label className="field"><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
+        </details>
+    </>)}
+    {section(t("environmentForm.accessTitle"), t("environmentForm.accessHint"), <>
+        <label className="field"><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
+        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required={!editing} autoComplete="new-password" value={values.secret} placeholder={editing ? t("environmentForm.unchanged") : undefined} aria-describedby={`${idPrefix}-secret-help`} onChange={set("secret")} /><small className="hint" id={`${idPrefix}-secret-help`}>{editing ? t("environmentForm.keepCredentialHint") : t("environmentForm.credentialHint")}</small></label>
+    </>)}
+    {section(t("environmentForm.identityTitle"), t("environmentForm.identityHint"), <>
+        <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} aria-describedby={`${idPrefix}-name-help`} onChange={set("name")} /><small className="hint" id={`${idPrefix}-name-help`}>{t("environmentForm.nameHelp")}</small></label>
+      {children}
+    </>)}
+  </>;
 }
 
 /** Prefilled login and database for new environments, saved per device. */
@@ -83,11 +94,24 @@ export function saveEnvironmentDefaults(defaults: EnvironmentDefaults) {
   try { localStorage.setItem(DEFAULTS_KEY, JSON.stringify(defaults)); } catch { /* Optional preference. */ }
 }
 
-export type FormDraft = { values: ConnectionValues; tags: string[] };
+/** Select value for an environment's proxy: "inherit", "direct" or "p:" + the id of a named proxy. */
+export function proxyChoice(value: string): EnvironmentProxyInput {
+  return value.startsWith("p:") ? { mode: "profile", id: value.slice(2) } : { mode: value === "direct" ? "direct" : "inherit" };
+}
+export function proxyOptions(list: ProxiesView) {
+  const fallback = list.proxies.find((p) => p.id === list.default)?.name;
+  return [
+    { value: "inherit", label: i18n.t("environments.inheritProxy", { proxy: fallback ?? i18n.t("environments.noDefaultProxy") }) },
+    ...list.proxies.map((p) => ({ value: `p:${p.id}`, label: p.name })),
+    { value: "direct", label: i18n.t("environments.directProxy") },
+  ];
+}
+
+export type FormDraft = { values: ConnectionValues; tags: string[]; proxy?: string };
 
 export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, draftRef }: {
   busy: boolean;
-  save: (draft: EnvironmentDraft, tags: string[]) => Promise<void>;
+  save: (draft: EnvironmentDraft, tags: string[], proxy: EnvironmentProxyInput) => Promise<void>;
   cancel: () => void;
   tagSuggestions: string[];
   /** Keeps what was typed while the form is unmounted, e.g. when switching pages. */
@@ -96,7 +120,10 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
   const { t } = useTranslation();
   const [values, setValues] = useState<ConnectionValues>(() => draftRef?.current?.values ?? { name: "", url: "", secret: "", protocol: "auto", ...loadEnvironmentDefaults() });
   const [tags, setTags] = useState<string[]>(() => draftRef?.current?.tags ?? []);
-  useEffect(() => { if (draftRef) draftRef.current = { values, tags }; }, [draftRef, values, tags]);
+  const [proxy, setProxy] = useState(() => draftRef?.current?.proxy ?? "inherit");
+  const [proxies, setProxies] = useState<ProxiesView | null>(null);
+  useEffect(() => { ipc.proxies().then(setProxies, () => setProxies({ proxies: [], default: null })); }, []);
+  useEffect(() => { if (draftRef) draftRef.current = { values, tags, proxy }; }, [draftRef, values, tags, proxy]);
   const [error, setError] = useState<ErrorState>("");
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<Health | null>(null);
@@ -123,7 +150,7 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     setTesting(true);
     // The name is irrelevant to the connection, but the draft requires one.
     try {
-      const report = await ipc.checkDraft({ ...draft(), name: draft().name || "draft" });
+      const report = await ipc.checkDraft({ ...draft(), name: draft().name || "draft" }, proxyChoice(proxy));
       setTest(report);
       if (report.status === "ok") loadDatabases();
     }
@@ -138,7 +165,7 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     const invalidUrl = urlError(values.url);
     if (invalidUrl) { setError(invalidUrl); return; }
     try {
-      await save(draft(), tags);
+      await save(draft(), tags, proxyChoice(proxy));
       setValues((current) => ({ ...current, secret: "" }));
     } catch (reason) { setError(normalizeAppError(reason)); }
   }}>
@@ -146,11 +173,13 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
       <span className="tile"><Icon name="plus" /></span>
       <div className="grow"><h2 id="create-environment-title">{t("environmentForm.createTitle")}</h2><p className="hint">{t("environmentForm.readOnlyHint")}</p></div>
     </header>
-    <fieldset disabled={busy} className="panel">
-      <header className="panel-header"><h3>{t("environmentForm.connection")}</h3></header>
-      <div className="panel-body"><ConnectionFields idPrefix="environment" values={values} change={change} editing={false} autoFocus databases={databases} loadDatabases={loadDatabases}>
+    <fieldset disabled={busy} className="form-sections">
+      <ConnectionFields idPrefix="environment" values={values} change={change} editing={false} autoFocus databases={databases} loadDatabases={loadDatabases}>
+        <div className="field"><span id="environment-proxy-label">{t("proxy.title")}</span>
+          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span className="hint">…</span>}
+          <small className="hint">{t("environmentForm.proxyHint")}</small></div>
         <div className="field span-2"><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>
-      </ConnectionFields></div>
+      </ConnectionFields>
     </fieldset>
     {error && <p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p>}
     {test && (test.status === "ok"

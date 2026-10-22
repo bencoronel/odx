@@ -35,7 +35,8 @@
     "disabled": "Disabled",
     "hourShort": "h",
     "minuteShort": "min",
-    "unsaved": "Unsaved changes"
+    "unsaved": "Unsaved changes",
+    "clearSearch": "Clear search"
   },
   "settings": {
     "language": {
@@ -228,7 +229,14 @@
     "revokeEnvironmentRequests": "Pending requests for this environment are revoked and Odoo is reauthenticated.",
     "revokeAllRequests": "Pending requests for all environments are revoked and Odoo is reauthenticated.",
     "globalHeadersHint": "Sent with every request to Odoo. Each environment can override them. Changes are saved when you leave a field.",
-    "globalContextHint": "Added to the context of every Odoo call, for example lang or tz. Each environment can override any key. Changes are saved when you leave a field."
+    "globalContextHint": "Added to the context of every Odoo call, for example lang or tz. Each environment can override any key. Changes are saved when you leave a field.",
+    "environmentContextHint": "Added to every call in this environment; overrides global keys.",
+    "environmentHeadersHint": "Sent with every request in this environment; overrides global headers.",
+    "ownContext_one": "{{count}} key of its own",
+    "ownContext_other": "{{count}} keys of its own",
+    "ownHeaders_one": "{{count}} header of its own",
+    "ownHeaders_other": "{{count}} headers of its own",
+    "onlyInherited": "Global values only"
   },
   "environmentForm": {
     "errors": {
@@ -273,6 +281,12 @@
     "testOk": "Connected · Odoo {{version}} · {{latency}} ms",
     "databasesFound_one": "The server has 1 database; pick it or type another.",
     "databasesFound_other": "The server has {{count}} databases; pick one or type another.",
+    "serverTitle": "Server",
+    "serverHint": "Where Odoo is and which database to use.",
+    "accessTitle": "Access",
+    "accessHint": "The Odoo user MCP/API clients act as. Use a user with only the rights they need.",
+    "identityTitle": "Name and organization",
+    "identityHint": "How you and MCP/API clients refer to this environment.",
     "proxyHint": "Choose a saved proxy or connect directly. Manage proxies in Settings."
   },
   "settingsPage": {
@@ -581,7 +595,7 @@
     "emptyHint": "Add a connection to an Odoo instance. Environments start in read-only mode.",
     "focusWhileCreating": "Finish or cancel the new environment to show {{name}}.",
     "listLabel": "Environment list",
-    "filterPlaceholder": "Filter environments",
+    "filterPlaceholder": "Filter, or # for tags",
     "filterLabel": "Filter environments",
     "checkAll": "Check all environments",
     "checkAllHint": "Check all\nMeasure the connection to every environment again",
@@ -629,8 +643,25 @@
     "filterCount": "{{shown}} of {{total}} environments",
     "noDefaultProxy": "direct",
     "missingProxy": "Missing proxy",
-    "removeWriteFilter": "Remove free-write filter",
-    "freeWrites": "Free writes"
+    "writeModeHint": "What MCP/API clients may do in this environment.",
+    "connectionHint": "Server, credentials and proxy for this environment.",
+    "proxySummary": "Proxy: {{proxy}}",
+    "moreActions": "More actions",
+    "tagColor": "Color of {{tag}}",
+    "tagColorTip": "Change color",
+    "colors": {
+      "neutral": "Gray",
+      "info": "Blue",
+      "ok": "Green",
+      "warn": "Yellow",
+      "danger": "Red",
+      "accent": "Purple"
+    },
+    "filterByTag": "Filter by this tag",
+    "modeFilter": "Filter by write mode",
+    "removeModeFilter": "Remove filter {{mode}}",
+    "noMatchesHint": "Try another search or remove a filter.",
+    "noEnvironmentMatches": "No matching environments"
   },
   "headerInput": {
     "suggestionsFor": "Suggestions for {{field}}",

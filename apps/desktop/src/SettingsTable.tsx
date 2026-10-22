@@ -115,8 +115,11 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
     }));
   };
   return <form className="panel" aria-label={headerMode ? (environmentId ? t("settingsTable.environmentHeaders") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.environmentContext") : t("settingsTable.globalContext"))} autoComplete="off" onSubmit={(event) => { event.preventDefault(); save(displayed); }}>
-    <header className="panel-header"><span className="row gap-2">{environmentId ? <PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle> : <div><span className="row gap-2"><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></span><p className="hint">{t(headerMode ? "settingsTable.globalHeadersHint" : "settingsTable.globalContextHint")}</p></div>}
+    <header className="panel-header"><span className="row gap-2">{environmentId ? <div><PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle><p className="hint">{t(headerMode ? "settingsTable.environmentHeadersHint" : "settingsTable.environmentContextHint")}</p></div> : <div><span className="row gap-2"><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></span><p className="hint">{t(headerMode ? "settingsTable.globalHeadersHint" : "settingsTable.globalContextHint")}</p></div>}
       {environmentId && !folded && hiddenCount > 0 && <button type="button" className="btn sm ghost" disabled={!settings} aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}><Icon name="eye" />{t("settingsTable.hidden", { count: hiddenCount })}</button>}</span>
+      {folded && settings && <span className="panel-summary">{settings.entries.length
+        ? t(headerMode ? "settingsTable.ownHeaders" : "settingsTable.ownContext", { count: settings.entries.length })
+        : t("settingsTable.onlyInherited")}</span>}
       {saveStatus && <span className="hint" role="status">{t(saveStatus as never)}</span>}
     </header>
     <ApprovalDialog open={confirm !== null} busy={false} tone="warn"
