@@ -304,6 +304,7 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 
 /* Window chrome */
 .app-window { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+:root[data-window-filled] .app-window { border-radius: 0; border-color: transparent; }
 .window-resize-handle { position: fixed; z-index: 40; touch-action: none; user-select: none; }
 .window-resize-handle[data-direction="North"] { top: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize; }
 .window-resize-handle[data-direction="South"] { bottom: 0; left: 12px; right: 12px; height: 5px; cursor: ns-resize; }

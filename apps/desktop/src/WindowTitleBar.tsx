@@ -7,6 +7,26 @@ const appWindow = getCurrentWindow();
 
 const resizeDirections = ["North", "South", "East", "West", "NorthEast", "NorthWest", "SouthEast", "SouthWest"] as const;
 
+/** Rounded corners and the border only make sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
+function useFilledWindow() {
+  useEffect(() => {
+    let active = true;
+    const sync = () => {
+      Promise.all([appWindow.isMaximized(), appWindow.isFullscreen()]).then(([maximized, fullscreen]) => {
+        if (active) document.documentElement.toggleAttribute("data-window-filled", maximized || fullscreen);
+      }, () => undefined);
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    const listener = appWindow.onResized(sync);
+    return () => {
+      active = false;
+      window.removeEventListener("resize", sync);
+      void listener.then((unlisten) => unlisten(), () => undefined);
+    };
+  }, []);
+}
+
 function WindowResizeHandles() {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
@@ -24,9 +44,12 @@ function WindowResizeHandles() {
       }
     };
     const listener = appWindow.onResized(() => { void refresh(); });
+    const onResize = () => { void refresh(); };
+    window.addEventListener("resize", onResize);
     void listener.then(() => { if (active) void refresh(); }, () => undefined);
     return () => {
       active = false;
+      window.removeEventListener("resize", onResize);
       void listener.then((unlisten) => unlisten(), () => undefined);
     };
   }, []);
@@ -48,6 +71,7 @@ function WindowResizeHandles() {
 
 export function WindowTitleBar({ children }: { children?: ReactNode }) {
   const { t } = useTranslation();
+  useFilledWindow();
   return <><WindowResizeHandles /><div
     className="window-titlebar"
     onMouseDown={(event) => {
