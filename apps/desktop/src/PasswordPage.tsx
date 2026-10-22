@@ -15,7 +15,7 @@ export default function PasswordPage({ change, busy }: { change: (current: strin
   const [failed, setFailed] = useState(false);
   usePreventUnload(busy || current !== "" || next !== "" || repeat !== "");
 
-  return <form className="panel-body form-grid" onSubmit={async (event) => {
+  return <form className="panel" aria-labelledby="password-title" onSubmit={async (event) => {
     event.preventDefault();
     setMessage("");
     setFailed(false);
@@ -27,11 +27,11 @@ export default function PasswordPage({ change, busy }: { change: (current: strin
       setMessage({ translationKey: "passwordPage.updated" });
     } catch (error) { setFailed(true); setMessage(normalizeAppError(error)); }
   }}>
-    <label className="field span-2 half"><span>{t("passwordPage.current")}</span><input id="current-password" type="password" autoComplete="current-password" minLength={8} required disabled={busy} value={current} onChange={(e) => setCurrent(e.target.value)} /></label>
-    <label className="field"><span>{t("passwordPage.new")}</span><input id="new-password" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={next} aria-describedby="new-password-help" onChange={(e) => setNext(e.target.value)} /></label>
-    <label className="field"><span>{t("passwordPage.repeat")}</span><input id="repeat-password" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={repeat} onChange={(e) => setRepeat(e.target.value)} /></label>
-    <p className="hint span-2" id="new-password-help">{t("passwordPage.hint")}</p>
-    {message && <p className={`banner span-2 ${failed ? "danger" : "ok"}`} role={failed ? "alert" : "status"}><Icon name={failed ? "alert" : "check"} />{"translationKey" in message ? t(message.translationKey) : formatAppError(message)}</p>}
-    <div className="row justify-end span-2"><button className="btn primary" disabled={busy || current.length < 8 || next.length < 8 || next !== repeat}>{busy ? t("common.saving") : t("passwordPage.change")}</button></div>
+    <header className="panel-header"><div><h3 id="password-title">{t("unlock.password")}</h3><p className="hint" id="new-password-help">{t("passwordPage.hint")}</p></div></header>
+    <label className="setting-row"><strong>{t("passwordPage.current")}</strong><input id="current-password" className="setting-control" type="password" autoComplete="current-password" minLength={8} required disabled={busy} value={current} onChange={(e) => setCurrent(e.target.value)} /></label>
+    <label className="setting-row"><strong>{t("passwordPage.new")}</strong><input id="new-password" className="setting-control" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={next} aria-describedby="new-password-help" onChange={(e) => setNext(e.target.value)} /></label>
+    <label className="setting-row"><strong>{t("passwordPage.repeat")}</strong><input id="repeat-password" className="setting-control" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={repeat} onChange={(e) => setRepeat(e.target.value)} /></label>
+    {message && <div className="panel-body"><p className={`banner ${failed ? "danger" : "ok"}`} role={failed ? "alert" : "status"}><Icon name={failed ? "alert" : "check"} />{"translationKey" in message ? t(message.translationKey) : formatAppError(message)}</p></div>}
+    <footer className="setting-row"><button className="btn primary" disabled={busy || current.length < 8 || next.length < 8 || next !== repeat}>{busy ? t("common.saving") : t("passwordPage.change")}</button></footer>
   </form>;
 }

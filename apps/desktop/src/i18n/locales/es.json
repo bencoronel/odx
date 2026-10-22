@@ -276,6 +276,14 @@
     "proxyHint": "Elige un proxy guardado o conexión directa. Los proxies se gestionan en Ajustes."
   },
   "settingsPage": {
+    "descriptions": {
+      "general": "Idioma, tema y actualizaciones de la app.",
+      "connection": "Valores para entornos nuevos y lo que envía cada petición a Odoo: proxy, cabeceras y contexto.",
+      "execution": "Cuánto hace la app a la vez y cuánto tiempo guarda los datos. Se guardan cifrados en el almacén y los clientes API/MCP no pueden cambiarlos. Cada valor está limitado a su valor inicial.",
+      "security": "Bloquea el almacén y cambia su contraseña."
+    },
+    "environmentDefaults": "Valores para entornos nuevos",
+    "environmentDefaultsHint": "Si los rellenas, el formulario de nuevo entorno empieza con este usuario y esta base de datos.",
     "general": "General",
     "appearance": "Idioma y apariencia",
     "sections": "Secciones de ajustes",
@@ -285,7 +293,7 @@
     "dark": "Oscuro",
     "system": "Sistema",
     "themeLabel": "Tema de la interfaz",
-    "odooConnection": "Conexión con Odoo",
+    "odooConnection": "Conexión",
     "security": "Seguridad",
     "lockNow": "Bloquear ahora",
     "lockHint": "Cierra el acceso a Odoo y revoca las solicitudes pendientes.",
@@ -329,42 +337,38 @@
       "activity": "100 eventos por página; la base cifrada conserva como máximo 80.000 páginas ocupadas y tiene un tope de 384 MiB",
       "auditQueue": "128 eventos; detalle de hasta 16 KiB por evento"
     },
-    "executionStorage": "Ejecución y almacenamiento",
-    "limitsHint": "Se aplican sin reiniciar y se guardan cifrados en el almacén. Los clientes API/MCP no pueden cambiarlos. El máximo de cada campo es el valor inicial aprobado.",
-    "groups": {
-      "concurrency": {
-        "title": "Concurrencia",
-        "hint": "Llamadas simultáneas a Odoo. Al reducirla, las llamadas en curso terminan y las nuevas esperan plaza."
-      },
-      "timeout": {
-        "title": "Tiempo de espera de Odoo",
-        "hint": "Plazo de cada petición HTTP a Odoo antes de darla por fallida. La conexión sigue limitada a 5 s."
-      },
-      "approval": {
-        "title": "Caducidad de las aprobaciones",
-        "hint": "Vale para las solicitudes nuevas; las pendientes conservan su plazo."
-      },
-      "activity": {
-        "title": "Retención de la actividad",
-        "hint": "Se conserva lo que cumpla ambos límites. La base cifrada mantiene además su tope de páginas."
-      },
-      "output": {
-        "title": "Archivos de salida",
-        "hint": "Descargas y resultados a fichero en el directorio gestionado por la app."
-      },
-      "total": "En total",
-      "perEnvironment": "Por entorno",
+    "limitsTab": "Límites",
+    "execution": {
+      "title": "Ejecución",
+      "hint": "Se aplican al momento, sin reiniciar."
+    },
+    "retention": {
+      "title": "Retención",
+      "hint": "Se conserva lo que cumpla ambos límites. Al reducir un límite, lo que sobre se borra al guardar.",
+      "activity": "Actividad",
+      "activityHint": "Registro de actividad. La base cifrada mantiene además su tope de páginas.",
+      "output": "Archivos de salida",
+      "outputHint": "Descargas y resultados a fichero en el directorio gestionado por la app."
+    },
+    "fields": {
+      "globalConcurrency": "Llamadas simultáneas",
+      "globalConcurrencyHint": "Entre todos los entornos. Al reducirlo, las llamadas en curso terminan y las nuevas esperan plaza.",
+      "environmentConcurrency": "Llamadas simultáneas por entorno",
+      "environmentConcurrencyHint": "No puede superar el total.",
+      "timeout": "Tiempo de espera por petición",
+      "timeoutHint": "Plazo de cada petición HTTP a Odoo. La conexión sigue limitada a 5 s.",
+      "approval": "Validez de las aprobaciones",
+      "approvalHint": "Vale para las solicitudes nuevas; las pendientes conservan su plazo.",
+      "maxAge": "Conservar durante",
+      "maxSize": "Tamaño máximo"
+    },
+    "units": {
       "calls": "llamadas",
-      "perRequest": "Por petición",
       "seconds": "s",
-      "validity": "Vigencia",
       "minutes": "min",
-      "age": "Antigüedad",
       "days": "días",
-      "size": "Tamaño",
-      "mib": "MiB",
-      "totalSize": "Tamaño total",
-      "hours": "h"
+      "hours": "h",
+      "mib": "MiB"
     }
   },
   "approvals": {

@@ -115,7 +115,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
     }));
   };
   return <form className="panel" aria-label={headerMode ? (environmentId ? t("settingsTable.environmentHeaders") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.environmentContext") : t("settingsTable.globalContext"))} autoComplete="off" onSubmit={(event) => { event.preventDefault(); save(displayed); }}>
-    <header className="panel-header"><span className="row gap-2">{environmentId ? <PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle> : <><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></>}
+    <header className="panel-header"><span className="row gap-2">{environmentId ? <PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle> : <div><span className="row gap-2"><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></span><p className="hint">{t(headerMode ? "settingsTable.globalHeadersHint" : "settingsTable.globalContextHint")}</p></div>}
       {environmentId && !folded && hiddenCount > 0 && <button type="button" className="btn sm ghost" disabled={!settings} aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}><Icon name="eye" />{t("settingsTable.hidden", { count: hiddenCount })}</button>}</span>
       {saveStatus && <span className="hint" role="status">{t(saveStatus as never)}</span>}
     </header>
@@ -131,7 +131,6 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
       }}
       onConfirm={async () => { if (confirm) { confirmed.current = true; commit(confirm.headers, confirm.signature); } }} />
     {!folded && <div className="panel-body headers-body">
-      {!environmentId && <p className="hint">{t(headerMode ? "settingsTable.globalHeadersHint" : "settingsTable.globalContextHint")}</p>}
       {settings && <fieldset className="props-fieldset">
         <table className="headers-table"><thead><tr><th><span className="sr-only">{t("settingsTable.enabled")}</span></th><th>{t("settingsTable.key")}</th><th>{t("settingsTable.value")}</th><th><span className="sr-only">{t("settingsTable.actions")}</span></th></tr></thead><tbody>
           {headerMode && (!environmentId || showHidden) && ["Host", "Content-Length"].map((name) => <tr key={name}>

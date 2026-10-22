@@ -15,23 +15,26 @@ beforeEach(() => {
   vi.mocked(ipc.saveSettings).mockReset().mockImplementation(async (settings) => view(settings));
   localStorage.removeItem("odx.collapsed.settings-fixed-limits");
 });
-function page() {
-  return <SettingsPage theme="dark" setTheme={vi.fn()} busy={false} pendingCount={0} onContextSaved={vi.fn()} onHeadersSaved={vi.fn()} lock={vi.fn()} changePassword={vi.fn()} />;
+/** Limits live in the "Limits" section. */
+function openLimits(pendingCount = 0) {
+  render(<SettingsPage theme="dark" setTheme={vi.fn()} busy={false} pendingCount={pendingCount} onContextSaved={vi.fn()} onHeadersSaved={vi.fn()} lock={vi.fn()} changePassword={vi.fn()} />);
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Limits" }));
 }
 const form = () => screen.getByRole("form", { name: "Limits and retention" });
 const input = (label: RegExp) => within(form()).getByRole("spinbutton", { name: label }) as HTMLInputElement;
 const save = () => within(form()).getByRole("button", { name: "Save" }) as HTMLButtonElement;
 
 it("shows the four settings with their range and the rest as read-only limits", async () => {
-  render(page());
+  openLimits();
   await screen.findByRole("form", { name: "Limits and retention" });
-  for (const title of ["Concurrency", "Odoo timeout", "Approval expiry", "Activity retention", "Output files"])
+  for (const title of ["Execution", "Retention", "Activity", "Output files"])
     expect(within(form()).getByRole("group", { name: title })).toBeTruthy();
   expect(within(form()).getAllByRole("spinbutton")).toHaveLength(8);
-  expect(input(/^Total \(calls\)/).value).toBe("16");
-  expect(input(/^Total \(calls\)/).max).toBe("16");
+  expect(input(/^Concurrent calls$/).value).toBe("16");
+  expect(input(/^Concurrent calls$/).max).toBe("16");
   expect(form().textContent).toContain("Initial 5 · 1–5");
-  expect(save().disabled).toBe(true);
+  // The save bar only appears with changes.
+  expect(within(form()).queryByRole("button", { name: "Save" })).toBeNull();
   const fixed = screen.getByRole("region", { name: "Fixed limits" });
   const expand = within(fixed).getByRole("button", { name: "Expand Fixed limits" });
   expect(expand.getAttribute("aria-expanded")).toBe("false");
@@ -44,39 +47,39 @@ it("shows the four settings with their range and the rest as read-only limits", 
 });
 
 it("rejects out-of-range and inconsistent values before calling the backend", async () => {
-  render(page());
+  openLimits();
   await screen.findByRole("form", { name: "Limits and retention" });
   for (const value of ["0", "17", "", "2.5"]) {
-    fireEvent.change(input(/^Total \(calls\)/), { target: { value } });
+    fireEvent.change(input(/^Concurrent calls$/), { target: { value } });
     expect(save().disabled).toBe(true);
   }
   expect(form().textContent).toContain("Must be between 1 and 16");
-  fireEvent.change(input(/^Total \(calls\)/), { target: { value: "2" } });
-  fireEvent.change(input(/^Per environment/), { target: { value: "3" } });
+  fireEvent.change(input(/^Concurrent calls$/), { target: { value: "2" } });
+  fireEvent.change(input(/^Concurrent calls per environment/), { target: { value: "3" } });
   expect(save().disabled).toBe(true);
   expect(form().textContent).toContain("Cannot exceed the global limit");
-  expect(input(/^Per environment/).getAttribute("aria-invalid")).toBe("true");
+  expect(input(/^Concurrent calls per environment/).getAttribute("aria-invalid")).toBe("true");
   fireEvent.submit(form());
   expect(ipc.saveSettings).not.toHaveBeenCalled();
 });
 
 it("saves valid values as numbers and applies them without restart", async () => {
-  render(page());
+  openLimits();
   await screen.findByRole("form", { name: "Limits and retention" });
-  fireEvent.change(input(/^Validity/), { target: { value: "2" } });
-  fireEvent.change(input(/^Per request/), { target: { value: "30" } });
+  fireEvent.change(input(/^Approval validity/), { target: { value: "2" } });
+  fireEvent.change(input(/^Request timeout/), { target: { value: "30" } });
   fireEvent.click(save());
   await waitFor(() => expect(ipc.saveSettings).toHaveBeenCalledWith({ ...defaults, approval_minutes: 2, upstream_timeout_secs: 30 }));
   expect((await within(form()).findByRole("status")).textContent).toContain("saved and applied");
-  expect(form().textContent).toContain("Changes apply without restarting");
+  expect(form().textContent).toContain("Applied right away");
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(save().disabled).toBe(true);
 });
 
 it("asks for confirmation before shrinking retention, which deletes history now", async () => {
-  render(page());
+  openLimits();
   await screen.findByRole("form", { name: "Limits and retention" });
-  fireEvent.change(within(screen.getByRole("group", { name: "Activity retention" })).getByRole("spinbutton", { name: /^Age/ }), { target: { value: "7" } });
+  fireEvent.change(within(screen.getByRole("group", { name: "Activity" })).getByRole("spinbutton", { name: /^Keep for/ }), { target: { value: "7" } });
   fireEvent.click(save());
   const dialog = await screen.findByRole("alertdialog");
   expect(dialog.textContent).toContain("This cannot be undone");
@@ -89,31 +92,33 @@ it("asks for confirmation before shrinking retention, which deletes history now"
 
 it("shows backend validation errors and keeps the draft", async () => {
   vi.mocked(ipc.saveSettings).mockRejectedValue({ code: "app.invalid_input" });
-  render(page());
+  openLimits();
   await screen.findByRole("form", { name: "Limits and retention" });
-  fireEvent.change(input(/^Validity/), { target: { value: "3" } });
+  fireEvent.change(input(/^Approval validity/), { target: { value: "3" } });
   fireEvent.click(save());
   expect((await within(form()).findByRole("alert")).textContent).toContain("Some input is invalid or incomplete.");
-  expect(input(/^Validity/).value).toBe("3");
+  expect(input(/^Approval validity/).value).toBe("3");
 });
 
 it("reports a locked or failing backend instead of showing stale values", async () => {
   vi.mocked(ipc.settings).mockRejectedValue({ code: "app.locked" });
-  render(page());
+  openLimits();
   expect((await screen.findByRole("alert")).textContent).toContain("The vault is locked.");
   expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
 });
 
-it("names each limit by its label only, describes it with its range, and jumps between sections", async () => {
-  render(<SettingsPage theme="dark" setTheme={vi.fn()} busy={false} pendingCount={2} onContextSaved={vi.fn()} onHeadersSaved={vi.fn()} lock={vi.fn()} changePassword={vi.fn()} />);
+it("names each limit by its label only, describes it with its range, and switches sections keeping the draft", async () => {
+  openLimits(2);
   await screen.findByRole("form", { name: "Limits and retention" });
-  const total = within(form()).getByRole("spinbutton", { name: "Total (calls)" });
+  const total = within(form()).getByRole("spinbutton", { name: "Concurrent calls" });
   expect(total.getAttribute("aria-describedby")).toContain("setting-global_concurrency-hint");
-  expect(screen.getByText(/2 pending approvals will be revoked/)).toBeTruthy();
   expect(within(form()).queryByText("Unsaved changes")).toBeNull();
   fireEvent.change(total, { target: { value: "8" } });
   expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
   const nav = screen.getByRole("navigation", { name: "Settings sections" });
   fireEvent.click(within(nav).getByRole("button", { name: "Security" }));
-  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Security" }));
+  expect(screen.queryByRole("form", { name: "Limits and retention" })).toBeNull();
+  expect(screen.getByText(/2 pending approvals will be revoked/)).toBeTruthy();
+  fireEvent.click(within(nav).getByRole("button", { name: "Limits" }));
+  expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
 });

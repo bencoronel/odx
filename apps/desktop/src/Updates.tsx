@@ -72,7 +72,7 @@ export function UpdatesPanel() {
   const run = () => { setResult("checking"); find().then((f) => setResult(f ?? "none"), () => setResult("failed")); };
   const found = typeof result === "object" ? result : null;
   return <section className="panel" aria-labelledby="settings-updates">
-    <header className="panel-header"><h3 id="settings-updates">{t("updates.title")}</h3></header>
+    <header className="panel-header"><div><h3 id="settings-updates">{t("updates.title")}</h3></div></header>
     <div className="setting-row">
       <div><strong>{version && t("updates.version", { version })}</strong>
         {result === "none" && <p className="hint" role="status">{t("updates.upToDate")}</p>}

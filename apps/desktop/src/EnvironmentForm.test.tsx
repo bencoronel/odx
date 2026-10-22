@@ -119,3 +119,11 @@ it("restores what was typed after being unmounted", () => {
   render(<EnvironmentForm busy={false} tagSuggestions={[]} save={vi.fn()} cancel={vi.fn()} draftRef={draftRef} />);
   expect((screen.getByLabelText(/^Name/) as HTMLInputElement).value).toBe("Dev");
 });
+
+it("prefills the user and database defaults from settings", () => {
+  localStorage.setItem("odx.environmentDefaults", JSON.stringify({ login: "admin", database: "" }));
+  render(<EnvironmentForm busy={false} tagSuggestions={[]} save={vi.fn()} cancel={vi.fn()} />);
+  localStorage.removeItem("odx.environmentDefaults");
+  expect(screen.getByLabelText<HTMLInputElement>(/^User/).value).toBe("admin");
+  expect(screen.getByLabelText<HTMLInputElement>(/^Database/).value).toBe("");
+});

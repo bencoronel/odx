@@ -276,6 +276,14 @@
     "proxyHint": "Choose a saved proxy or connect directly. Manage proxies in Settings."
   },
   "settingsPage": {
+    "descriptions": {
+      "general": "Language, theme and app updates.",
+      "connection": "Defaults for new environments and what every request to Odoo sends: proxy, headers and context.",
+      "execution": "How much the app does at once and how long it keeps data. Encrypted in the vault; API/MCP clients cannot change them. Each value is capped at its initial one.",
+      "security": "Lock the vault and change its password."
+    },
+    "environmentDefaults": "New environment defaults",
+    "environmentDefaultsHint": "When set, the new environment form starts with this user and database.",
     "general": "General",
     "appearance": "Language and appearance",
     "sections": "Settings sections",
@@ -285,7 +293,7 @@
     "dark": "Dark",
     "system": "System",
     "themeLabel": "Interface theme",
-    "odooConnection": "Odoo connection",
+    "odooConnection": "Connection",
     "security": "Security",
     "lockNow": "Lock now",
     "lockHint": "Closes access to Odoo and revokes pending requests.",
@@ -329,42 +337,38 @@
       "activity": "100 events per page; encrypted database keeps at most 80,000 occupied pages and is capped at 384 MiB",
       "auditQueue": "128 events; details up to 16 KiB per event"
     },
-    "executionStorage": "Execution and storage",
-    "limitsHint": "Changes apply without restarting and are encrypted in the vault. API/MCP clients cannot change them. Each field is capped at its approved initial value.",
-    "groups": {
-      "concurrency": {
-        "title": "Concurrency",
-        "hint": "Simultaneous calls to Odoo. Lowering this lets active calls finish while new calls wait for a slot."
-      },
-      "timeout": {
-        "title": "Odoo timeout",
-        "hint": "Time allowed for each HTTP request to Odoo. The connection timeout remains limited to 5 s."
-      },
-      "approval": {
-        "title": "Approval expiry",
-        "hint": "Applies to new requests; pending requests keep their existing expiry."
-      },
-      "activity": {
-        "title": "Activity retention",
-        "hint": "Records are kept only while they meet both limits. The encrypted database also has a page cap."
-      },
-      "output": {
-        "title": "Output files",
-        "hint": "Downloads and file results in the app-managed directory."
-      },
-      "total": "Total",
-      "perEnvironment": "Per environment",
+    "limitsTab": "Limits",
+    "execution": {
+      "title": "Execution",
+      "hint": "Applied right away, without restarting."
+    },
+    "retention": {
+      "title": "Retention",
+      "hint": "Data is kept while it meets both limits. Lowering a limit deletes the excess as soon as you save.",
+      "activity": "Activity",
+      "activityHint": "Activity log. The encrypted database also has a page cap.",
+      "output": "Output files",
+      "outputHint": "Downloads and file results in the app-managed directory."
+    },
+    "fields": {
+      "globalConcurrency": "Concurrent calls",
+      "globalConcurrencyHint": "Across all environments. Lowering it lets active calls finish; new ones wait for a slot.",
+      "environmentConcurrency": "Concurrent calls per environment",
+      "environmentConcurrencyHint": "Cannot exceed the total.",
+      "timeout": "Request timeout",
+      "timeoutHint": "Time allowed for each HTTP request to Odoo. Connecting is still limited to 5 s.",
+      "approval": "Approval validity",
+      "approvalHint": "Applies to new requests; pending ones keep their expiry.",
+      "maxAge": "Keep for",
+      "maxSize": "Maximum size"
+    },
+    "units": {
       "calls": "calls",
-      "perRequest": "Per request",
       "seconds": "s",
-      "validity": "Validity",
       "minutes": "min",
-      "age": "Age",
       "days": "days",
-      "size": "Size",
-      "mib": "MiB",
-      "totalSize": "Total size",
-      "hours": "h"
+      "hours": "h",
+      "mib": "MiB"
     }
   },
   "approvals": {

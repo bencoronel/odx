@@ -70,6 +70,19 @@ export function ConnectionFields({ idPrefix, values, change, editing, autoFocus,
   </div>;
 }
 
+/** Prefilled login and database for new environments, saved per device. */
+export type EnvironmentDefaults = { login: string; database: string };
+const DEFAULTS_KEY = "odx.environmentDefaults";
+export function loadEnvironmentDefaults(): EnvironmentDefaults {
+  try {
+    const stored = JSON.parse(localStorage.getItem(DEFAULTS_KEY) ?? "{}");
+    return { login: typeof stored.login === "string" ? stored.login : "", database: typeof stored.database === "string" ? stored.database : "" };
+  } catch { return { login: "", database: "" }; }
+}
+export function saveEnvironmentDefaults(defaults: EnvironmentDefaults) {
+  try { localStorage.setItem(DEFAULTS_KEY, JSON.stringify(defaults)); } catch { /* Optional preference. */ }
+}
+
 export type FormDraft = { values: ConnectionValues; tags: string[] };
 
 export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, draftRef }: {
@@ -81,7 +94,7 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
   draftRef?: { current: FormDraft | null };
 }) {
   const { t } = useTranslation();
-  const [values, setValues] = useState<ConnectionValues>(() => draftRef?.current?.values ?? { name: "", url: "", database: "", login: "", secret: "", protocol: "auto" });
+  const [values, setValues] = useState<ConnectionValues>(() => draftRef?.current?.values ?? { name: "", url: "", secret: "", protocol: "auto", ...loadEnvironmentDefaults() });
   const [tags, setTags] = useState<string[]>(() => draftRef?.current?.tags ?? []);
   useEffect(() => { if (draftRef) draftRef.current = { values, tags }; }, [draftRef, values, tags]);
   const [error, setError] = useState<ErrorState>("");
