@@ -26,7 +26,6 @@ describe("commands", () => {
     expect(search).toMatchObject({ kind: "call", page: { limit: 5, offset: 10 }, call: { method: "search_read", kwargs: { domain: [["name", "ilike", "ada"]], fields: ["id", "name", "email"], limit: 6, offset: 10, order: "name desc" } } });
     expect(parse(`write res.partner [42] {'name': 'Ada'}`)).toMatchObject({ call: { method: "write", args: [[42], { name: "Ada" }] } });
     expect(parse(`call sale.order action_confirm [[7]]`)).toMatchObject({ call: { model: "sale.order", method: "action_confirm", args: [[7]], kwargs: {} } });
-    expect(parse(`\\c Staging North`)).toEqual({ kind: "connect", env: "Staging North" });
     expect(parse(`\\context {'lang': 'es_ES'}`)).toEqual({ kind: "context", value: { lang: "es_ES" } });
     expect(parse(`\\d res.partner mail`)).toMatchObject({ display: "fields", filter: "mail" });
     expect(parse(`\\d res.partner mail --names name,email`)).toMatchObject({ display: "fields", filter: "mail", call: { kwargs: { allfields: ["name", "email"] } } });
@@ -38,8 +37,11 @@ describe("commands", () => {
     expect(() => parse("search Res.Partner")).toThrow(/invalid model/i);
     expect(() => parse("search res.partner -z 1")).toThrow(/unknown option/i);
     expect(() => parse("frobnicate")).toThrow(/unknown command/i);
-    expect(() => parse(`\\c 'a' 'b'`)).toThrow(CommandError);
-    expect(() => parse(`\\c 'a' 'b'`)).toThrow(/extra text/);
+    expect(() => parse(`name res.partner 'a' 'b'`)).toThrow(CommandError);
+    expect(() => parse(`name res.partner 'a' 'b'`)).toThrow(/extra text/);
+    // Each session keeps its environment, so `$_` and saved ids can never reach another database.
+    expect(() => parse(`\\c Staging`)).toThrow(/unknown command/i);
+    expect(() => parse(`\\q`)).toThrow(/unknown command/i);
     expect(() => parse("call res.partner _private")).toThrow(/method/i);
     // Extra ids are an error, not silently dropped ("5,6" is the list form).
     expect(() => parse("unlink res.partner 5 6")).toThrow(CommandError);

@@ -1126,8 +1126,6 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       case "list":
         if (!envs.length) return text("info", t("shell.noEnvironments"));
         return print({ kind: "table", expanded: false, table: { columns: [t("common.environment"), t("common.database"), t("common.url"), t("shell.writeMode")], rows: envs.map((e) => [e.name, e.database, e.url, t(modeLabels[e.write_mode] as "mode.readOnly")]) } });
-      // Each session keeps its environment, so `$_` and saved ids can never reach another database.
-      case "connect": case "disconnect": return text("info", t("shell.fixedEnvironment", { name: tab.envName }));
       case "context":
         if (command.value === undefined) return text("text", JSON.stringify(tab.session.context));
         update((s) => ({ ...s, context: command.value ?? {} }));

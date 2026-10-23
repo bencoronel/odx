@@ -7,8 +7,6 @@ export type OdooCall = { model: string; method: string; args: unknown[]; kwargs:
 export type Command =
   | { kind: "help" }
   | { kind: "list" }
-  | { kind: "connect"; env: string }
-  | { kind: "disconnect" }
   | { kind: "expanded" }
   | { kind: "timing" }
   | { kind: "history"; q?: string; clear?: boolean }
@@ -35,7 +33,7 @@ const ODOO_VERBS = new Set(["search", "count", "read", "name", "read_group", "re
 export const needsOdoo = (line: string) => ODOO_VERBS.has(line.trim().split(/\s+/)[0]?.toLowerCase() ?? "");
 
 export const VERBS = ["search", "count", "read", "read_group", "name", "ref", "metadata", "whoami", "cam", "uhg", "create", "write", "unlink", "call", "help"];
-export const META = ["\\?", "\\l", "\\c", "\\q", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\prev", "\\set", "\\alias", "\\grep", "\\cols", "\\context", "\\clear"];
+export const META = ["\\?", "\\l", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\prev", "\\set", "\\alias", "\\grep", "\\cols", "\\context", "\\clear"];
 /** Verbs whose second token is a model, for autocomplete. */
 export const MODEL_VERBS = ["search", "count", "read", "read_group", "name", "metadata", "cam", "create", "write", "unlink", "call", "\\d"];
 
@@ -201,7 +199,6 @@ export function parse(line: string): Command | null {
   switch (head) {
     case "\\?": case "help": return { kind: "help" };
     case "\\l": return { kind: "list" };
-    case "\\q": return { kind: "disconnect" };
     case "\\x": return { kind: "expanded" };
     case "\\timing": return { kind: "timing" };
     case "\\history": case "\\s": {
@@ -237,10 +234,6 @@ export function parse(line: string): Command | null {
       const columns = (hide ? raw.slice(1) : raw).split(",").map((c) => unquote(c.trim())).filter(Boolean);
       if (!columns.length || new Set(columns).size !== columns.length) throw new CommandError(i18n.t("shell.errors.colsUsage"));
       return { kind: "cols", columns, hide };
-    }
-    case "\\c": {
-      if (!rest.length) throw new CommandError(i18n.t("shell.errors.connectUsage"));
-      return { kind: "connect", env: unquote(rest.join(" ")) };
     }
     case "\\context": {
       if (!rest.length) return { kind: "context" };

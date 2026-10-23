@@ -905,7 +905,7 @@ it("asks for the environment when opening a session and keeps it and its write m
   expect(within(panel()).queryByRole("combobox")).toBeNull();
   // Switching environments inside a session is gone: ids from one database must not reach another.
   command("\\c A");
-  expect(within(panel()).getByText(/This session stays on B/)).toBeTruthy();
+  expect(within(panel()).getByText(/Unknown command: \\c/)).toBeTruthy();
   expect(ipc.check).toHaveBeenCalledTimes(1);
 });
 
