@@ -93,8 +93,7 @@ jobs:
       # Bundled libwayland breaks the host Mesa EGL on newer systems ("Could not create default
       # EGL display: EGL_BAD_PARAMETER", blank window). Use the host's copy, which every Wayland/XWayland
       # desktop ships, and repack with the linuxdeploy plugin the Tauri build already downloaded.
-      # Fixed asset names across versions. releases/latest/download/... skips pre-releases, so the
-      # updater reads its manifest from the fixed `updater` release instead (see Publish).
+      # Fixed asset names across versions.
       - name: Repack without bundled Wayland libraries
         env:
           ARCH: x86_64
@@ -165,12 +164,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A SemVer pre-release tag (v0.1.0-alpha.1) is published as a GitHub pre-release.
-          prerelease=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          # A SemVer pre-release tag (v0.1.0-alpha.1) is published as a GitHub pre-release. A stable release
+          # carries its own latest.json: the updater's first endpoint, releases/latest/download/latest.json,
+          # which skips pre-releases.
+          assets=(dist/*); prerelease=--prerelease
+          [[ "$GITHUB_REF_NAME" == *-* ]] || { assets+=(updater/latest.json); prerelease=; }
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --title "Odx $GITHUB_REF_NAME" --generate-notes $prerelease
-          # Point installed AppImages at this version only after its assets are published. The fixed
-          # `updater` release is a pre-release so it never becomes the repository's "latest".
+          # The fixed `updater` release serves pre-releases (the second endpoint, read while no stable release
+          # exists) and AppImages up to v0.1.0-alpha.4, which know only this endpoint. It is a pre-release so it
+          # never becomes the repository's "latest". Updated only after this version's assets are published.
+          # ponytail: delete this release, these lines and the second endpoint once a stable release is out
+          # and those early AppImages have updated through it.
           gh release view updater --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create updater --repo "$GITHUB_REPOSITORY" --prerelease --title "Updater manifest" \
               --notes "latest.json for the in-app updater. Do not delete."
