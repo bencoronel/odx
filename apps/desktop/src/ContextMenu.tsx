@@ -1,6 +1,23 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+/** Close a popup on a mouse press outside `inside()`; WebKit does not focus clicked buttons, so blur cannot do this. */
+export function useDismiss(open: boolean, inside: () => Element | null | undefined, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: MouseEvent) => { if (!inside()?.contains(event.target as Node)) close(); };
+    document.addEventListener("mousedown", outside);
+    return () => document.removeEventListener("mousedown", outside);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+}
+
+/** Moves a fixed menu to (x, y), kept 4px inside the window. */
+export function placeInWindow(el: HTMLElement, x: number, y: number) {
+  el.style.left = `${Math.max(4, Math.min(x, window.innerWidth - el.offsetWidth - 4))}px`;
+  el.style.top = `${Math.max(4, Math.min(y, window.innerHeight - el.offsetHeight - 4))}px`;
+}
+
 const TEXT_INPUTS = new Set(["", "text", "search", "url", "email", "tel", "password", "number"]);
 
 export type MenuContext = { field: HTMLElement | null; canCut: boolean; canCopy: boolean; canPaste: boolean };
@@ -61,10 +78,7 @@ export default function ContextMenu({ dev }: { dev: boolean }) {
 
   // Keep the menu inside the window.
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || !menu) return;
-    el.style.left = `${Math.max(4, Math.min(menu.x, window.innerWidth - el.offsetWidth - 4))}px`;
-    el.style.top = `${Math.max(4, Math.min(menu.y, window.innerHeight - el.offsetHeight - 4))}px`;
+    if (ref.current && menu) placeInWindow(ref.current, menu.x, menu.y);
   }, [menu]);
 
   if (!menu) return null;

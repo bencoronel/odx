@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import odxIcon from "../src-tauri/icons/icon.png";
 
@@ -24,6 +25,16 @@ function useFilledWindow() {
       window.removeEventListener("resize", sync);
       void listener.then((unlisten) => unlisten(), () => undefined);
     };
+  }, []);
+}
+
+let revealed = false;
+/** The window starts hidden so a transparent, unpainted WebView never shows as a black box; reveal it once after the first paint. */
+function useRevealWindow() {
+  useEffect(() => {
+    if (revealed) return;
+    revealed = true;
+    void appWindow.show().then(() => appWindow.setFocus()).catch(() => undefined);
   }, []);
 }
 
@@ -69,9 +80,15 @@ function WindowResizeHandles() {
   />)}</>;
 }
 
-export function WindowTitleBar({ children }: { children?: ReactNode }) {
+/** `title`: what this window shows, after the ODX mark (table windows). */
+export function WindowTitleBar({ children, title }: { children?: ReactNode; title?: string }) {
   const { t } = useTranslation();
   useFilledWindow();
+  useRevealWindow();
+  // Hidden where the desktop gives no way to stay on top (Wayland outside KDE).
+  const [canKeepAbove, setCanKeepAbove] = useState(false);
+  const [above, setAbove] = useState(false);
+  useEffect(() => { void Promise.resolve().then(() => invoke<boolean>("window_keep_above_supported")).then(setCanKeepAbove, () => undefined); }, []);
   return <><WindowResizeHandles /><div
     className="window-titlebar"
     onMouseDown={(event) => {
@@ -85,9 +102,14 @@ export function WindowTitleBar({ children }: { children?: ReactNode }) {
     <div className="window-title" aria-label="ODX">
       <img className="window-mark" src={odxIcon} alt="" />
       <span>ODX</span>
+      {title && <span className="window-subtitle">{title}</span>}
     </div>
     <div className="titlebar-tools">{children}</div>
     <div className="window-controls" onMouseDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+      {canKeepAbove && <button type="button" className={above ? "on" : undefined} aria-pressed={above} aria-label={t("window.keepAbove")} data-tip={t(above ? "window.stopKeepAbove" : "window.keepAbove")}
+        onClick={() => void invoke("window_keep_above", { above: !above }).then(() => setAbove(!above), () => undefined)}>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 7.5 6 4.5l3 3" /></svg>
+      </button>}
       <button type="button" aria-label={t("window.minimize")} data-tip={t("window.minimize")} onClick={() => void appWindow.minimize()}>
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" /></svg>
       </button>

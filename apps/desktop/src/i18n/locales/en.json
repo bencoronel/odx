@@ -50,31 +50,25 @@
     "workspace": "Workspace",
     "administration": "Administration",
     "lock": "Lock vault",
-    "lockHint": "Lock the vault and revoke pending requests",
     "unlocked": "Unlocked",
     "lockRevokes_one": "Revokes {{count}} pending request",
     "lockRevokes_other": "Revokes {{count}} pending requests",
     "lockPending_one": "Lock · {{count}} pending",
     "lockPending_other": "Lock · {{count}} pending",
     "environments": {
-      "title": "Environments",
-      "description": "Odoo connections available to clients"
+      "title": "Environments"
     },
     "approvals": {
-      "title": "Approvals",
-      "description": "Writes waiting for your decision"
+      "title": "Approvals"
     },
     "shell": {
-      "title": "Terminal",
-      "description": "Run calls against an environment as yourself"
+      "title": "Terminal"
     },
     "activity": {
-      "title": "Activity",
-      "description": "Operations sent to Odoo, newest first"
+      "title": "Activity"
     },
     "mcp": {
       "title": "MCP",
-      "description": "MCP connections and environment permissions",
       "local": "Local",
       "remote": "API"
     },
@@ -83,13 +77,14 @@
     },
     "serverPending": "Pending · Server mode",
     "settings": {
-      "title": "Settings",
-      "description": "Appearance, HTTP headers and vault security"
+      "title": "Settings"
     }
   },
   "window": {
     "minimize": "Minimize",
-    "maximizeRestore": "Maximize or restore"
+    "maximizeRestore": "Maximize or restore",
+    "keepAbove": "Keep above other windows",
+    "stopKeepAbove": "Stop keeping above"
   },
   "unlock": {
     "openError": "Could not open the vault",
@@ -97,8 +92,6 @@
     "createTitle": "Create vault",
     "lockedTitle": "Vault locked",
     "vault": "Vault",
-    "createHint": "Choose a master password to encrypt your connections.",
-    "enterHint": "Enter the master password to continue.",
     "password": "Master password",
     "repeat": "Repeat master password",
     "minLength": "At least 8 characters.",
@@ -128,11 +121,9 @@
     "stopped": "stopped",
     "active": "active",
     "lockedListening": "listening · locked",
-    "stdioHint": "stdio connector over a local socket",
     "connections_one": "{{count}} connection",
     "connections_other": "{{count}} connections",
     "unlockRequired": "Requests are rejected until the vault is unlocked",
-    "connectHint": "Select to see how to connect a client",
     "connectionSince": "{{client}} · since {{time}}",
     "noConnector": "No connector is open",
     "pendingApprovals_one": "{{count}} pending approval",
@@ -155,7 +146,6 @@
       "enableTemporary": "Enable temporarily",
       "enablePermanent": "Enable permanently",
       "durationMinutes": "Duration in minutes",
-      "durationHint": "The timer starts when you confirm and continues if you close the window.",
       "warning": "Deletes still require your approval. Changing the mode revokes pending requests for this environment."
     },
     "approval": {
@@ -220,18 +210,14 @@
     "newContextValue": "New context value",
     "headerValue": "Header value {{index}}",
     "contextValue": "Context value {{index}}",
-    "savedSecret": "Saved value\nEncrypted in the vault and never shown. Enter another value to replace it",
-    "contextValueHelp": "Text or JSON\nExamples: es_ES, false, 3, [1, 2]. Use \"false\" to keep it as text.",
+    "savedSecret": "Saved value",
+    "contextValueHelp": "Text or JSON",
     "deleteHeader": "Delete header {{index}}",
     "deleteContext": "Delete context {{index}}",
     "saveWarning": "Save warning",
     "onSave": "When saving",
     "revokeEnvironmentRequests": "Pending requests for this environment are revoked and Odoo is reauthenticated.",
     "revokeAllRequests": "Pending requests for all environments are revoked and Odoo is reauthenticated.",
-    "globalHeadersHint": "Sent with every request to Odoo. Each environment can override them. Changes are saved when you leave a field.",
-    "globalContextHint": "Added to the context of every Odoo call, for example lang or tz. Each environment can override any key. Changes are saved when you leave a field.",
-    "environmentContextHint": "Added to every call in this environment; overrides global keys.",
-    "environmentHeadersHint": "Sent with every request in this environment; overrides global headers.",
     "ownContext_one": "{{count}} key of its own",
     "ownContext_other": "{{count}} keys of its own",
     "ownHeaders_one": "{{count}} header of its own",
@@ -254,16 +240,12 @@
     "advancedOptions": "Advanced options",
     "name": "Name",
     "namePlaceholder": "Development",
-    "nameHelp": "MCP/API clients use this name.",
     "odooUrl": "Odoo URL",
     "user": "User",
     "apiKey": "API key or password",
     "unchanged": "Unchanged",
-    "keepCredentialHint": "Leave blank to keep the saved credential.",
-    "credentialHint": "Encrypted in the vault and never shown to clients.",
     "createTitle": "New environment",
     "createAction": "Create environment",
-    "readOnlyHint": "It will be created in read-only mode.",
     "connection": "Connection",
     "context": "Context",
     "environmentContext": "Environment context",
@@ -271,38 +253,25 @@
     "keepSecretPlaceholder": "Leave blank to keep the saved credential.",
     "newTargetSecretPlaceholder": "API key required for the new URL, database or user",
     "savedCredential": "Saved credential",
-    "savedCredentialHint": "Credential saved\nEncrypted in the vault and never shown",
+    "savedCredentialHint": "Credential saved",
     "noCredential": "No credential",
     "testConnection": "Test connection",
     "loadDatabases": "Load databases from the server",
-    "databasesHint": "Type the name or load them from the server.",
     "databasesHidden": "The server does not list its databases; type the name.",
     "testNeeds": "Fill in URL, database, user and API key to test.",
     "testOk": "Connected · Odoo {{version}} · {{latency}} ms",
     "databasesFound_one": "The server has 1 database; pick it or type another.",
     "databasesFound_other": "The server has {{count}} databases; pick one or type another.",
     "serverTitle": "Server",
-    "serverHint": "Where Odoo is and which database to use.",
     "accessTitle": "Access",
-    "accessHint": "The Odoo user MCP/API clients act as. Use a user with only the rights they need.",
-    "identityTitle": "Name and organization",
-    "identityHint": "How you and MCP/API clients refer to this environment.",
-    "proxyHint": "Choose a saved proxy or connect directly. Manage proxies in Settings."
+    "identityTitle": "Name and organization"
   },
   "settingsPage": {
-    "descriptions": {
-      "general": "Language, theme and app updates.",
-      "connection": "Defaults for new environments and what every request to Odoo sends: proxy, headers and context.",
-      "execution": "How much the app does at once and how long it keeps data. Encrypted in the vault; API/MCP clients cannot change them. Each value is capped at its initial one.",
-      "security": "Lock the vault and change its password."
-    },
     "environmentDefaults": "New environment defaults",
-    "environmentDefaultsHint": "When set, the new environment form starts with this user and database.",
     "general": "General",
     "appearance": "Language and appearance",
     "sections": "Settings sections",
     "theme": "Theme",
-    "remembered": "Remembered on this device.",
     "light": "Light",
     "dark": "Dark",
     "system": "System",
@@ -310,19 +279,16 @@
     "odooConnection": "Connection",
     "security": "Security",
     "lockNow": "Lock now",
-    "lockHint": "Closes access to Odoo and revokes pending requests.",
     "lockPending_one": "{{count}} pending approval will be revoked.",
     "lockPending_other": "{{count}} pending approvals will be revoked.",
     "rangeError": "Must be between {{min}} and {{max}}",
     "concurrencyError": "Cannot exceed the global limit",
     "limits": "Limits and retention",
     "saved": "Settings saved and applied.",
-    "defaultRange": "Initial {{value}} · {{min}}–{{max}}",
     "reduceRetention": "Reduce retention",
     "reduceRetentionWarning": "Saving immediately deletes activity and output files beyond the new limits. This cannot be undone.",
     "reduceAndDelete": "Reduce and delete",
     "fixedLimits": "Fixed limits",
-    "fixedLimitsHint": "Documented values that cannot be changed in the app.",
     "fixed": {
       "executionQueue": "Execution queue",
       "pendingApprovals": "Pending approvals",
@@ -353,26 +319,18 @@
     },
     "limitsTab": "Limits",
     "execution": {
-      "title": "Execution",
-      "hint": "Applied right away, without restarting."
+      "title": "Execution"
     },
     "retention": {
       "title": "Retention",
-      "hint": "Data is kept while it meets both limits. Lowering a limit deletes the excess as soon as you save.",
       "activity": "Activity",
-      "activityHint": "Activity log. The encrypted database also has a page cap.",
-      "output": "Output files",
-      "outputHint": "Downloads and file results in the app-managed directory."
+      "output": "Output files"
     },
     "fields": {
       "globalConcurrency": "Concurrent calls",
-      "globalConcurrencyHint": "Across all environments. Lowering it lets active calls finish; new ones wait for a slot.",
       "environmentConcurrency": "Concurrent calls per environment",
-      "environmentConcurrencyHint": "Cannot exceed the total.",
       "timeout": "Request timeout",
-      "timeoutHint": "Time allowed for each HTTP request to Odoo. Connecting is still limited to 5 s.",
       "approval": "Approval validity",
-      "approvalHint": "Applies to new requests; pending ones keep their expiry.",
       "maxAge": "Keep for",
       "maxSize": "Maximum size"
     },
@@ -389,7 +347,6 @@
     "arguments": "Arguments",
     "namedArguments": "Named arguments",
     "context": "Context",
-    "emptyHint": "No requests are pending. Writes that need your approval will appear here.",
     "requestLabel": "{{method}} on {{model}}, {{environment}}",
     "clientRequest": "API/MCP client that requested this",
     "localRequest": "Local request",
@@ -404,7 +361,7 @@
     "requestedAt": "Requested",
     "expires": "Expires",
     "reasonLabel": "Rejection reason",
-    "reasonPlaceholder": "Tell the agent why (optional) · Enter rejects, Esc cancels",
+    "reasonPlaceholder": "Reason for the agent (optional)",
     "records_one": "Record",
     "records_other": "Records",
     "rawCall": "Raw call",
@@ -437,7 +394,7 @@
     "rejectAll_other": "Reject {{count}}",
     "expiredSkipped_one": "{{count}} expired request will not be approved.",
     "expiredSkipped_other": "{{count}} expired requests will not be approved.",
-    "batchReasonPlaceholder": "Tell the agent why (optional) · Enter rejects",
+    "batchReasonPlaceholder": "Reason for the agent (optional)",
     "approvedNotice_one": "Request approved",
     "approvedNotice_other": "{{count}} requests approved",
     "rejectedNotice_one": "Request rejected",
@@ -483,42 +440,41 @@
     "updated": "Password updated. Use it the next time you unlock the vault."
   },
   "clients": {
-    "capabilities": {
-      "read": "Read",
-      "readHelp": "Read records, fields and models.",
-      "write": "Request writes",
-      "writeHelp": "Create, update or delete according to each environment's mode; this capability never approves requests."
-    },
     "revoke": "Revoke",
     "revokeError": "Could not revoke the client.",
-    "allEnvironments": "All environments",
+    "allEnvironments": "All, including new ones",
     "noEnvironments": "No environments",
     "name": "Name",
     "environments": "Environments",
-    "capabilitiesTitle": "Capabilities",
     "environmentScope": "Environment scope",
     "selectedEnvironments": "Selected only",
-    "allEnvironmentsLongHint": "Includes environments created later. Each environment is still limited by its write mode.",
-    "selectedEnvironmentsHint": "Only selected environments; new environments are not added automatically.",
-    "claudeCodeHint": "Run this command in a terminal to add ODX to Claude Code for your user, available across all your projects.",
-    "codexCliHint": "Run this command in a terminal to add ODX to your user's MCP configuration in Codex CLI.",
     "updateError": "Could not save the client.",
-    "noEnvironmentsYet": "No environments yet: connected agents will see nothing until you create one."
+    "noEnvironmentsYet": "No environments yet: connected agents will see nothing until you create one.",
+    "access": "Access",
+    "levels": {
+      "read": "Read only",
+      "write": "Read and request writes"
+    },
+    "selectAll": "All",
+    "selectNone": "None",
+    "unattended": "Agents can create and update without approval in {{names}}.",
+    "unattendedShort": "No approval"
   },
   "mcpLocal": {
     "status": "Local MCP status",
-    "agents": "Connected agents",
-    "lastUse": "Last use",
-    "never": "Never",
     "permissions": "Permissions",
-    "permissionsHint": "They apply to every agent connected over stdio on this device. Each environment is still limited by its write mode.",
     "saveRevokes": "Saving revokes the pending requests from these agents.",
     "connect": "Connect an agent",
     "client": "Client",
-    "jsonHint": "For other MCP clients: add this block to their server configuration.",
     "title": "Local MCP",
-    "description": "Agents on this computer (Claude Code, Codex…) connect over stdio. Choose what they may do and how to connect them.",
-    "connectHint": "Command or configuration to add ODX to your agent."
+    "connectedAgents_one": "{{count}} agent connected",
+    "connectedAgents_other": "{{count}} agents connected",
+    "checking": "Checking…",
+    "added": "Added to {{agent}}",
+    "outdated": "{{agent}} runs Odx from another path.",
+    "detected": "{{agent}} is installed on this computer.",
+    "add": "Add",
+    "update": "Update"
   },
   "proxy": {
     "errors": {
@@ -532,7 +488,7 @@
       "inUse_other": "{{count}} environments use this proxy. Choose another one for them first.",
       "notFound": "This proxy no longer exists."
     },
-    "savedSecret": "Saved\nEncrypted in the vault and never shown. Enter another value to replace it",
+    "savedSecret": "Saved",
     "host": "Host",
     "hostLabel": "Proxy host",
     "port": "Port",
@@ -543,9 +499,7 @@
     "passwordLabel": "Proxy password",
     "kind": "Proxy type",
     "title": "Proxy",
-    "help": "Pick one for each environment in its connection. Environments set to Default use the default proxy; with no default they connect directly.",
     "type": "Type",
-    "socksHint": "SOCKS5 with name resolution through the proxy.",
     "saveTitle": "Save proxy",
     "pendingWarning_one": "There is {{count}} pending approval. Saving revokes requests for environments whose proxy changes and reauthenticates with Odoo.",
     "pendingWarning_other": "There are {{count}} pending approvals. Saving revokes requests for environments whose proxy changes and reauthenticates with Odoo.",
@@ -557,8 +511,7 @@
     "withCredentials": "with credentials",
     "edit": "Edit {{name}}",
     "delete": "Delete {{name}}",
-    "empty": "No proxies yet. Add one to route environments through it; until then they connect directly.",
-    "notes": "All traffic to Odoo (the three protocols, health checks, downloads and favicons) goes through the environment's proxy. System HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY variables are ignored. If the proxy fails, the call fails; it is never retried directly.",
+    "empty": "No proxies.",
     "makeDefault": "Make default",
     "clearDefault": "Remove default",
     "usedBy_one": "Used by {{count}} environment",
@@ -595,13 +548,11 @@
   },
   "environments": {
     "emptyTitle": "No environments",
-    "emptyHint": "Add a connection to an Odoo instance. Environments start in read-only mode.",
     "focusWhileCreating": "Finish or cancel the new environment to show {{name}}.",
     "listLabel": "Environment list",
     "filterPlaceholder": "Filter, or # for tags",
     "filterLabel": "Filter environments",
     "checkAll": "Check all environments",
-    "checkAllHint": "Check all\nMeasure the connection to every environment again",
     "newEnvironment": "New environment",
     "environments": "Environments",
     "noMatches": "No matches",
@@ -610,8 +561,8 @@
     "openBrowserTip": "Open in browser\n{{url}}",
     "openBrowser": "Open in browser",
     "openShell": "Open in Terminal",
-    "cloneHint": "Duplicate environment\nThe copy starts read-only and does not inherit the original permissions",
     "cloneEnvironment": "Duplicate environment",
+    "addDatabase": "Add another database",
     "writeMode": "Write mode",
     "readOnlyAt": "Returns to read-only at {{time}}",
     "changeDeadline": "Change deadline",
@@ -628,11 +579,9 @@
     "saveConnection": "Save connection",
     "saveConnectionWarning_one": "There is {{count}} pending approval in this environment. Saving revokes it and reauthenticates with Odoo.",
     "saveConnectionWarning_other": "There are {{count}} pending approvals in this environment. Saving revokes them and reauthenticates with Odoo.",
-    "nameTip": "Environment name\nMCP/API clients use it to refer to this environment",
     "environmentProxy": "Environment proxy",
     "inheritProxy": "Default ({{proxy}})",
     "directProxy": "Direct connection",
-    "directProxyHint": "Direct connection\nDoes not use any proxy",
     "tags": "Tags",
     "addTag": "Add tag",
     "removeTag": "Remove tag {{tag}}",
@@ -646,8 +595,6 @@
     "filterCount": "{{shown}} of {{total}} environments",
     "noDefaultProxy": "direct",
     "missingProxy": "Missing proxy",
-    "writeModeHint": "What MCP/API clients may do in this environment.",
-    "connectionHint": "Server, credentials and proxy for this environment.",
     "proxySummary": "Proxy: {{proxy}}",
     "moreActions": "More actions",
     "tagColor": "Color of {{tag}}",
@@ -663,7 +610,6 @@
     "filterByTag": "Filter by this tag",
     "modeFilter": "Filter by write mode",
     "removeModeFilter": "Remove filter {{mode}}",
-    "noMatchesHint": "Try another search or remove a filter.",
     "noEnvironmentMatches": "No matching environments"
   },
   "headerInput": {
@@ -700,18 +646,10 @@
     "filters": "Filters",
     "writes": "Writes",
     "errors": "Errors",
-    "removeClientFilter": "Remove client filter",
     "refresh": "Refresh activity",
     "incompleteHistory": "Part of the history could not be read (interrupted session or damaged segment). Showing recoverable records.",
     "emptyTitle": "No activity",
     "noMatches": "No events match the filters.",
-    "emptyHint": "Reads and writes sent to Odoo will appear here. Records are kept according to the retention settings.",
-    "details": "Details",
-    "date": "Date",
-    "operation": "Operation",
-    "result": "Result",
-    "hideDetails": "Hide details for {{operation}}",
-    "showDetails": "Show details for {{operation}}",
     "filterBy": "Filter by {{name}}",
     "deleted": "Deleted",
     "thisClient": "this client",
@@ -719,7 +657,17 @@
     "revoked": "Revoked",
     "detailsFor": "Details for {{operation}}",
     "loadMore": "Load more",
-    "limitReached": "Showing the latest {{count}} records. Narrow the filters to see older ones."
+    "limitReached": "Showing the latest {{count}} records. Narrow the filters to see older ones.",
+    "listLabel": "Activity",
+    "resizeList": "Resize activity list",
+    "kind": "Kind",
+    "removeFilter": "Remove filter {{name}}",
+    "clearFilters": "Clear filters",
+    "newEvents_one": "{{count}} new event",
+    "newEvents_other": "{{count}} new events",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "replay": "Repeat in Terminal"
   },
   "shell": {
     "initial": "Odx Terminal · \\c <environment> to connect · \\? for help",
@@ -1083,7 +1031,8 @@
       "upstreamAuth": "Odoo rejected the environment credentials.",
       "notFound": "The requested item could not be found.",
       "apiBindFailed": "The local API could not start. Its configured port may already be in use.",
-      "mcpSocketFailed": "The local MCP connector socket could not be opened."
+      "mcpSocketFailed": "The local MCP connector socket could not be opened.",
+      "agentInstallFailed": "Odx could not be added to the agent."
     }
   },
   "health": {
@@ -1112,8 +1061,7 @@
     "connectionLabel": "Connection: {{title}}, {{label}}",
     "stateLabel": "Connection status: {{title}}, {{label}}{{detail}}. {{retry}}",
     "retry": "Check again",
-    "checkedAt": "Checked at {{time}}",
-    "retryHint": "Select to check again"
+    "checkedAt": "Checked at {{time}}"
   },
   "desktop": {
     "trayUnavailable": "System tray unavailable. Closing the window locks the vault and stops Odx.",

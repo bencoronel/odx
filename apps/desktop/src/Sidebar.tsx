@@ -4,14 +4,14 @@ import { formatNumber } from "./i18n/format";
 
 export type Page = "environments" | "approvals" | "shell" | "mcp" | "activity" | "settings";
 export const pages = {
-  environments: { title: "navigation.environments.title", description: "navigation.environments.description", icon: "server" },
-  approvals: { title: "navigation.approvals.title", description: "navigation.approvals.description", icon: "check" },
-  shell: { title: "navigation.shell.title", description: "navigation.shell.description", icon: "terminal" },
-  activity: { title: "navigation.activity.title", description: "navigation.activity.description", icon: "activity" },
-  mcp: { title: "navigation.mcp.title", description: "navigation.mcp.description", icon: "clients" },
-  api: { title: "navigation.api.title", description: "navigation.serverPending", icon: "server" },
-  settings: { title: "navigation.settings.title", description: "navigation.settings.description", icon: "settings" },
-} as const satisfies Record<Page | "api", { title: string; description: string; icon: IconName }>;
+  environments: { title: "navigation.environments.title", icon: "server" },
+  approvals: { title: "navigation.approvals.title", icon: "check" },
+  shell: { title: "navigation.shell.title", icon: "terminal" },
+  activity: { title: "navigation.activity.title", icon: "activity" },
+  mcp: { title: "navigation.mcp.title", icon: "clients" },
+  api: { title: "navigation.api.title", icon: "server" },
+  settings: { title: "navigation.settings.title", icon: "settings" },
+} as const satisfies Record<Page | "api", { title: string; icon: IconName }>;
 export const PAGE_ORDER: Page[] = ["environments", "approvals", "shell", "mcp", "activity", "settings"];
 export const shortcut = (p: Page) => `Ctrl+${PAGE_ORDER.indexOf(p) + 1}`;
 const sections: { label: "navigation.workspace" | "navigation.administration"; items: (Page | "api")[] }[] = [
@@ -54,7 +54,7 @@ export default function Sidebar({ page, setPage, counts, busy, lock, openPalette
     </nav>
     {/* Shows the current state; hover previews the action. */}
     <button className="sidebar-lock" disabled={busy} onClick={lock} aria-label={t("navigation.lock")}
-      data-tip={[t("navigation.lockHint"), ...(counts.approvals ? [t("navigation.lockRevokes", { count: counts.approvals })] : [])].join("\n")}>
+      data-tip={counts.approvals ? t("navigation.lockRevokes", { count: counts.approvals }) : undefined}>
       <span className="sidebar-lock-icon"><Icon name="unlock" /><Icon name="lock" /></span>
       <span className="sidebar-lock-text"><strong>{t("navigation.unlocked")}</strong>
         <small>{counts.approvals ? t("navigation.lockPending", { count: counts.approvals }) : t("navigation.lock")}</small></span>

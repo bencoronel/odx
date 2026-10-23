@@ -14,12 +14,12 @@ export function serviceState(service: Service, unlocked: boolean) {
   return unlocked ? { text: "active", tone: "ok" } : { text: "lockedListening", tone: "neutral" };
 }
 
-function ServiceItem({ label, service, unlocked, hint, open, count, details = [] }: { label: string; service: Service; unlocked: boolean; hint: string; open?: () => void; count?: number; details?: string[] }) {
+function ServiceItem({ label, service, unlocked, open, count, details = [] }: { label: string; service: Service; unlocked: boolean; open?: () => void; count?: number; details?: string[] }) {
   const { t } = useTranslation();
   const state = serviceState(service, unlocked);
   const text = state.text === "error" ? t("service.error") : state.text === "stopped" ? t("service.stopped") : state.text === "active" ? t("service.active") : t("service.lockedListening");
-  const tip = [`${label} ${text}`, service.error ? formatAppError({ code: service.error }) : `${hint}${service.address ? ` · ${service.address}` : ""}`,
-    ...(unlocked ? details : [t("service.unlockRequired")]), ...(open ? [t("service.connectHint")] : [])].join("\n");
+  const tip = [`${label} ${text}`, service.error ? formatAppError({ code: service.error }) : service.address ?? "",
+    ...(unlocked ? details : [t("service.unlockRequired")])].filter(Boolean).join("\n");
   const content = <><span className={`status-dot tone-${state.tone}`} />{label} {text}{count ? ` · ${t("service.connections", { count })}` : ""}</>;
   const className = `status-item ${service.state === "error" ? "text-danger" : ""}`;
   return open ? <button className={className} onClick={open} data-tip={tip}>{content}</button>
@@ -37,7 +37,7 @@ export default function ServiceStatus({ vault, services, pending = 0, openMcp, o
   const { t } = useTranslation();
   const unlocked = vault === "unlocked";
   return <footer className="statusbar" aria-label={t("service.statusLabel")}>
-    {unlocked && services && <ServiceItem label="MCP" service={services.mcp} unlocked={unlocked} hint={t("service.stdioHint")} open={openMcp}
+    {unlocked && services && <ServiceItem label="MCP" service={services.mcp} unlocked={unlocked} open={openMcp}
       count={unlocked ? services.connections.length : undefined}
       details={services.connections.length ? services.connections.map((c) => t("service.connectionSince", { client: c.client_label ?? t("common.deletedClient"), time: formatDateTime(new Date(c.since), { hour: "2-digit", minute: "2-digit" }) })) : [t("service.noConnector")]} />}
     {unlocked

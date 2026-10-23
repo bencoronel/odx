@@ -76,10 +76,7 @@ export default function UnlockScreen({ status, busy, error, retry, submit, reset
         if (!creating) setPassword("");
         void pending.then((ok) => { if (ok) { setPassword(""); setRepeat(""); setConfirm(false); } });
       }}>
-        <div>
-          <h2>{creating ? t("unlock.createTitle") : t("unlock.lockedTitle")}</h2>
-          <p className="hint">{creating ? t("unlock.createHint") : t("unlock.enterHint")}</p>
-        </div>
+        <h2>{creating ? t("unlock.createTitle") : t("unlock.lockedTitle")}</h2>
         <label className="field">
           <span id="unlock-password-label">{t("unlock.password")}</span>
           <div className="unlock-password-control">

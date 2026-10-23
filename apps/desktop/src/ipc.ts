@@ -39,7 +39,11 @@ export type ContextSettings = { entries:ContextEntry[];inherited:Record<string,u
 /** Settings, editable only in the desktop window. */
 export type Settings = { global_concurrency:number;environment_concurrency:number;upstream_timeout_secs:number;approval_minutes:number;activity_days:number;activity_mib:number;output_hours:number;output_mib:number };
 export type SettingsView = { settings:Settings;defaults:Settings;bounds:Record<keyof Settings,{min:number;max:number}> };
+/** An agent CLI's registration of Odx: not installed, absent, current, or pointing at another executable path. */
+export type AgentSetup = "no_cli" | "missing" | "added" | "outdated";
+export type Agent = "claude" | "codex";
 export const ipc = {
+ agentSetup:(agent:Agent)=>invoke<AgentSetup>("agent_setup",{agent}), agentInstall:(agent:Agent)=>invoke<AgentSetup>("agent_install",{agent}),
  restart:()=>invoke<void>("desktop_restart"),
  settings:()=>invoke<SettingsView>("settings_get"), saveSettings:(settings:Settings)=>invoke<SettingsView>("settings_save",{settings}),
  faviconPage:(id:string)=>invoke<{url:string;html:string}>("environment_favicon_page",{id}),

@@ -103,7 +103,6 @@ export function HealthChip({ env }: { env: Environment }) {
       {help && <span>{help}</span>}
       {error && report?.status !== "ok" && <span className="tip-mono tip-error">{error}</span>}
       {when && <span className="tip-meta">{t("health.checkedAt", { time: when })}</span>}
-      <span className="tip-meta">{t("health.retryHint")}</span>
     </span>
   </button>;
 }

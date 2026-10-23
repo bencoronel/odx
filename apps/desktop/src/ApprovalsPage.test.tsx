@@ -139,7 +139,6 @@ it("keeps the layout when nothing is pending and says so in the list", () => {
   page([]);
   expect(screen.getByRole("searchbox", { name: "Filter requests" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "All caught up" })).toBeTruthy();
-  expect(screen.getByText("No requests are pending. Writes that need your approval will appear here.")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
 });
 

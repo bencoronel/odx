@@ -827,6 +827,54 @@ pub fn desktop_cancel_suspend(app: tauri::AppHandle, ticket: u64) {
 }
 
 #[tauri::command]
+pub async fn agent_setup(agent: crate::services::Agent) -> crate::services::AgentSetup {
+    tauri::async_runtime::spawn_blocking(move || crate::services::agent_setup(agent))
+        .await
+        .unwrap_or(crate::services::AgentSetup::NoCli)
+}
+
+/// Runs the agent's own `mcp add`; the error detail is the CLI's message, e.g. a name already taken in another scope.
+#[tauri::command]
+pub async fn agent_install(
+    agent: crate::services::Agent,
+) -> Result<crate::services::AgentSetup, AppError> {
+    tauri::async_runtime::spawn_blocking(move || crate::services::agent_install(agent))
+        .await
+        .map_err(|_| AppError::new("system.operation_failed"))?
+        .map_err(|detail| AppError {
+            detail: Some(detail),
+            ..AppError::new("system.agent_install_failed")
+        })
+}
+
+#[tauri::command]
+pub fn desktop_set_language(app: tauri::AppHandle, language: String) {
+    crate::desktop::set_language(&app, &language);
+}
+
+#[tauri::command]
+pub fn window_keep_above_supported() -> bool {
+    crate::desktop::keep_above_supported()
+}
+
+/// Keep the calling window above the others (or not).
+#[tauri::command]
+pub async fn window_keep_above(window: tauri::WebviewWindow, above: bool) -> Result<(), AppError> {
+    tauri::async_runtime::spawn_blocking(move || crate::desktop::keep_above(&window, above))
+        .await
+        .map_err(|_| AppError::new("system.operation_failed"))?
+        .map_err(|detail| AppError {
+            detail: Some(detail),
+            ..AppError::new("system.operation_failed")
+        })
+}
+
+#[tauri::command]
+pub fn desktop_take_approval(app: tauri::AppHandle) -> Option<String> {
+    crate::desktop::take_open_approval(&app)
+}
+
+#[tauri::command]
 pub fn desktop_ready(app: tauri::AppHandle) -> Option<u64> {
     crate::desktop::pending_suspend(&app)
 }

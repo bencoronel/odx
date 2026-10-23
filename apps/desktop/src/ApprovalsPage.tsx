@@ -10,7 +10,7 @@ import { formatDateTime } from "./i18n/format";
 import { CallDetails, ValuesTable, methodTone, recordIds, shellCommand, writtenValues } from "./ApprovalDetails";
 import CopyButton from "./CopyButton";
 
-export default function ApprovalsPage({ pending, envs, deciding, decide, decideMany, openInShell, openEnvironment, filter, setFilter }: {
+export default function ApprovalsPage({ pending, envs, deciding, decide, decideMany, openInShell, openEnvironment, filter, setFilter, focusId }: {
   pending: Pending[];
   envs: Environment[];
   /** Ids whose decision is in flight; only those are locked. */
@@ -24,10 +24,13 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   /** Kept by the app, so it survives switching pages. */
   filter: string;
   setFilter: (filter: string) => void;
+  /** Request to select on arrival, such as a clicked notification. */
+  focusId?: string | null;
 }) {
   const { t } = useTranslation();
   const now = useNow(pending.length > 0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(focusId ?? null);
+  useEffect(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
   const [nudge, setNudge] = useState(0);
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
@@ -154,7 +157,6 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
       {pending.length === 0 ? <div className="empty">
         <span className="empty-icon tone-ok"><Icon name="check" /></span>
         <h2>{t("approvals.emptyTitle")}</h2>
-        <p>{t("approvals.emptyHint")}</p>
       </div>
       : !item ? <ul className="env-list"><li className="list-empty"><span className="list-empty-icon"><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><button type="button" className="btn sm" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</button></li></ul>
       : <ul className="env-list approval-list" role="listbox" aria-multiselectable="true" aria-label={t("approvals.listLabel")} ref={list}>

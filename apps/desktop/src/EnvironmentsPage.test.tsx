@@ -92,7 +92,7 @@ it("clones and deletes from the list's context menu", async () => {
   render(withProps({ remove }));
   fireEvent.contextMenu(screen.getByRole("option", { name: /Fixture/ }), { clientX: 10, clientY: 10 });
   const menu = screen.getByRole("menu", { name: "Fixture" });
-  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in Terminal", "Duplicate environment", "Delete environment"]);
+  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in Terminal", "Duplicate environment", "Add another database", "Delete environment"]);
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete environment" }));
   expect(screen.queryByRole("menu", { name: "Fixture" })).toBeNull();
   fireEvent.click(within(dialog()).getByRole("button", { name: "Delete environment" }));
@@ -430,4 +430,42 @@ it("keeps the create form and its draft when asked to show an environment, and s
   rerender(withProps({ envs: [env, other], creating: false, setCreating, focusId: "other" }));
   expect(screen.queryByText(/Finish or cancel/)).toBeNull();
   expect(screen.getByRole("option", { name: /Other/ }).getAttribute("aria-selected")).toBe("true");
+});
+
+it("groups databases of one server and adds another with its URL, user and proxy but no API key", async () => {
+  // The detail pane reads the proxy too, so a one-off mock would be spent there.
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "profile", id: "vpn" });
+  const sibling: Environment = { ...env, id: "sibling", name: "Sibling", database: "sibling-db", login: "other-user" };
+  const lone: Environment = { ...env, id: "lone", name: "Lone", url: "https://lone.test" };
+  const setCreating = vi.fn();
+  const draftRef: Parameters<typeof EnvironmentsPage>[0]["draftRef"] = { current: null };
+  render(withProps({ envs: [env, sibling, lone], setCreating, draftRef }));
+  const group = screen.getByRole("group", { name: "example.test" });
+  expect(within(group).getAllByRole("option").map((o) => o.dataset.id)).toEqual(["fixture", "sibling"]);
+  expect(within(group).getByText("sibling-db · other-user")).toBeTruthy();
+  expect(screen.queryByRole("group", { name: "lone.test" })).toBeNull();
+  fireEvent.click(within(group).getByRole("button", { name: /example\.test/ }));
+  expect(within(group).queryAllByRole("option")).toHaveLength(0);
+  fireEvent.click(within(group).getByRole("button", { name: "Add another database" }));
+  await waitFor(() => expect(setCreating).toHaveBeenCalledWith(true));
+  expect(draftRef!.current).toEqual({ values: { name: "", url: env.url, database: "", login: env.login, secret: "", protocol: env.protocol }, tags: [], proxy: "p:vpn" });
+  vi.mocked(ipc.environmentProxy).mockResolvedValue({ mode: "inherit", id: null });
+});
+
+it("acts on the focused environment with Delete, F2 and Ctrl+D", async () => {
+  render(withProps({}));
+  const option = () => screen.getByRole("option", { name: /Fixture/ });
+  fireEvent.keyDown(option(), { key: "Delete" });
+  expect(dialog().textContent).toContain("This cannot be undone");
+  fireEvent.click(within(dialog()).getByRole("button", { name: "Back" }));
+  fireEvent.keyDown(option(), { key: "d", ctrlKey: true });
+  expect((within(dialog()).getByRole("textbox") as HTMLInputElement).value).toContain("Fixture");
+  fireEvent.click(within(dialog()).getByRole("button", { name: "Back" }));
+  fireEvent.keyDown(option(), { key: "F2" });
+  await waitFor(() => expect(document.activeElement?.getAttribute("aria-label")).toBe("Name"));
+});
+
+it("creating the first environment leaves the list empty instead of saying nothing matches", () => {
+  render(withProps({ envs: [], creating: true }));
+  expect(screen.queryByText("No matches")).toBeNull();
 });

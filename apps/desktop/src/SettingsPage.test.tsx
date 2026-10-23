@@ -32,7 +32,6 @@ it("shows the four settings with their range and the rest as read-only limits", 
   expect(within(form()).getAllByRole("spinbutton")).toHaveLength(8);
   expect(input(/^Concurrent calls$/).value).toBe("16");
   expect(input(/^Concurrent calls$/).max).toBe("16");
-  expect(form().textContent).toContain("Initial 5 · 1–5");
   // The save bar only appears with changes.
   expect(within(form()).queryByRole("button", { name: "Save" })).toBeNull();
   const fixed = screen.getByRole("region", { name: "Fixed limits" });
@@ -71,7 +70,6 @@ it("saves valid values as numbers and applies them without restart", async () =>
   fireEvent.click(save());
   await waitFor(() => expect(ipc.saveSettings).toHaveBeenCalledWith({ ...defaults, approval_minutes: 2, upstream_timeout_secs: 30 }));
   expect((await within(form()).findByRole("status")).textContent).toContain("saved and applied");
-  expect(form().textContent).toContain("Applied right away");
   expect(screen.queryByRole("alertdialog")).toBeNull();
   expect(save().disabled).toBe(true);
 });
@@ -107,12 +105,15 @@ it("reports a locked or failing backend instead of showing stale values", async 
   expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
 });
 
-it("names each limit by its label only, describes it with its range, and switches sections keeping the draft", async () => {
+it("names each limit by its label only, gives the range only when a value is out of it, and switches sections keeping the draft", async () => {
   openLimits(2);
   await screen.findByRole("form", { name: "Limits and retention" });
   const total = within(form()).getByRole("spinbutton", { name: "Concurrent calls" });
-  expect(total.getAttribute("aria-describedby")).toContain("setting-global_concurrency-hint");
+  expect(total.getAttribute("aria-describedby")).toBeNull();
   expect(within(form()).queryByText("Unsaved changes")).toBeNull();
+  fireEvent.change(total, { target: { value: "99" } });
+  expect(total.getAttribute("aria-describedby")).toBe("setting-global_concurrency-hint");
+  expect(form().textContent).toContain("between 1 and 16");
   fireEvent.change(total, { target: { value: "8" } });
   expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
   const nav = screen.getByRole("navigation", { name: "Settings sections" });

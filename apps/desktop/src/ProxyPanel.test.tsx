@@ -20,8 +20,7 @@ const choose = (label: string, option: string) => { fireEvent.click(screen.getBy
 
 it("adds a named SOCKS5 proxy (socks5h) from the empty state", async () => {
   render(<ProxyPanel />);
-  expect(await within(await screen.findByRole("region", { name: "Proxies" })).findByText(/No proxies yet/)).toBeTruthy();
-  expect(panel().textContent).toContain("HTTP_PROXY");
+  expect(await within(await screen.findByRole("region", { name: "Proxies" })).findByText("No proxies.")).toBeTruthy();
   fireEvent.click(within(panel()).getByRole("button", { name: "Add proxy" }));
   const form = editor("New proxy");
   const create = within(form).getByRole("button", { name: "Create proxy" }) as HTMLButtonElement;

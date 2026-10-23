@@ -1,6 +1,6 @@
 //! Desktop integration: single instance, tray, close behavior, graceful shutdown and availability notices.
 use odx_core::Core;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -48,6 +48,121 @@ pub struct Desktop {
     notifications_error: Mutex<Option<String>>,
     exit: ExitGate,
     window: Mutex<WindowSession>,
+    /// Language chosen in the window, for text Rust shows itself (tray, notifications).
+    spanish: AtomicBool,
+    /// Approval whose notification was clicked, until the window takes it.
+    open_approval: Mutex<Option<String>>,
+}
+
+/// Pick the text for the window's language; the window owns the full translations.
+pub fn tr(app: &AppHandle, en: &'static str, es: &'static str) -> &'static str {
+    if spanish(app) { es } else { en }
+}
+
+pub fn spanish(app: &AppHandle) -> bool {
+    app.state::<Arc<Desktop>>().spanish.load(Ordering::Acquire)
+}
+
+/// Follow the window's language and relabel the tray menu.
+pub fn set_language(app: &AppHandle, language: &str) {
+    let desktop = app.state::<Arc<Desktop>>();
+    let es = language == "es";
+    if desktop.spanish.swap(es, Ordering::AcqRel) == es {
+        return;
+    }
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("main"), tray_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+/// Wayland gives no app a way to stay above others: GTK's hint is silently ignored and only the compositor decides.
+fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && std::env::var("GDK_BACKEND").map_or(true, |backend| backend != "x11")
+}
+fn kde() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
+}
+
+/// Whether "keep above" works here: X11, Windows and macOS through the window hint, KDE on Wayland through KWin.
+pub fn keep_above_supported() -> bool {
+    !wayland() || kde()
+}
+
+/// Keep a window above the others, or let it go back.
+pub fn keep_above(window: &tauri::WebviewWindow, above: bool) -> Result<(), String> {
+    if !wayland() {
+        return window.set_always_on_top(above).map_err(|e| e.to_string());
+    }
+    if !kde() {
+        return Err("not supported on this desktop".into());
+    }
+    kwin_keep_above(&window.title().map_err(|e| e.to_string())?, above)
+}
+
+/// Ask KWin with a one-off script, loaded and unloaded over D-Bus, to set `keepAbove` on this process's window.
+// ponytail: windows are matched by title, so two table windows of the same command toggle together; a unique
+// title marker is the upgrade if that ever matters.
+fn kwin_keep_above(caption: &str, above: bool) -> Result<(), String> {
+    use std::sync::atomic::AtomicU64;
+    static SCRIPTS: AtomicU64 = AtomicU64::new(0);
+    let plugin = format!(
+        "odx-keep-above-{}-{}",
+        std::process::id(),
+        SCRIPTS.fetch_add(1, Ordering::Relaxed)
+    );
+    let path = std::env::temp_dir().join(format!("{plugin}.js"));
+    let caption = serde_json::to_string(caption).map_err(|e| e.to_string())?;
+    let script = format!(
+        "const windows = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
+         for (const w of windows) if (w.pid === {} && w.caption === {caption}) w.keepAbove = {above};\n",
+        std::process::id()
+    );
+    std::fs::write(&path, script).map_err(|e| e.to_string())?;
+    let run = || -> zbus::Result<()> {
+        let bus = zbus::blocking::Connection::session()?;
+        let script = path.to_string_lossy();
+        let id: i32 = bus
+            .call_method(
+                Some("org.kde.KWin"),
+                "/Scripting",
+                Some("org.kde.kwin.Scripting"),
+                "loadScript",
+                &(script.as_ref(), plugin.as_str()),
+            )?
+            .body()
+            .deserialize()?;
+        bus.call_method(
+            Some("org.kde.KWin"),
+            format!("/Scripting/Script{id}").as_str(),
+            Some("org.kde.kwin.Script"),
+            "run",
+            &(),
+        )?;
+        // KWin runs it on its own loop; give it a moment before unloading.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        bus.call_method(
+            Some("org.kde.KWin"),
+            "/Scripting",
+            Some("org.kde.kwin.Scripting"),
+            "unloadScript",
+            &(plugin.as_str(),),
+        )?;
+        Ok(())
+    };
+    let result = run();
+    let _ = std::fs::remove_file(&path);
+    result.map_err(|e| e.to_string())
+}
+
+/// Hand the clicked approval to the window once; `None` when there is none.
+pub fn take_open_approval(app: &AppHandle) -> Option<String> {
+    app.state::<Arc<Desktop>>()
+        .open_approval
+        .lock()
+        .unwrap()
+        .take()
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -182,6 +297,109 @@ pub fn restore_window_state(app: &AppHandle, unlocked: bool) -> Option<String> {
     state.snapshot.take().map(|snapshot| snapshot.to_string())
 }
 
+/// Main window placement kept for the next launch, in physical pixels. `bounds` is the unmaximized rectangle.
+#[derive(Serialize, Deserialize)]
+struct SavedWindow {
+    bounds: Option<(i32, i32, u32, u32)>,
+    maximized: bool,
+}
+
+fn saved_window_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("window.json"))
+}
+
+/// Place the initial window where the last session left it, or size it to the monitor on first launch.
+pub fn place_main(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let saved = saved_window_path(app)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<SavedWindow>(&bytes).ok());
+    let Some(saved) = saved else {
+        fit_to_monitor(&window);
+        return;
+    };
+    match saved.bounds {
+        Some((x, y, width, height)) => {
+            let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+            // A monitor unplugged since the last session would leave the window off-screen.
+            let visible = window
+                .available_monitors()
+                .unwrap_or_default()
+                .iter()
+                .any(|monitor| {
+                    let area = monitor.work_area();
+                    (area.position.x..area.position.x + area.size.width as i32).contains(&x)
+                        && (area.position.y..area.position.y + area.size.height as i32).contains(&y)
+                });
+            if visible {
+                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            } else {
+                let _ = window.center();
+            }
+        }
+        None => fit_to_monitor(&window),
+    }
+    if saved.maximized {
+        let _ = window.maximize();
+    }
+}
+
+/// Best effort: a failed write only means the next launch opens at the default size.
+fn save_main_placement(app: &AppHandle) {
+    let desktop = app.state::<Arc<Desktop>>();
+    let saved = {
+        let state = desktop.window.lock().unwrap();
+        SavedWindow {
+            bounds: state.bounds.map(|(p, s)| (p.x, p.y, s.width, s.height)),
+            maximized: state.maximized,
+        }
+    };
+    let Some(path) = saved_window_path(app) else {
+        return;
+    };
+    let written = serde_json::to_vec(&saved)
+        .map_err(std::io::Error::from)
+        .and_then(|bytes| std::fs::write(&path, bytes));
+    if let Err(error) = written {
+        eprintln!("odx: could not save window placement: {error}");
+    }
+}
+
+/// Open at 68% of the screen's work area, between the configured minimum and 1440×900; the config size is the fallback when no screen is known.
+/// Recreated windows then restore their remembered bounds over this.
+fn fit_to_monitor(window: &tauri::WebviewWindow) {
+    let logical = |m: &tauri::Monitor| m.work_area().size.to_logical::<f64>(m.scale_factor());
+    let Some(monitor) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        // Wayland reports neither before the window is shown; size for the smallest screen so it fits wherever it opens.
+        .or_else(|| {
+            window
+                .available_monitors()
+                .ok()?
+                .into_iter()
+                .min_by(|a, b| {
+                    let (a, b) = (logical(a), logical(b));
+                    (a.width * a.height).total_cmp(&(b.width * b.height))
+                })
+        })
+    else {
+        return;
+    };
+    let area = logical(&monitor);
+    let width = (area.width * 0.68).clamp(900.0, 1440.0);
+    let height = (area.height * 0.68).clamp(650.0, 900.0);
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    let _ = window.center();
+}
+
 /// Apply the same WebKit settings to initial and recreated windows.
 pub fn configure_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -190,7 +408,9 @@ pub fn configure_main(app: &AppHandle) {
     #[cfg(target_os = "linux")]
     {
         disable_trackpad_zoom(app);
-        enable_clipboard_access(app);
+        if let Some(window) = app.get_webview_window("main") {
+            enable_clipboard_access(&window);
+        }
     }
 }
 
@@ -210,8 +430,8 @@ pub fn show_main(app: &AppHandle) {
         state.creating = true;
     }
     let result = (|| -> tauri::Result<()> {
-        let window = match app.get_webview_window("main") {
-            Some(window) => window,
+        let (window, created) = match app.get_webview_window("main") {
+            Some(window) => (window, false),
             None => {
                 let config = app
                     .config()
@@ -235,9 +455,13 @@ pub fn show_main(app: &AppHandle) {
                 if maximized {
                     let _ = window.maximize();
                 }
-                window
+                (window, true)
             }
         };
+        // A new WebView shows itself after its first paint (WindowTitleBar); showing it now flashes black.
+        if created {
+            return Ok(());
+        }
         let _ = window.emit("desktop-resume", ());
         let _ = window.unminimize();
         window.show()?;
@@ -424,6 +648,10 @@ pub fn quit(app: &AppHandle, restart: bool) {
     if !desktop.exit.begin() {
         return;
     }
+    if let Some(window) = app.get_webview_window("main") {
+        remember_main_bounds(&window.as_ref().window());
+    }
+    save_main_placement(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         lock(&app).await;
@@ -487,6 +715,7 @@ pub fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) 
     if window.label() == "main" && close_action(desktop.tray_usable()) == CloseAction::Suspend {
         api.prevent_close();
         remember_main_bounds(window);
+        save_main_placement(window.app_handle());
         let ticket = {
             let mut state = desktop.window.lock().unwrap();
             state.request()
@@ -537,29 +766,34 @@ pub fn disable_trackpad_zoom(app: &AppHandle) {
 /// Let the app's own context menu cut, copy and paste: WebKitGTK blocks script clipboard access by default.
 /// The webview only loads the bundled UI (CSP `default-src 'self'`).
 #[cfg(target_os = "linux")]
-pub fn enable_clipboard_access(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main")
-        && let Err(error) = window.with_webview(|webview| {
-            use webkit2gtk::{SettingsExt, WebViewExt};
-            if let Some(settings) = webview.inner().settings() {
-                settings.set_javascript_can_access_clipboard(true);
-            }
-        })
-    {
+/// WebKitGTK keeps the async clipboard API off per web view; every ODX window copies.
+#[cfg(target_os = "linux")]
+fn enable_clipboard_access(window: &tauri::WebviewWindow) {
+    if let Err(error) = window.with_webview(|webview| {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        if let Some(settings) = webview.inner().settings() {
+            settings.set_javascript_can_access_clipboard(true);
+        }
+    }) {
         eprintln!("odx: could not enable clipboard access: {error}");
     }
 }
 
-fn build_tray(app: &tauri::App) -> Result<(), String> {
+fn tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem};
     let item = |id: &str, text: &str| MenuItem::with_id(app, id, text, true, None::<&str>);
-    let (open, lock_item, quit_item) = (
-        item("open", "Open").map_err(|e| e.to_string())?,
-        item("lock", "Lock").map_err(|e| e.to_string())?,
-        item("quit", "Quit").map_err(|e| e.to_string())?,
-    );
-    let menu =
-        Menu::with_items(app, &[&open, &lock_item, &quit_item]).map_err(|e| e.to_string())?;
+    Menu::with_items(
+        app,
+        &[
+            &item("open", tr(app, "Open", "Abrir"))?,
+            &item("lock", tr(app, "Lock", "Bloquear"))?,
+            &item("quit", tr(app, "Quit", "Salir"))?,
+        ],
+    )
+}
+
+fn build_tray(app: &tauri::App) -> Result<(), String> {
+    let menu = tray_menu(app.handle()).map_err(|e| e.to_string())?;
     let mut builder = tauri::tray::TrayIconBuilder::with_id("main")
         .tooltip("Odx")
         .menu(&menu)
@@ -626,7 +860,8 @@ fn record_notification(app: &AppHandle, error: Option<String>) {
 }
 
 /// Notify new approval requests. Report failures in stderr and the window; requests remain visible in Approvals and the status bar.
-pub fn notify(app: &AppHandle, title: &'static str, body: String) {
+/// A click on the notification (Linux "default" action) opens the window on `approval`.
+pub fn notify(app: &AppHandle, title: &'static str, body: String, approval: Option<String>) {
     #[cfg(target_os = "linux")]
     let icon = app
         .path()
@@ -637,6 +872,7 @@ pub fn notify(app: &AppHandle, title: &'static str, body: String) {
         .unwrap_or_else(|| {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png")
         });
+    let action = approval.as_ref().map(|_| tr(app, "Open", "Abrir"));
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let shown = tauri::async_runtime::spawn_blocking(move || {
@@ -644,11 +880,38 @@ pub fn notify(app: &AppHandle, title: &'static str, body: String) {
             notification.appname("Odx").summary(title).body(&body);
             #[cfg(target_os = "linux")]
             notification.icon(&icon.to_string_lossy());
-            notification.show().map(drop).map_err(|e| e.to_string())
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if let Some(label) = action {
+                notification.action("default", label);
+            }
+            notification.show().map_err(|e| e.to_string())
         })
         .await
         .unwrap_or_else(|_| Err("notification interrupted".into()));
-        record_notification(&app, shown.err());
+        let handle = match shown {
+            Ok(handle) => {
+                record_notification(&app, None);
+                handle
+            }
+            Err(error) => return record_notification(&app, Some(error)),
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(approval) = approval {
+            // ponytail: one blocking thread per open notification until clicked or closed;
+            // move to a shared D-Bus listener if they pile up.
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                handle.wait_for_action(|action| {
+                    if action == "default" {
+                        *app.state::<Arc<Desktop>>().open_approval.lock().unwrap() = Some(approval);
+                        show_main(&app);
+                        let _ = app.emit("desktop-open-approval", ());
+                    }
+                });
+            })
+            .await;
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let _ = (handle, approval);
     });
 }
 

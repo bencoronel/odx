@@ -53,14 +53,23 @@ fn notify_approvals(
                 Err(_) => break,
             };
             let _ = app.emit("approvals-changed", &notice.approval_id);
-            let who = notice.client_label.as_deref().unwrap_or("A client");
+            let who = notice.client_label.as_deref().unwrap_or(desktop::tr(
+                &app,
+                "A client",
+                "Un cliente",
+            ));
+            let (method, model, environment) =
+                (&notice.method, &notice.model, &notice.environment_name);
+            let body = if desktop::spanish(&app) {
+                format!("{who} solicita {method} en {model} · {environment}")
+            } else {
+                format!("{who} requests {method} on {model} · {environment}")
+            };
             desktop::notify(
                 &app,
-                "Pending approval",
-                format!(
-                    "{who} requests {} on {} · {}",
-                    notice.method, notice.model, notice.environment_name
-                ),
+                desktop::tr(&app, "Pending approval", "Aprobación pendiente"),
+                body,
+                Some(notice.approval_id.clone()),
             );
             if let Some(window) = app.get_webview_window("main") {
                 let _ =
@@ -104,6 +113,7 @@ fn main() {
             _ => {}
         })
         .setup(move |app| {
+            desktop::place_main(app.handle());
             desktop::configure_main(app.handle());
             desktop::setup_tray(app, &desktop);
             desktop::probe_notifications(app.handle().clone());
@@ -143,6 +153,12 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::desktop_ready,
+            commands::desktop_set_language,
+            commands::agent_setup,
+            commands::agent_install,
+            commands::desktop_take_approval,
+            commands::window_keep_above,
+            commands::window_keep_above_supported,
             commands::desktop_restore,
             commands::desktop_suspend,
             commands::desktop_cancel_suspend,

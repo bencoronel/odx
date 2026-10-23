@@ -1,5 +1,6 @@
 import { forgetHealth } from "./HealthChip";
-import { lazy, useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ipc, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
@@ -47,7 +48,7 @@ function initialTheme(): Theme {
 const lightQuery = () => window.matchMedia?.("(prefers-color-scheme: light)");
 
 export default function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [systemLight, setSystemLight] = useState(() => !!lightQuery()?.matches);
   // "System" follows the OS live.
@@ -93,6 +94,23 @@ export default function App() {
   const [environmentFocus, setEnvironmentFocus] = useState<string | null>(null);
   // Cleared once shown, so asking again for the same environment selects it again.
   useEffect(() => { if (page === "environments") setEnvironmentFocus(null); }, [page, environmentFocus]);
+  // Not cleared on arrival like environmentFocus: Approvals loads lazily and would mount after the reset.
+  const [approvalFocus, setApprovalFocus] = useState<string | null>(null);
+
+  // Tray and notifications are drawn by Rust; keep them in the window's language.
+  useEffect(() => { void invoke("desktop_set_language", { language: i18n.resolvedLanguage }).catch(() => undefined); }, [i18n.resolvedLanguage]);
+
+  // A clicked approval notification opens that request, also when it recreated the window.
+  useEffect(() => {
+    const take = () => void invoke<string | null>("desktop_take_approval").then((id) => {
+      if (!id) return;
+      setApprovalFocus(id);
+      setPage("approvals");
+    }).catch(() => undefined);
+    take();
+    const stop = listen("desktop-open-approval", take);
+    return () => { void stop.then((unlisten) => unlisten(), () => undefined); };
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shellTarget, setShellTarget] = useState<{ env: string; command?: string } | null>(null);
   const [decision, setDecision] = useState<{ approvals: Pending[]; approve: boolean } | null>(null);
@@ -110,7 +128,8 @@ export default function App() {
   useWindowLifecycle((error) => setError(normalizeAppError(error)));
   usePreventUnload(status === "loading" || busy || deciding.size > 0 || creatingEnvironment || decision !== null || modeDecision !== null);
 
-  useEffect(() => {
+  // Before paint, so the first frame already uses the stored theme.
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = shown;
     document.documentElement.style.colorScheme = shown;
   }, [shown]);
@@ -288,13 +307,13 @@ export default function App() {
           if (mode === "temporary" || mode === "permanent") { setMinutes("60"); setModeDecision({ environment: env, mode }); }
           else void run(() => ipc.mode(env.id, mode));
         }}
-      /> : page === "shell" ? null : page === "activity" ? <ActivityPage envs={envs} refreshKey={refreshKey} /> : page === "mcp" ? <McpLocalPage
+      /> : page === "shell" ? null : page === "activity" ? <ActivityPage envs={envs} refreshKey={refreshKey} openInShell={(env, command) => { setShellTarget({ env, command }); setPage("shell"); }} /> : page === "mcp" ? <McpLocalPage
         clients={clients}
         services={services}
         envs={envs}
         busy={busy}
         update={(id, label, ids, caps) => run(() => ipc.updateClient(id, label, ids, caps)).then((ok) => { if (!ok) throw { code: "app.client_update_failed" }; })}
-      /> : <ApprovalsPage pending={pending} envs={envs} deciding={deciding}
+      /> : <ApprovalsPage pending={pending} envs={envs} deciding={deciding} focusId={approvalFocus}
         // Irreversible deletions still need an explicit confirmation.
         decide={(approval, approve, reason) => approve && approval.method === "unlink" ? setDecision({ approvals: [approval], approve }) : void decideAll([approval], approve, reason)}
         decideMany={(approvals, approve) => { setBatchReason(""); setDecision({ approvals, approve }); }}
@@ -334,7 +353,6 @@ export default function App() {
           <input id="write-minutes" className="w-28" type="number" min={1} max={4_294_967_295} step={1} value={minutes} disabled={busy} onChange={(event) => setMinutes(event.target.value)} />
           {[15, 60, 240].map((value) => <button key={value} type="button" className="btn sm" aria-pressed={minutes === String(value)} disabled={busy} onClick={() => setMinutes(String(value))}>{value < 60 ? `${value} min` : `${value / 60} h`}</button>)}
         </div>
-        <small className="hint">{t("app.writeMode.durationHint")}</small>
       </label>}
       <p className="banner info compact"><Icon name="shield" />{t("app.writeMode.warning")}</p>
     </ApprovalDialog>

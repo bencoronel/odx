@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Icon } from "./Icon";
 import type { Environment, WriteMode } from "./ipc";
 import { modeIcons, modeLabels, modeTone } from "./ModeSelect";
 import { sameTag, uniqueTags } from "./TagEditor";
 import { tagColor, useTagColors } from "./tagColors";
+import { useDismiss } from "./ContextMenu";
 
 export const WRITE_MODES: WriteMode[] = ["read_only", "approval", "temporary", "permanent"];
 
@@ -20,12 +21,7 @@ export default function EnvironmentFilters({ envs, tags, setTags, modes, setMode
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
+  useDismiss(open, () => root.current, () => setOpen(false));
   const colors = useTagColors();
   const allTags = uniqueTags(envs.flatMap((env) => env.tags)).sort((a, b) => a.localeCompare(b));
   const count = (tag: string) => envs.filter((env) => env.tags.some((other) => sameTag(other, tag))).length;

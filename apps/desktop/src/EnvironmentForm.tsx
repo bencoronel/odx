@@ -51,31 +51,31 @@ export function ConnectionFields({ idPrefix, values, change, editing, autoFocus,
   const set = (key: keyof ConnectionValues) => (event: ChangeEvent<HTMLInputElement>) => change({ ...values, [key]: event.target.value });
   // The URL comes first because the database list depends on it; the host is a sensible default name.
   const suggestName = () => { if (!values.name.trim() && !urlError(values.url)) change({ ...values, name: new URL(values.url.trim()).host }); };
-  const section = (title: string, hint: string, body: ReactNode) => <section className="panel form-section">
-    <header className="panel-header"><div><h3>{title}</h3><p className="hint">{hint}</p></div></header>
+  const section = (title: string, body: ReactNode) => <section className="panel form-section">
+    <header className="panel-header"><h3>{title}</h3></header>
     <div className="panel-body form-grid">{body}</div>
   </section>;
   return <>
-    {section(t("environmentForm.serverTitle"), t("environmentForm.serverHint"), <>
+    {section(t("environmentForm.serverTitle"), <>
         <label className="field span-2"><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
         <div className="field span-2"><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
           <span className="row gap-2">
             <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll caseSensitive
-              aria-describedby={`${idPrefix}-database-help`} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
+              aria-describedby={databases?.length !== 0 ? `${idPrefix}-database-help` : undefined} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
             <button type="button" className="btn icon-only" disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></button>
           </span>
-          <small className="hint" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : databases.length ? t("environmentForm.databasesFound", { count: databases.length }) : t("environmentForm.databasesHint")}</small></div>
+          {databases?.length !== 0 && <small className="hint" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : t("environmentForm.databasesFound", { count: databases.length })}</small>}</div>
         <details className="protocol-options span-2">
           <summary>{t("environmentForm.advancedOptions")}</summary>
           <label className="field"><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
         </details>
     </>)}
-    {section(t("environmentForm.accessTitle"), t("environmentForm.accessHint"), <>
+    {section(t("environmentForm.accessTitle"), <>
         <label className="field"><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
-        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required={!editing} autoComplete="new-password" value={values.secret} placeholder={editing ? t("environmentForm.unchanged") : undefined} aria-describedby={`${idPrefix}-secret-help`} onChange={set("secret")} /><small className="hint" id={`${idPrefix}-secret-help`}>{editing ? t("environmentForm.keepCredentialHint") : t("environmentForm.credentialHint")}</small></label>
+        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required={!editing} autoComplete="new-password" value={values.secret} placeholder={editing ? t("environmentForm.unchanged") : undefined} onChange={set("secret")} /></label>
     </>)}
-    {section(t("environmentForm.identityTitle"), t("environmentForm.identityHint"), <>
-        <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} aria-describedby={`${idPrefix}-name-help`} onChange={set("name")} /><small className="hint" id={`${idPrefix}-name-help`}>{t("environmentForm.nameHelp")}</small></label>
+    {section(t("environmentForm.identityTitle"), <>
+        <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
       {children}
     </>)}
   </>;
@@ -171,13 +171,12 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
   }}>
     <header className="detail-header">
       <span className="tile"><Icon name="plus" /></span>
-      <div className="grow"><h2 id="create-environment-title">{t("environmentForm.createTitle")}</h2><p className="hint">{t("environmentForm.readOnlyHint")}</p></div>
+      <h2 id="create-environment-title" className="grow">{t("environmentForm.createTitle")}</h2>
     </header>
     <fieldset disabled={busy} className="form-sections">
       <ConnectionFields idPrefix="environment" values={values} change={change} editing={false} autoFocus databases={databases} loadDatabases={loadDatabases}>
         <div className="field"><span id="environment-proxy-label">{t("proxy.title")}</span>
-          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span className="hint">…</span>}
-          <small className="hint">{t("environmentForm.proxyHint")}</small></div>
+          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span className="hint">…</span>}</div>
         <div className="field span-2"><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>
       </ConnectionFields>
     </fieldset>

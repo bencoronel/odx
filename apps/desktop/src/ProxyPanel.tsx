@@ -150,7 +150,6 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
           <ProxyKindSelect id="proxy-kind" value={editing.draft.kind} change={(kind) => setEditing({ ...editing, draft: withKind(editing.draft, kind) })} /></label>
       </div>
       <ProxyFields idPrefix="proxy" value={editing.draft} error={invalid} change={(draft) => setEditing({ ...editing, draft })} />
-      {editing.draft.kind === "socks5h" && <p className="hint">{t("proxy.socksHint")}</p>}
       {invalid && <p id="proxy-error" className="hint text-danger">{formatAppError(invalid)}</p>}
       <div className="proxy-editor-foot">
         <ProxyTester id={editing.id} draft={editing.draft} invalid={Boolean(proxyError(editing.draft))} />
@@ -162,7 +161,7 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
   </form>;
 
   return <section className="panel" aria-label={t("proxy.list")}>
-    <header className="panel-header"><div><h3>{t("proxy.list")}</h3><p className="hint">{t("proxy.help")}</p></div>
+    <header className="panel-header"><h3>{t("proxy.list")}</h3>
       {proxies.length > 0 && <button type="button" className="btn sm" disabled={busy} onClick={add}><Icon name="plus" />{t("proxy.add")}</button>}
     </header>
     {proxies.length === 0 && !editing && <div className="empty proxy-empty">
@@ -191,7 +190,6 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
     })}</ul>}
     {editing?.id === null && editor}
     {error && <div className="panel-body"><p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
-    <p className="hint proxy-notes"><Icon name="alert" />{t("proxy.notes")}</p>
     <ApprovalDialog open={confirm !== null} busy={saving} tone="warn"
       title={t("proxy.saveTitle")}
       description={t("proxy.pendingWarning", { count: pendingCount })}

@@ -26,6 +26,7 @@ const codeKeys: Record<string, string> = {
   "app.environment_delete_failed": "environments.deleteError",
   "system.operation_failed": "errors.codes.operationFailed",
   "system.browser_open_failed": "errors.codes.browserOpenFailed",
+  "system.agent_install_failed": "errors.codes.agentInstallFailed",
   "service.api_bind_failed": "errors.codes.apiBindFailed",
   "service.mcp_socket_failed": "errors.codes.mcpSocketFailed",
   "upstream.uncertain_result": "errors.codes.uncertainResult",

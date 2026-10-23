@@ -27,10 +27,12 @@ export default function PasswordPage({ change, busy }: { change: (current: strin
       setMessage({ translationKey: "passwordPage.updated" });
     } catch (error) { setFailed(true); setMessage(normalizeAppError(error)); }
   }}>
-    <header className="panel-header"><div><h3 id="password-title">{t("unlock.password")}</h3><p className="hint" id="new-password-help">{t("passwordPage.hint")}</p></div></header>
+    <header className="panel-header"><h3 id="password-title">{t("unlock.password")}</h3></header>
     <label className="setting-row"><strong>{t("passwordPage.current")}</strong><input id="current-password" className="setting-control" type="password" autoComplete="current-password" minLength={8} required disabled={busy} value={current} onChange={(e) => setCurrent(e.target.value)} /></label>
     <label className="setting-row"><strong>{t("passwordPage.new")}</strong><input id="new-password" className="setting-control" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={next} aria-describedby="new-password-help" onChange={(e) => setNext(e.target.value)} /></label>
     <label className="setting-row"><strong>{t("passwordPage.repeat")}</strong><input id="repeat-password" className="setting-control" type="password" autoComplete="new-password" minLength={8} required disabled={busy} value={repeat} onChange={(e) => setRepeat(e.target.value)} /></label>
+    {/* Only while choosing one: the rule and the lack of recovery matter then, not on every visit. */}
+    {next && <div className="panel-body"><p id="new-password-help" className="banner warn compact"><Icon name="alert" />{t("passwordPage.hint")}</p></div>}
     {message && <div className="panel-body"><p className={`banner ${failed ? "danger" : "ok"}`} role={failed ? "alert" : "status"}><Icon name={failed ? "alert" : "check"} />{"translationKey" in message ? t(message.translationKey) : formatAppError(message)}</p></div>}
     <footer className="setting-row"><button className="btn primary" disabled={busy || current.length < 8 || next.length < 8 || next !== repeat}>{busy ? t("common.saving") : t("passwordPage.change")}</button></footer>
   </form>;

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import ActivityPage from "./ActivityPage";
 import { ipc, type ActivityEvent, type ActivityPage as Page } from "./ipc";
@@ -24,15 +24,16 @@ it("loads the next page by cursor and discards a page that arrives after the fil
     .mockReturnValueOnce(stale.promise)
     .mockResolvedValueOnce(writes);
   render(<ActivityPage envs={[]} refreshKey={0} />);
-  await screen.findByText("first.model");
+  await screen.findAllByText("first.model");
   fireEvent.click(screen.getByRole("button", { name: "Load more" }));
   expect(calls).toHaveBeenLastCalledWith(first.next_cursor, {});
-  fireEvent.click(screen.getByRole("button", { name: "Writes" }));
-  await screen.findByText("write.model");
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Writes" }));
+  await screen.findAllByText("write.model");
   expect(calls).toHaveBeenLastCalledWith(null, { writes_only: true });
   await act(async () => { stale.resolve({ events: [event("stale.model")], next_cursor: null, complete: true }); });
   expect(screen.queryByText("stale.model")).toBeNull();
-  expect(screen.getByText("write.model")).toBeTruthy();
+  expect(screen.getAllByText("write.model").length).toBeGreaterThan(0);
 });
 
 const envs = ["A", "B"].map((name) => ({
@@ -52,57 +53,57 @@ function fakeCore(rows: ActivityEvent[]) {
 }
 const rows = [at("A", "res.partner"), at("B", "res.users"), at("A", "res.country")];
 
-it("filters by environment from the selector and from a row, and clears back to all", async () => {
+/** Models shown in the list (the detail pane repeats the selected one). */
+const listed = () => [...document.querySelectorAll(".activity-item strong")].map((el) => el.textContent);
+
+it("filters by environment from the filter panel and from the detail, shows it as a chip and clears back to all", async () => {
   const calls = fakeCore(rows);
   render(<ActivityPage envs={envs} refreshKey={0} />);
-  await screen.findByText("res.users");
-  fireEvent.click(screen.getByRole("combobox", { name: "Environment" }));
-  fireEvent.mouseDown(screen.getByRole("option", { name: "B" }));
-  await waitFor(() => expect(screen.queryByText("res.partner")).toBeNull());
+  await waitFor(() => expect(listed()).toEqual(["res.partner", "res.users", "res.country"]));
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+  fireEvent.click(screen.getByRole("radio", { name: "B" }));
+  await waitFor(() => expect(listed()).toEqual(["res.users"]));
   expect(calls).toHaveBeenLastCalledWith(null, { environment_id: "env-B" });
-  expect(screen.getByText("res.users")).toBeTruthy();
-  expect(screen.queryByText("res.country")).toBeNull();
+  expect(screen.getByRole("button", { name: "Remove filter B" })).toBeTruthy();
 
-  fireEvent.click(screen.getByRole("combobox", { name: "Environment" }));
-  fireEvent.mouseDown(screen.getByRole("option", { name: "All environments" }));
-  await screen.findByText("res.partner");
+  fireEvent.click(screen.getByRole("radio", { name: "All environments" }));
+  await waitFor(() => expect(listed()).toHaveLength(3));
   expect(calls).toHaveBeenLastCalledWith(null, { environment_id: undefined });
-  fireEvent.click(screen.getAllByRole("button", { name: "A" })[0]);
-  await waitFor(() => expect(screen.queryByText("res.users")).toBeNull());
+  fireEvent.click(within(screen.getByRole("region", { name: "Details for read:res.partner" })).getByRole("button", { name: "A" }));
+  await waitFor(() => expect(listed()).toEqual(["res.partner", "res.country"]));
   expect(calls).toHaveBeenLastCalledWith(null, { environment_id: "env-A" });
-  expect(screen.getByRole("combobox", { name: "Environment" }).textContent).toBe("A");
-  expect(screen.getByText("res.partner")).toBeTruthy();
-  expect(screen.getByText("res.country")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter A" }));
+  await waitFor(() => expect(listed()).toHaveLength(3));
 });
 
 it("sends the trimmed search text and shows the matching rows, or an empty state when none match", async () => {
   const calls = fakeCore(rows);
   render(<ActivityPage envs={envs} refreshKey={0} />);
-  await screen.findByText("res.users");
+  await screen.findAllByText("res.users");
   const search = screen.getByRole("searchbox", { name: "Search activity" });
   fireEvent.change(search, { target: { value: "  Country " } });
-  await waitFor(() => expect(screen.queryByText("res.users")).toBeNull());
+  await waitFor(() => expect(listed()).toEqual(["res.country"]));
   expect(calls).toHaveBeenLastCalledWith(null, { q: "Country" });
-  expect(screen.getByText("res.country")).toBeTruthy();
-  expect(screen.queryByText("res.partner")).toBeNull();
 
   fireEvent.change(search, { target: { value: "no-match" } });
   await screen.findByText("No events match the filters.");
   expect(calls).toHaveBeenLastCalledWith(null, { q: "no-match" });
-  expect(screen.queryByText("res.country")).toBeNull();
+  expect(listed()).toEqual([]);
+  fireEvent.click(within(screen.getByRole("listbox", { name: "Activity" })).getByRole("button", { name: "Clear filters" }));
+  await waitFor(() => expect(listed()).toHaveLength(3));
 });
 
 it("warns when part of the history could not be read and shows what was recovered", async () => {
   vi.spyOn(ipc, "activity").mockResolvedValue({ events: [event("recovered.model")], next_cursor: null, complete: false });
   render(<ActivityPage envs={[]} refreshKey={0} />);
-  await screen.findByText("recovered.model");
+  await screen.findAllByText("recovered.model");
   expect(screen.getByText(/Part of the history could not be read/)).toBeTruthy();
 });
 
 it("does not warn while the history is complete", async () => {
   vi.spyOn(ipc, "activity").mockResolvedValue({ events: [event("full.model")], next_cursor: null, complete: true });
   render(<ActivityPage envs={[]} refreshKey={0} />);
-  await screen.findByText("full.model");
+  await screen.findAllByText("full.model");
   expect(screen.queryByText(/Parte del historial/)).toBeNull();
 });
 
@@ -110,8 +111,7 @@ it("shows only the redacted request kept by the core and asks for nothing else",
   const redacted = { ...event("res.partner", true), details: { request: { text: '{"values":{"password":"[redacted]"}}', truncated: true }, error: null, response: null, duration_ms: 3 }, outcome: "failed" };
   const calls = vi.spyOn(ipc, "activity").mockResolvedValue({ events: [redacted], next_cursor: null, complete: true });
   render(<ActivityPage envs={[]} refreshKey={0} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Show details for write:res.partner" }));
-  const detail = screen.getByRole("region", { name: "Details for write:res.partner" });
+  const detail = await screen.findByRole("region", { name: "Details for write:res.partner" });
   expect(detail.textContent).toContain('"password":"[redacted]"');
   expect(detail.textContent).toContain("Content truncated");
   // No undo or restore actions.
@@ -127,8 +127,7 @@ it("localizes a structured activity error live while retaining its redacted deta
   } as ActivityEvent;
   vi.spyOn(ipc, "activity").mockResolvedValue({ events: [failed], next_cursor: null, complete: true });
   render(<ActivityPage envs={[]} refreshKey={0} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Show details for write:res.partner" }));
-  expect(screen.getByText("Odoo returned an error.")).toBeTruthy();
+  expect(await screen.findByText("Odoo returned an error.")).toBeTruthy();
   expect(screen.getByText("Access denied [redacted]", { exact: false })).toBeTruthy();
   await setLanguage("es");
   expect(screen.getByText("Odoo devolvió un error.")).toBeTruthy();
@@ -138,7 +137,7 @@ it("keeps loaded pages when the app refreshes and stops offering more past the r
   const page = (from: number, count: number) => ({ events: Array.from({ length: count }, (_, i) => event(`m${from + i}`)), next_cursor: { at: from + count, key: `k${from + count}` }, complete: true });
   const calls = vi.spyOn(ipc, "activity").mockImplementation(async (cursor) => cursor ? page(cursor.at, 500) : page(0, 500));
   const { rerender } = render(<ActivityPage envs={[]} refreshKey={1} />);
-  await screen.findByText("m0");
+  await screen.findAllByText("m0");
   fireEvent.click(screen.getByRole("button", { name: "Load more" }));
   await screen.findByText("m999");
   rerender(<ActivityPage envs={[]} refreshKey={2} />);
@@ -152,7 +151,36 @@ it("keeps loaded pages when the app refreshes and stops offering more past the r
 it("reloads the first page when the app refreshes and no extra page is shown", async () => {
   const calls = fakeCore(rows);
   const { rerender } = render(<ActivityPage envs={[]} refreshKey={1} />);
-  await screen.findByText("res.users");
+  await screen.findAllByText("res.users");
   rerender(<ActivityPage envs={[]} refreshKey={2} />);
   await waitFor(() => expect(calls).toHaveBeenCalledTimes(2));
+});
+
+it("groups by day and offers to repeat whole, unredacted reads in the Terminal", async () => {
+  const now = Date.now();
+  const read = { ...at("A", "res.partner"), at: new Date(now - 5 * 60_000).toISOString(),
+    details: { request: { text: JSON.stringify({ model: "res.partner", method: "search_read", args: [[["id", "=", 7]]], kwargs: { fields: ["name"], context: { lang: "es_ES" } } }), truncated: false } } } as ActivityEvent;
+  const old = { ...event("res.users", true), request_id: "old", at: new Date(now - 86_400_000).toISOString(),
+    details: { request: { text: JSON.stringify({ model: "res.users", method: "write", args: [[1], {}], kwargs: {} }), truncated: false } } } as ActivityEvent;
+  vi.spyOn(ipc, "activity").mockResolvedValue({ events: [read, old], next_cursor: null, complete: true });
+  const openInShell = vi.fn();
+  render(<ActivityPage envs={envs} refreshKey={0} openInShell={openInShell} />);
+  await screen.findByText("Today");
+  expect(screen.getByText("Yesterday")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Repeat in Terminal" }));
+  expect(openInShell).toHaveBeenCalledWith("A", 'call res.partner search_read [[["id","=",7]]] {"fields":["name"]}');
+  fireEvent.click(screen.getAllByRole("option")[1]);
+  expect(screen.queryByRole("button", { name: "Repeat in Terminal" })).toBeNull();
+});
+
+it("holds refreshed events behind a notice while the list is scrolled", async () => {
+  let rows = [event("one")];
+  vi.spyOn(ipc, "activity").mockImplementation(async () => ({ events: rows, next_cursor: null, complete: true }));
+  const { rerender } = render(<ActivityPage envs={[]} refreshKey={1} />);
+  await screen.findAllByText("one");
+  screen.getByRole("listbox", { name: "Activity" }).scrollTop = 100;
+  rows = [event("two"), event("one")];
+  rerender(<ActivityPage envs={[]} refreshKey={2} />);
+  fireEvent.click(await screen.findByRole("button", { name: "1 new event" }));
+  await waitFor(() => expect(listed()).toEqual(["two", "one"]));
 });

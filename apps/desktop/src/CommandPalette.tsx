@@ -5,12 +5,12 @@ import { Icon, type IconName } from "./Icon";
 import { PAGE_ORDER, pages, shortcut, type Page } from "./Sidebar";
 import type { Environment } from "./ipc";
 import { modeTone } from "./ModeSelect";
+import { hostOf } from "./hosts";
 
 type Group = "pages" | "environments" | "actions";
 /** `env` rows show the server and offer the Terminal as a second action (Ctrl+Enter). */
 type Action = { id: string; group: Group; label: string; icon: IconName; hint?: string; keywords?: string; env?: Environment; run: () => void; alt?: () => void };
 const groups: Group[] = ["pages", "environments", "actions"];
-const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 /** Ctrl+K anywhere while unlocked; the Terminal binds no Ctrl+K, so it wins there too. Confirmation dialogs keep the keyboard. */
 export default function CommandPalette({ open, setOpen, envs, setPage, showEnvironment, openShell, lock }: {

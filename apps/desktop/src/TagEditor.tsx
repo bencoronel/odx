@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import HeaderInput from "./HeaderInput";
 import { Icon } from "./Icon";
 import { TAG_COLORS, setTagColor, tagColor, tagTone, useTagColors } from "./tagColors";
+import { useDismiss } from "./ContextMenu";
 
 export const MAX_TAGS = 20;
 export const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -22,12 +23,7 @@ export default function TagEditor({ tags, suggestions, disabled, collapsed, onCh
   const colors = useTagColors();
   const [picking, setPicking] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!picking) return;
-    const outside = (event: MouseEvent) => { if (!root.current?.querySelector(".tag-colors")?.contains(event.target as Node)) setPicking(null); };
-    document.addEventListener("mousedown", outside);
-    return () => document.removeEventListener("mousedown", outside);
-  }, [picking]);
+  useDismiss(!!picking, () => root.current?.querySelector(".tag-colors"), () => setPicking(null));
   const add = (value: string) => {
     const tag = value.trim();
     setDraft("");

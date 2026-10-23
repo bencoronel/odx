@@ -41,7 +41,6 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
   const section = (id: SectionId) => ({ className: "settings-group", "aria-labelledby": `${id}-title`, hidden: active !== id });
   const title = (id: SectionId) => <header className="settings-head">
     <h2 id={`${id}-title`}>{t(sections.find(([key]) => key === id)![1])}</h2>
-    <p className="hint">{t(`settingsPage.descriptions.${id}`)}</p>
   </header>;
   return <div className="settings-layout">
     <nav className="settings-nav" aria-label={t("settingsPage.sections")}>
@@ -51,7 +50,7 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
       <section {...section("general")}>
         {title("general")}
         <section className="panel">
-          <header className="panel-header"><div><h3>{t("settingsPage.appearance")}</h3><p className="hint">{t("settingsPage.remembered")}</p></div></header>
+          <header className="panel-header"><h3>{t("settingsPage.appearance")}</h3></header>
           <div className="setting-row"><strong>{t("settings.language.label")}</strong><LanguageSelect className="setting-control" /></div>
           <div className="setting-row"><strong>{t("settingsPage.theme")}</strong><ThemeSelector theme={theme} change={setTheme} /></div>
         </section>
@@ -73,7 +72,7 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
         {title("security")}
         <section className="panel">
           <header className="panel-header"><h3>{t("unlock.vault")}</h3></header>
-          <div className="setting-row"><div><strong>{t("settingsPage.lockNow")}</strong><p className="hint">{t("settingsPage.lockHint")}{pendingCount > 0 && ` ${t("settingsPage.lockPending", { count: pendingCount })}`}</p></div><button className="btn" disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</button></div>
+          <div className="setting-row"><div><strong>{t("settingsPage.lockNow")}</strong>{pendingCount > 0 && <p className="hint">{t("settingsPage.lockPending", { count: pendingCount })}</p>}</div><button className="btn" disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</button></div>
         </section>
         <PasswordPage busy={busy} change={changePassword} />
       </section>
@@ -90,7 +89,7 @@ function EnvironmentDefaultsPanel() {
     saveEnvironmentDefaults(next);
   };
   return <section className="panel">
-    <header className="panel-header"><div><h3>{t("settingsPage.environmentDefaults")}</h3><p className="hint">{t("settingsPage.environmentDefaultsHint")} {t("settingsPage.remembered")}</p></div></header>
+    <header className="panel-header"><h3>{t("settingsPage.environmentDefaults")}</h3></header>
     <label className="setting-row"><strong>{t("environmentForm.user")}</strong><input className="setting-control" autoComplete="off" value={defaults.login} onChange={set("login")} /></label>
     <label className="setting-row"><strong>{t("common.database")}</strong><input className="setting-control" autoComplete="off" value={defaults.database} onChange={set("database")} /></label>
   </section>;
@@ -102,20 +101,20 @@ const sections = [
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 type SectionId = typeof sections[number][0];
 
-type Field = { key: keyof Settings; label: string; hint?: string; unit: string };
-type Group = { title?: string; hint?: string; fields: Field[] };
+type Field = { key: keyof Settings; label: string; unit: string };
+type Group = { title?: string; fields: Field[] };
 const age = (key: keyof Settings, unit: string): Field => ({ key, label: "settingsPage.fields.maxAge", unit });
 const size = (key: keyof Settings): Field => ({ key, label: "settingsPage.fields.maxSize", unit: "settingsPage.units.mib" });
-const cards: { id: string; title: string; hint: string; groups: Group[] }[] = [
-  { id: "execution", title: "settingsPage.execution.title", hint: "settingsPage.execution.hint", groups: [{ fields: [
-    { key: "global_concurrency", label: "settingsPage.fields.globalConcurrency", hint: "settingsPage.fields.globalConcurrencyHint", unit: "settingsPage.units.calls" },
-    { key: "environment_concurrency", label: "settingsPage.fields.environmentConcurrency", hint: "settingsPage.fields.environmentConcurrencyHint", unit: "settingsPage.units.calls" },
-    { key: "upstream_timeout_secs", label: "settingsPage.fields.timeout", hint: "settingsPage.fields.timeoutHint", unit: "settingsPage.units.seconds" },
-    { key: "approval_minutes", label: "settingsPage.fields.approval", hint: "settingsPage.fields.approvalHint", unit: "settingsPage.units.minutes" },
+const cards: { id: string; title: string; groups: Group[] }[] = [
+  { id: "execution", title: "settingsPage.execution.title", groups: [{ fields: [
+    { key: "global_concurrency", label: "settingsPage.fields.globalConcurrency", unit: "settingsPage.units.calls" },
+    { key: "environment_concurrency", label: "settingsPage.fields.environmentConcurrency", unit: "settingsPage.units.calls" },
+    { key: "upstream_timeout_secs", label: "settingsPage.fields.timeout", unit: "settingsPage.units.seconds" },
+    { key: "approval_minutes", label: "settingsPage.fields.approval", unit: "settingsPage.units.minutes" },
   ] }] },
-  { id: "retention", title: "settingsPage.retention.title", hint: "settingsPage.retention.hint", groups: [
-    { title: "settingsPage.retention.activity", hint: "settingsPage.retention.activityHint", fields: [age("activity_days", "settingsPage.units.days"), size("activity_mib")] },
-    { title: "settingsPage.retention.output", hint: "settingsPage.retention.outputHint", fields: [age("output_hours", "settingsPage.units.hours"), size("output_mib")] },
+  { id: "retention", title: "settingsPage.retention.title", groups: [
+    { title: "settingsPage.retention.activity", fields: [age("activity_days", "settingsPage.units.days"), size("activity_mib")] },
+    { title: "settingsPage.retention.output", fields: [age("output_hours", "settingsPage.units.hours"), size("output_mib")] },
   ] },
 ];
 const retentionKeys: (keyof Settings)[] = ["activity_days", "activity_mib", "output_hours", "output_mib"];
@@ -180,11 +179,11 @@ function LimitsPanel() {
     const error = errors[field.key];
     return <div key={field.key} className="setting-row">
       <div><label htmlFor={id}><strong>{text(field.label)}</strong></label>
-        {field.hint && <p className="hint" id={`${id}-about`}>{text(field.hint)}</p>}
-        <small id={`${id}-hint`} className={`hint ${error ? "text-danger" : "setting-range"}`}>{error || t("settingsPage.defaultRange", { value: view.defaults[field.key], min, max })}</small></div>
+        {/* The input enforces min and max; the error names the range when a value falls outside it. */}
+        {error && <small id={`${id}-hint`} className="hint text-danger">{error}</small>}</div>
       <span className="input-unit">
         <input id={id} className="setting-number" type="number" inputMode="numeric" min={min} max={max} step={1} value={draft[field.key]}
-          aria-invalid={error ? true : undefined} aria-describedby={`${id}-hint${field.hint ? ` ${id}-about` : ""}`}
+          aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-hint` : undefined}
           onChange={(e) => { setDraft({ ...draft, [field.key]: e.target.value }); setMessage(null); }} />
         <span aria-hidden="true">{text(field.unit)}</span>
       </span>
@@ -197,10 +196,10 @@ function LimitsPanel() {
     if (shrinks) setConfirming(true); else void save().catch(() => undefined);
   }}>
     {cards.map((card) => <fieldset key={card.id} className="panel" disabled={saving} aria-labelledby={`limits-${card.id}`}>
-      <header className="panel-header"><div><h3 id={`limits-${card.id}`}>{text(card.title)}</h3><p className="hint">{text(card.hint)}</p></div></header>
+      <header className="panel-header"><h3 id={`limits-${card.id}`}>{text(card.title)}</h3></header>
       {card.groups.map((group, index) => group.title
         ? <fieldset key={index} className="limits-group" aria-labelledby={`limits-${card.id}-${index}`}>
-          <div className="limits-group-head"><strong id={`limits-${card.id}-${index}`}>{text(group.title)}</strong>{group.hint && <p className="hint">{text(group.hint)}</p>}</div>
+          <div className="limits-group-head"><strong id={`limits-${card.id}-${index}`}>{text(group.title)}</strong></div>
           {group.fields.map(row)}
         </fieldset>
         : <div key={index}>{group.fields.map(row)}</div>)}
@@ -235,7 +234,7 @@ function FixedLimits() {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useCollapsed("settings-fixed-limits");
   return <section className="panel" aria-label={t("settingsPage.fixedLimits")}>
-    <header className="panel-header"><div><PanelTitle title={t("settingsPage.fixedLimits")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /><p className="hint">{t("settingsPage.fixedLimitsHint")}</p></div></header>
+    <header className="panel-header"><div><PanelTitle title={t("settingsPage.fixedLimits")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /></div></header>
     {!collapsed && <div className="panel-body">
       <dl className="props compact">{fixed.map((key) => <div key={key}><dt>{t(`settingsPage.fixed.${key}`)}</dt><dd>{t(`settingsPage.fixedValues.${key}`)}</dd></div>)}</dl>
     </div>}

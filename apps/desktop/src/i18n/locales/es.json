@@ -50,31 +50,25 @@
     "workspace": "Espacio de trabajo",
     "administration": "Administración",
     "lock": "Bloquear almacén",
-    "lockHint": "Bloquear el almacén y revocar las solicitudes pendientes",
     "unlocked": "Desbloqueado",
     "lockRevokes_one": "Revocará {{count}} solicitud pendiente",
     "lockRevokes_other": "Revocará {{count}} solicitudes pendientes",
     "lockPending_one": "Bloquear · {{count}} pendiente",
     "lockPending_other": "Bloquear · {{count}} pendientes",
     "environments": {
-      "title": "Entornos",
-      "description": "Conexiones Odoo disponibles para los clientes"
+      "title": "Entornos"
     },
     "approvals": {
-      "title": "Aprobaciones",
-      "description": "Escrituras que esperan tu decisión"
+      "title": "Aprobaciones"
     },
     "shell": {
-      "title": "Terminal",
-      "description": "Lanza llamadas a un entorno como tú"
+      "title": "Terminal"
     },
     "activity": {
-      "title": "Actividad",
-      "description": "Operaciones enviadas a Odoo, de la más reciente a la más antigua"
+      "title": "Actividad"
     },
     "mcp": {
       "title": "MCP",
-      "description": "Conexiones MCP y permisos por entorno",
       "local": "Local",
       "remote": "API"
     },
@@ -83,13 +77,14 @@
     },
     "serverPending": "Pendiente · Modo servidor",
     "settings": {
-      "title": "Ajustes",
-      "description": "Apariencia, cabeceras HTTP y seguridad del almacén"
+      "title": "Ajustes"
     }
   },
   "window": {
     "minimize": "Minimizar",
-    "maximizeRestore": "Maximizar o restaurar"
+    "maximizeRestore": "Maximizar o restaurar",
+    "keepAbove": "Mantener encima de otras ventanas",
+    "stopKeepAbove": "Dejar de mantener encima"
   },
   "unlock": {
     "openError": "No se pudo abrir el almacén",
@@ -97,8 +92,6 @@
     "createTitle": "Crear almacén",
     "lockedTitle": "Almacén bloqueado",
     "vault": "Almacén",
-    "createHint": "Elige una contraseña maestra para cifrar tus conexiones.",
-    "enterHint": "Introduce la contraseña maestra para continuar.",
     "password": "Contraseña maestra",
     "repeat": "Repite la contraseña maestra",
     "minLength": "Al menos 8 caracteres.",
@@ -128,11 +121,9 @@
     "stopped": "detenido",
     "active": "activo",
     "lockedListening": "escuchando · bloqueado",
-    "stdioHint": "Conector stdio por socket local",
     "connections_one": "{{count}} conexión",
     "connections_other": "{{count}} conexiones",
     "unlockRequired": "Rechaza las peticiones hasta desbloquear el almacén",
-    "connectHint": "Pulsa para ver cómo conectar un cliente",
     "connectionSince": "{{client}} · desde {{time}}",
     "noConnector": "Ningún conector abierto",
     "pendingApprovals_one": "{{count}} aprobación pendiente",
@@ -155,7 +146,6 @@
       "enableTemporary": "Habilitar temporalmente",
       "enablePermanent": "Habilitar permanentemente",
       "durationMinutes": "Duración en minutos",
-      "durationHint": "El plazo empieza al confirmar y se conserva aunque cierres la ventana.",
       "warning": "Los borrados seguirán requiriendo tu aprobación. Cambiar el modo revoca las solicitudes pendientes del entorno."
     },
     "approval": {
@@ -220,18 +210,14 @@
     "newContextValue": "Valor de nuevo contexto",
     "headerValue": "Valor de cabecera {{index}}",
     "contextValue": "Valor de contexto {{index}}",
-    "savedSecret": "Valor guardado\nCifrado en el almacén; nunca se muestra. Escribe otro para sustituirlo",
-    "contextValueHelp": "Texto o JSON\nEjemplos: es_ES, false, 3, [1, 2]. Usa \"false\" para conservarlo como texto.",
+    "savedSecret": "Valor guardado",
+    "contextValueHelp": "Texto o JSON",
     "deleteHeader": "Eliminar cabecera {{index}}",
     "deleteContext": "Eliminar contexto {{index}}",
     "saveWarning": "Aviso al guardar",
     "onSave": "Al guardar",
     "revokeEnvironmentRequests": "Se revocan las solicitudes pendientes de este entorno y se vuelve a autenticar con Odoo.",
     "revokeAllRequests": "Se revocan las solicitudes pendientes de todos los entornos y se vuelve a autenticar con Odoo.",
-    "globalHeadersHint": "Se envían en cada petición a Odoo. Cada entorno puede sustituirlas. Los cambios se guardan al salir del campo.",
-    "globalContextHint": "Se añade al contexto de cada llamada a Odoo, por ejemplo lang o tz. Cada entorno puede sustituir cualquier clave. Los cambios se guardan al salir del campo.",
-    "environmentContextHint": "Se añade a cada llamada de este entorno y sustituye las claves globales.",
-    "environmentHeadersHint": "Se envían en cada petición de este entorno y sustituyen a las globales.",
     "ownContext_one": "{{count}} clave propia",
     "ownContext_other": "{{count}} claves propias",
     "ownHeaders_one": "{{count}} cabecera propia",
@@ -254,16 +240,12 @@
     "advancedOptions": "Opciones avanzadas",
     "name": "Nombre",
     "namePlaceholder": "Desarrollo",
-    "nameHelp": "Los clientes MCP/API usarán este nombre.",
     "odooUrl": "URL de Odoo",
     "user": "Usuario",
     "apiKey": "API key o contraseña",
     "unchanged": "Sin cambios",
-    "keepCredentialHint": "Déjalo vacío para conservar la credencial guardada.",
-    "credentialHint": "Se cifra en el almacén y nunca se muestra a los clientes.",
     "createTitle": "Nuevo entorno",
     "createAction": "Crear entorno",
-    "readOnlyHint": "Se creará en modo solo lectura.",
     "connection": "Conexión",
     "context": "Contexto",
     "environmentContext": "Contexto del entorno",
@@ -271,38 +253,25 @@
     "keepSecretPlaceholder": "Sin cambios: déjalo vacío para conservarla.",
     "newTargetSecretPlaceholder": "Clave API obligatoria para la nueva URL, base de datos o usuario",
     "savedCredential": "Credencial guardada",
-    "savedCredentialHint": "Credencial guardada\nCifrada en el almacén; nunca se muestra",
+    "savedCredentialHint": "Credencial guardada",
     "noCredential": "Sin credencial",
     "testConnection": "Probar conexión",
     "loadDatabases": "Cargar bases de datos del servidor",
-    "databasesHint": "Escribe el nombre o cárgalas del servidor.",
     "databasesHidden": "El servidor no publica sus bases de datos; escribe el nombre.",
     "testNeeds": "Rellena URL, base de datos, usuario y API key para probar.",
     "testOk": "Conexión correcta · Odoo {{version}} · {{latency}} ms",
     "databasesFound_one": "El servidor tiene 1 base de datos; puedes elegirla o escribir otra.",
     "databasesFound_other": "El servidor tiene {{count}} bases de datos; elige una o escribe otra.",
     "serverTitle": "Servidor",
-    "serverHint": "Dónde está Odoo y qué base de datos usar.",
     "accessTitle": "Acceso",
-    "accessHint": "El usuario de Odoo con el que actúan los clientes MCP/API. Usa uno con solo los permisos que necesiten.",
-    "identityTitle": "Nombre y organización",
-    "identityHint": "Cómo te refieres tú y los clientes MCP/API a este entorno.",
-    "proxyHint": "Elige un proxy guardado o conexión directa. Los proxies se gestionan en Ajustes."
+    "identityTitle": "Nombre y organización"
   },
   "settingsPage": {
-    "descriptions": {
-      "general": "Idioma, tema y actualizaciones de la app.",
-      "connection": "Valores para entornos nuevos y lo que envía cada petición a Odoo: proxy, cabeceras y contexto.",
-      "execution": "Cuánto hace la app a la vez y cuánto tiempo guarda los datos. Se guardan cifrados en el almacén y los clientes API/MCP no pueden cambiarlos. Cada valor está limitado a su valor inicial.",
-      "security": "Bloquea el almacén y cambia su contraseña."
-    },
     "environmentDefaults": "Valores para entornos nuevos",
-    "environmentDefaultsHint": "Si los rellenas, el formulario de nuevo entorno empieza con este usuario y esta base de datos.",
     "general": "General",
     "appearance": "Idioma y apariencia",
     "sections": "Secciones de ajustes",
     "theme": "Tema",
-    "remembered": "Se recuerda en este equipo.",
     "light": "Claro",
     "dark": "Oscuro",
     "system": "Sistema",
@@ -310,19 +279,16 @@
     "odooConnection": "Conexión",
     "security": "Seguridad",
     "lockNow": "Bloquear ahora",
-    "lockHint": "Cierra el acceso a Odoo y revoca las solicitudes pendientes.",
     "lockPending_one": "Se revocará {{count}} aprobación pendiente.",
     "lockPending_other": "Se revocarán {{count}} aprobaciones pendientes.",
     "rangeError": "Debe estar entre {{min}} y {{max}}",
     "concurrencyError": "No puede superar el total",
     "limits": "Límites y retención",
     "saved": "Ajustes guardados y aplicados.",
-    "defaultRange": "Inicial {{value}} · {{min}}–{{max}}",
     "reduceRetention": "Reducir la retención",
     "reduceRetentionWarning": "Al guardar se borran ya la actividad y los archivos de salida que excedan los nuevos límites. No se puede deshacer.",
     "reduceAndDelete": "Reducir y borrar",
     "fixedLimits": "Límites fijos",
-    "fixedLimitsHint": "Valores documentados que no se pueden cambiar desde la aplicación.",
     "fixed": {
       "executionQueue": "Cola de ejecución",
       "pendingApprovals": "Aprobaciones pendientes",
@@ -353,26 +319,18 @@
     },
     "limitsTab": "Límites",
     "execution": {
-      "title": "Ejecución",
-      "hint": "Se aplican al momento, sin reiniciar."
+      "title": "Ejecución"
     },
     "retention": {
       "title": "Retención",
-      "hint": "Se conserva lo que cumpla ambos límites. Al reducir un límite, lo que sobre se borra al guardar.",
       "activity": "Actividad",
-      "activityHint": "Registro de actividad. La base cifrada mantiene además su tope de páginas.",
-      "output": "Archivos de salida",
-      "outputHint": "Descargas y resultados a fichero en el directorio gestionado por la app."
+      "output": "Archivos de salida"
     },
     "fields": {
       "globalConcurrency": "Llamadas simultáneas",
-      "globalConcurrencyHint": "Entre todos los entornos. Al reducirlo, las llamadas en curso terminan y las nuevas esperan plaza.",
       "environmentConcurrency": "Llamadas simultáneas por entorno",
-      "environmentConcurrencyHint": "No puede superar el total.",
       "timeout": "Tiempo de espera por petición",
-      "timeoutHint": "Plazo de cada petición HTTP a Odoo. La conexión sigue limitada a 5 s.",
       "approval": "Validez de las aprobaciones",
-      "approvalHint": "Vale para las solicitudes nuevas; las pendientes conservan su plazo.",
       "maxAge": "Conservar durante",
       "maxSize": "Tamaño máximo"
     },
@@ -389,7 +347,6 @@
     "arguments": "Argumentos",
     "namedArguments": "Nombrados",
     "context": "Contexto",
-    "emptyHint": "No hay solicitudes pendientes. Las escrituras que requieran tu aprobación aparecerán aquí.",
     "requestLabel": "{{method}} en {{model}}, {{environment}}",
     "clientRequest": "Cliente API/MCP que la pidió",
     "localRequest": "Solicitud local",
@@ -404,7 +361,7 @@
     "requestedAt": "Solicitada",
     "expires": "Caduca",
     "reasonLabel": "Motivo del rechazo",
-    "reasonPlaceholder": "Explica al agente por qué (opcional) · Intro rechaza, Esc cancela",
+    "reasonPlaceholder": "Motivo para el agente (opcional)",
     "records_one": "Registro",
     "records_other": "Registros",
     "rawCall": "Llamada en bruto",
@@ -437,7 +394,7 @@
     "rejectAll_other": "Rechazar {{count}}",
     "expiredSkipped_one": "{{count}} solicitud caducada no se aprobará.",
     "expiredSkipped_other": "{{count}} solicitudes caducadas no se aprobarán.",
-    "batchReasonPlaceholder": "Explica al agente por qué (opcional) · Intro rechaza",
+    "batchReasonPlaceholder": "Motivo para el agente (opcional)",
     "approvedNotice_one": "Solicitud aprobada",
     "approvedNotice_other": "{{count}} solicitudes aprobadas",
     "rejectedNotice_one": "Solicitud rechazada",
@@ -483,42 +440,41 @@
     "updated": "Contraseña actualizada. Utilízala en el próximo desbloqueo."
   },
   "clients": {
-    "capabilities": {
-      "read": "Lectura",
-      "readHelp": "Consultar registros, campos y modelos.",
-      "write": "Solicitar escrituras",
-      "writeHelp": "Crear, modificar o borrar según el modo de cada entorno; nunca aprueba."
-    },
     "revoke": "Revocar",
     "revokeError": "No se pudo revocar el cliente.",
-    "allEnvironments": "Todos los entornos",
+    "allEnvironments": "Todos, también los nuevos",
     "noEnvironments": "Sin entornos",
     "name": "Nombre",
     "environments": "Entornos",
-    "capabilitiesTitle": "Capacidades",
     "environmentScope": "Alcance de entornos",
     "selectedEnvironments": "Solo estos",
-    "allEnvironmentsLongHint": "Incluye los entornos que se creen después. Cada entorno sigue limitado por su modo de escritura.",
-    "selectedEnvironmentsHint": "Solo los marcados; los entornos nuevos no se añaden solos.",
-    "claudeCodeHint": "Ejecuta este comando en una terminal para añadir ODX a Claude Code para tu usuario, disponible en todos tus proyectos.",
-    "codexCliHint": "Ejecuta este comando en una terminal para añadir ODX a la configuración de MCP de tu usuario en Codex CLI.",
     "updateError": "No se pudo guardar el cliente.",
-    "noEnvironmentsYet": "Aún no hay entornos: los agentes conectados no verán nada hasta que crees uno."
+    "noEnvironmentsYet": "Aún no hay entornos: los agentes conectados no verán nada hasta que crees uno.",
+    "access": "Acceso",
+    "levels": {
+      "read": "Solo lectura",
+      "write": "Leer y solicitar escrituras"
+    },
+    "selectAll": "Todos",
+    "selectNone": "Ninguno",
+    "unattended": "Los agentes pueden crear y modificar sin aprobación en {{names}}.",
+    "unattendedShort": "Sin aprobación"
   },
   "mcpLocal": {
     "status": "Estado del MCP local",
-    "agents": "Agentes conectados",
-    "lastUse": "Último uso",
-    "never": "Nunca",
     "permissions": "Permisos",
-    "permissionsHint": "Se aplican a todos los agentes conectados por stdio en este equipo. Cada entorno sigue limitado por su modo de escritura.",
     "saveRevokes": "Al guardar se revocan las solicitudes pendientes de estos agentes.",
     "connect": "Conectar un agente",
     "client": "Cliente",
-    "jsonHint": "Para otros clientes MCP: añade este bloque a su configuración de servidores.",
     "title": "MCP local",
-    "description": "Los agentes de este equipo (Claude Code, Codex…) se conectan por stdio. Elige qué pueden hacer y cómo conectarlos.",
-    "connectHint": "Comando o configuración para añadir ODX a tu agente."
+    "connectedAgents_one": "{{count}} agente conectado",
+    "connectedAgents_other": "{{count}} agentes conectados",
+    "checking": "Comprobando…",
+    "added": "Añadido a {{agent}}",
+    "outdated": "{{agent}} ejecuta Odx desde otra ruta.",
+    "detected": "{{agent}} está instalado en este equipo.",
+    "add": "Añadir",
+    "update": "Actualizar"
   },
   "proxy": {
     "errors": {
@@ -532,7 +488,7 @@
       "inUse_other": "{{count}} entornos usan este proxy. Elige otro para ellos primero.",
       "notFound": "Este proxy ya no existe."
     },
-    "savedSecret": "Guardado\nCifrado en el almacén; nunca se muestra. Escribe otro para sustituirlo",
+    "savedSecret": "Guardado",
     "host": "Host",
     "hostLabel": "Host del proxy",
     "port": "Puerto",
@@ -543,9 +499,7 @@
     "passwordLabel": "Contraseña del proxy",
     "kind": "Tipo de proxy",
     "title": "Proxy",
-    "help": "Elige uno para cada entorno en su conexión. Los entornos en Predeterminado usan el proxy predeterminado; si no hay ninguno, se conectan en directo.",
     "type": "Tipo",
-    "socksHint": "SOCKS5 con resolución de nombres en el proxy.",
     "saveTitle": "Guardar proxy",
     "pendingWarning_one": "Hay {{count}} aprobación pendiente. Al guardar se revocan las solicitudes de los entornos cuyo proxy cambia y se vuelve a autenticar con Odoo.",
     "pendingWarning_other": "Hay {{count}} aprobaciones pendientes. Al guardar se revocan las solicitudes de los entornos cuyo proxy cambia y se vuelve a autenticar con Odoo.",
@@ -557,8 +511,7 @@
     "withCredentials": "con credenciales",
     "edit": "Editar {{name}}",
     "delete": "Eliminar {{name}}",
-    "empty": "Aún no hay proxies. Añade uno para que los entornos salgan por él; mientras tanto se conectan en directo.",
-    "notes": "Todo el tráfico hacia Odoo (los tres protocolos, comprobaciones de estado, descargas y favicons) pasa por el proxy del entorno. Se ignoran las variables del sistema HTTP_PROXY, HTTPS_PROXY, ALL_PROXY y NO_PROXY. Si el proxy falla, la llamada falla; nunca se reintenta en directo.",
+    "empty": "Sin proxies.",
     "makeDefault": "Hacer predeterminado",
     "clearDefault": "Quitar predeterminado",
     "usedBy_one": "Lo usa {{count}} entorno",
@@ -595,13 +548,11 @@
   },
   "environments": {
     "emptyTitle": "Sin entornos",
-    "emptyHint": "Añade la conexión a una instancia de Odoo. Los entornos se crean en solo lectura.",
     "focusWhileCreating": "Termina o cancela el nuevo entorno para ver {{name}}.",
     "listLabel": "Lista de entornos",
     "filterPlaceholder": "Filtrar, o # para etiquetas",
     "filterLabel": "Filtrar entornos",
     "checkAll": "Comprobar todos los entornos",
-    "checkAllHint": "Comprobar todos\nVuelve a medir la conexión de cada entorno",
     "newEnvironment": "Nuevo entorno",
     "environments": "Entornos",
     "noMatches": "Sin coincidencias",
@@ -610,8 +561,8 @@
     "openBrowserTip": "Abrir en el navegador\n{{url}}",
     "openBrowser": "Abrir en el navegador",
     "openShell": "Abrir en Terminal",
-    "cloneHint": "Duplicar entorno\nLa copia empieza en solo lectura y sin los permisos del original",
     "cloneEnvironment": "Duplicar entorno",
+    "addDatabase": "Añadir otra base de datos",
     "writeMode": "Modo de escritura",
     "readOnlyAt": "Vuelve a solo lectura a las {{time}}",
     "changeDeadline": "Cambiar plazo",
@@ -628,11 +579,9 @@
     "saveConnection": "Guardar conexión",
     "saveConnectionWarning_one": "Hay {{count}} solicitud pendiente de aprobación en este entorno. Al guardar se revoca y se vuelve a autenticar con Odoo.",
     "saveConnectionWarning_other": "Hay {{count}} solicitudes pendientes de aprobación en este entorno. Al guardar se revocan y se vuelve a autenticar con Odoo.",
-    "nameTip": "Nombre del entorno\nLos clientes MCP/API lo usarán para referirse a él",
     "environmentProxy": "Proxy del entorno",
     "inheritProxy": "Predeterminado ({{proxy}})",
     "directProxy": "Conexión directa",
-    "directProxyHint": "Conexión directa\nNo usa ningún proxy",
     "tags": "Etiquetas",
     "addTag": "Añadir etiqueta",
     "removeTag": "Quitar etiqueta {{tag}}",
@@ -646,8 +595,6 @@
     "filterCount": "{{shown}} de {{total}} entornos",
     "noDefaultProxy": "directo",
     "missingProxy": "Proxy inexistente",
-    "writeModeHint": "Qué pueden hacer los clientes MCP/API en este entorno.",
-    "connectionHint": "Servidor, credenciales y proxy de este entorno.",
     "proxySummary": "Proxy: {{proxy}}",
     "moreActions": "Más acciones",
     "tagColor": "Color de {{tag}}",
@@ -663,7 +610,6 @@
     "filterByTag": "Filtrar por esta etiqueta",
     "modeFilter": "Filtrar por modo de escritura",
     "removeModeFilter": "Quitar filtro {{mode}}",
-    "noMatchesHint": "Prueba con otra búsqueda o quita algún filtro.",
     "noEnvironmentMatches": "Ningún entorno coincide"
   },
   "headerInput": {
@@ -700,18 +646,10 @@
     "filters": "Filtros",
     "writes": "Escrituras",
     "errors": "Errores",
-    "removeClientFilter": "Quitar filtro de cliente",
     "refresh": "Actualizar actividad",
     "incompleteHistory": "Parte del historial no se pudo leer entero (sesión interrumpida o segmento dañado). Se muestra lo recuperable.",
     "emptyTitle": "Sin actividad",
     "noMatches": "Ningún evento coincide con los filtros.",
-    "emptyHint": "Aquí aparecerán las lecturas y escrituras enviadas a Odoo. Se conservan según la retención de Ajustes.",
-    "details": "Detalle",
-    "date": "Fecha",
-    "operation": "Operación",
-    "result": "Resultado",
-    "hideDetails": "Ocultar detalle de {{operation}}",
-    "showDetails": "Mostrar detalle de {{operation}}",
     "filterBy": "Filtrar por {{name}}",
     "deleted": "Eliminado",
     "thisClient": "este cliente",
@@ -719,7 +657,17 @@
     "revoked": "Revocado",
     "detailsFor": "Detalle de {{operation}}",
     "loadMore": "Cargar más",
-    "limitReached": "Se muestran los últimos {{count}} registros. Acota los filtros para ver los anteriores."
+    "limitReached": "Se muestran los últimos {{count}} registros. Acota los filtros para ver los anteriores.",
+    "listLabel": "Actividad",
+    "resizeList": "Redimensionar lista de actividad",
+    "kind": "Tipo",
+    "removeFilter": "Quitar filtro {{name}}",
+    "clearFilters": "Quitar filtros",
+    "newEvents_one": "{{count}} evento nuevo",
+    "newEvents_other": "{{count}} eventos nuevos",
+    "today": "Hoy",
+    "yesterday": "Ayer",
+    "replay": "Repetir en Terminal"
   },
   "shell": {
     "initial": "Odx Terminal · \\c <entorno> para conectar · \\? para ver la ayuda",
@@ -1083,7 +1031,8 @@
       "upstreamAuth": "Odoo rechazó las credenciales del entorno.",
       "notFound": "No se encontró el elemento solicitado.",
       "apiBindFailed": "No se pudo iniciar la API local. Puede que el puerto configurado ya esté ocupado.",
-      "mcpSocketFailed": "No se pudo abrir el socket del conector MCP local."
+      "mcpSocketFailed": "No se pudo abrir el socket del conector MCP local.",
+      "agentInstallFailed": "No se pudo añadir Odx al agente."
     }
   },
   "health": {
@@ -1112,8 +1061,7 @@
     "connectionLabel": "Conexión: {{title}}, {{label}}",
     "stateLabel": "Estado de conexión: {{title}}, {{label}}{{detail}}. {{retry}}",
     "retry": "Volver a comprobar",
-    "checkedAt": "Comprobado a las {{time}}",
-    "retryHint": "Selecciona para volver a comprobar"
+    "checkedAt": "Comprobado a las {{time}}"
   },
   "desktop": {
     "trayUnavailable": "La bandeja del sistema no está disponible. Al cerrar la ventana se bloquea el almacén y se detiene Odx.",
