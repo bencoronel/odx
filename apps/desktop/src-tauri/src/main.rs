@@ -142,8 +142,8 @@ fn main() {
                 app.path().app_data_dir()?
             };
             let path = data_dir.join("vault.sqlite3");
-            std::fs::create_dir_all(path.parent().expect("app data path"))?;
-            let core = odx_core::Core::new(path).expect("core setup");
+            std::fs::create_dir_all(data_dir.as_path())?;
+            let core = odx_core::Core::new(path)?;
             let services = Arc::new(services::Services::default());
             {
                 let services = services.clone();

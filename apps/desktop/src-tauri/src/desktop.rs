@@ -887,8 +887,8 @@ pub fn setup_tray(app: &tauri::App, desktop: &Desktop) {
 /// Disable WebKitGTK's native trackpad pinch zoom on Linux.
 #[cfg(target_os = "linux")]
 pub fn disable_trackpad_zoom(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if let Err(error) = window.with_webview(|webview| {
+    if let Some(window) = app.get_webview_window("main")
+        && let Err(error) = window.with_webview(|webview| {
             use webkit2gtk::glib::{gobject_ffi, prelude::ObjectExt};
 
             let view = webview.inner();
@@ -899,9 +899,9 @@ pub fn disable_trackpad_zoom(app: &AppHandle) {
             } else {
                 eprintln!("odx: WebKitGTK pinch handler unavailable");
             }
-        }) {
-            eprintln!("odx: could not disable WebKitGTK trackpad zoom: {error}");
-        }
+        })
+    {
+        eprintln!("odx: could not disable WebKitGTK trackpad zoom: {error}");
     }
 }
 

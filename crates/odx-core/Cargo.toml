@@ -31,3 +31,6 @@ rcgen = "=0.13.2"
 tempfile = "=3.23.0"
 tokio-rustls = { version = "=0.26.6", default-features = false }
 tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,74 @@
+# Checks for pull requests and master. Branch protection needs only the `verify` job.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# A new push to the same branch or PR replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Tauri v2 Debian/Ubuntu prerequisites (v2.tauri.app/start/prerequisites).
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # rustup is preinstalled; rust-toolchain.toml selects the pinned toolchain.
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+
+      # Shares compiled dependencies with release.yml's test job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci --prefix apps/desktop
+      - run: npm run typecheck --prefix apps/desktop
+      - run: npm test --prefix apps/desktop
+
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: node --test scripts/
+      - run: node scripts/ratchet.mjs
+
+  verify:
+    if: always()
+    needs: [rust, frontend, ratchet]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks passed
+        run: |
+          [ "${{ needs.rust.result }}" = success ] && [ "${{ needs.frontend.result }}" = success ] \
+            && [ "${{ needs.ratchet.result }}" = success ]

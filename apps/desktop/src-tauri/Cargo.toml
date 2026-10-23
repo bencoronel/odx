@@ -30,3 +30,6 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

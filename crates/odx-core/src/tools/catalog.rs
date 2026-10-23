@@ -1271,18 +1271,17 @@ impl Core {
         let (method, positional, mut kwargs, mut effect) = match name {
             "create" | "write" | "unlink" => {
                 let positional = match name {
-                    "create" => json!([args
-                        .raw("values")
-                        .ok_or_else(|| ToolError::invalid("missing values"))?]),
-                    "write" => json!([ids(&mut args)?, Value::Object(args.object("values")?)]),
-                    _ => json!([ids(&mut args)?]),
+                    "create" => vec![
+                        args.raw("values")
+                            .ok_or_else(|| ToolError::invalid("missing values"))?,
+                    ],
+                    "write" => vec![
+                        json!(ids(&mut args)?),
+                        Value::Object(args.object("values")?),
+                    ],
+                    _ => vec![json!(ids(&mut args)?)],
                 };
-                let effect = mutations::call_effect(
-                    name,
-                    positional.as_array().expect("lista"),
-                    &Map::new(),
-                    &[],
-                )?;
+                let effect = mutations::call_effect(name, &positional, &Map::new(), &[])?;
                 (name.to_string(), positional, Map::new(), effect)
             }
             _ => {
@@ -1290,7 +1289,7 @@ impl Core {
                 if !is_identifier(&method, false) || method.starts_with('_') {
                     return Err(ToolError::invalid(format!("method not allowed: {method}")));
                 }
-                let positional = Value::Array(args.array("args")?.unwrap_or_default());
+                let positional = args.array("args")?.unwrap_or_default();
                 let mut kwargs = args.object("kwargs")?;
                 if let Some(ctx) = kwargs.remove("context") {
                     if explicit_context {
@@ -1309,7 +1308,7 @@ impl Core {
                     crate::odoo::json2::reject_positional(&target.env, &positional)?;
                     let request = super::query::prepare_read(
                         &method,
-                        positional.as_array().expect("args is a list").clone(),
+                        positional.clone(),
                         kwargs,
                         target.env.protocol == crate::config::Protocol::Json2,
                     )?;
@@ -1351,12 +1350,7 @@ impl Core {
                     }
                     return Ok(out);
                 }
-                let effect = mutations::call_effect(
-                    &method,
-                    positional.as_array().expect("args must be a list"),
-                    &kwargs,
-                    &[],
-                )?;
+                let effect = mutations::call_effect(&method, &positional, &kwargs, &[])?;
                 (method, positional, kwargs, effect)
             }
         };
@@ -1368,7 +1362,7 @@ impl Core {
         }
         // Odoo turns x2many false/null and flat id lists into clear/set; classify them by field type.
         let mut checked = Upstream::start();
-        let args_list = positional.as_array().expect("args must be a list");
+        let args_list = &positional;
         let shorthand = mutations::shorthand_keys(&method, args_list, &kwargs);
         if !shorthand.is_empty() {
             let types = self
@@ -1406,7 +1400,7 @@ impl Core {
                 &target,
                 &model,
                 &method,
-                positional,
+                Value::Array(positional),
                 Value::Object(kwargs),
                 effect,
             )

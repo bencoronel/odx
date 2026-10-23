@@ -46,8 +46,8 @@ const SIGNATURES: [(&str, bool, &[&str]); 13] = [
 ];
 
 /// JSON-2 `call` requires named arguments; never infer names.
-pub(crate) fn reject_positional(env: &Environment, args: &Value) -> Result<()> {
-    if env.protocol == Protocol::Json2 && args.as_array().is_some_and(|a| !a.is_empty()) {
+pub(crate) fn reject_positional(env: &Environment, args: &[Value]) -> Result<()> {
+    if env.protocol == Protocol::Json2 && !args.is_empty() {
         return Err(OdxError::validation(
             "validation.console.json2_positional_arguments",
             "JSON-2 requires named arguments: leave args empty and use Odoo 19 parameter names in kwargs, with records in kwargs.ids",
@@ -318,9 +318,9 @@ mod tests {
             protocol: Protocol::Json2,
             ..Default::default()
         };
-        assert!(reject_positional(&env, &json!([[1]])).is_err());
-        assert!(reject_positional(&env, &json!([])).is_ok());
+        assert!(reject_positional(&env, &[json!([1])]).is_err());
+        assert!(reject_positional(&env, &[]).is_ok());
         env.protocol = Protocol::Xmlrpc;
-        assert!(reject_positional(&env, &json!([[1]])).is_ok());
+        assert!(reject_positional(&env, &[json!([1])]).is_ok());
     }
 }
