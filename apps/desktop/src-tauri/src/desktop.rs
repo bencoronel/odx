@@ -52,7 +52,20 @@ pub struct Desktop {
     spanish: AtomicBool,
     /// Approval whose notification was clicked, until the window takes it.
     open_approval: Mutex<Option<String>>,
+    /// Agent requests (run a Terminal command, show a tab) waiting for the window, and their answers.
+    agent: Mutex<AgentQueue>,
+    /// Terminal tables opened in their own windows, by window label, in memory until that window takes them.
+    tables: Mutex<(u64, std::collections::HashMap<String, serde_json::Value>)>,
 }
+
+#[derive(Default)]
+struct AgentQueue {
+    next: u64,
+    pending: Vec<serde_json::Value>,
+    replies: std::collections::HashMap<u64, AgentReply>,
+}
+
+type AgentReply = tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>;
 
 /// Pick the text for the window's language; the window owns the full translations.
 pub fn tr(app: &AppHandle, en: &'static str, es: &'static str) -> &'static str {
@@ -154,6 +167,135 @@ fn kwin_keep_above(caption: &str, above: bool) -> Result<(), String> {
     let result = run();
     let _ = std::fs::remove_file(&path);
     result.map_err(|e| e.to_string())
+}
+
+/// Open a Terminal table in a window of its own. Its data stays in memory, never on disk, and only that window can
+/// take it (`take_table` reads the caller's label).
+pub fn open_table_window(
+    app: &AppHandle,
+    table: serde_json::Value,
+    title: &str,
+) -> tauri::Result<()> {
+    let label = {
+        let desktop = app.state::<Arc<Desktop>>();
+        let mut tables = desktop.tables.lock().unwrap();
+        tables.0 += 1;
+        let label = format!("table-{}", tables.0);
+        tables.1.insert(label.clone(), table);
+        label
+    };
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        &label,
+        tauri::WebviewUrl::App(format!("index.html?window={label}").into()),
+    )
+    .title(title)
+    .inner_size(960.0, 620.0)
+    .min_inner_size(420.0, 260.0)
+    // ODX's own frame, as the main window: no system title bar, rounded, shown after its first paint.
+    .decorations(false)
+    .transparent(true)
+    .visible(false)
+    .build()?;
+    #[cfg(target_os = "linux")]
+    enable_clipboard_access(&window);
+    Ok(())
+}
+
+pub fn take_table(app: &AppHandle, label: &str) -> Option<serde_json::Value> {
+    app.state::<Arc<Desktop>>()
+        .tables
+        .lock()
+        .unwrap()
+        .1
+        .remove(label)
+}
+
+/// Queue the core's requests for the window, which takes them with `agent_take` (also after it is recreated)
+/// and answers with `agent_reply`. A run needs a live window; showing brings one back.
+pub fn serve_agents(
+    app: AppHandle,
+    mut requests: tokio::sync::mpsc::UnboundedReceiver<odx_core::DesktopRequest>,
+) {
+    tauri::async_runtime::spawn(async move {
+        while let Some(request) = requests.recv().await {
+            let desktop = app.state::<Arc<Desktop>>();
+            let (request, reply, show) = match request {
+                odx_core::DesktopRequest::Run {
+                    terminal,
+                    env_id,
+                    command,
+                    client_id,
+                    client_label,
+                    allow_writes,
+                    reply,
+                } => {
+                    if app.get_webview_window("main").is_none() {
+                        let _ = reply.send(Err("The Odx window is closed: call show to open it, then run the command again.".into()));
+                        continue;
+                    }
+                    let request = serde_json::json!({ "kind": "run", "terminal": terminal, "envId": env_id, "command": command,
+                        "clientId": client_id, "clientLabel": client_label, "allowWrites": allow_writes });
+                    (request, reply, false)
+                }
+                odx_core::DesktopRequest::Show { terminal, reply } => (
+                    serde_json::json!({ "kind": "show", "terminal": terminal }),
+                    reply,
+                    true,
+                ),
+            };
+            {
+                let mut queue = desktop.agent.lock().unwrap();
+                queue.next += 1;
+                let id = queue.next;
+                let mut request = request;
+                request["id"] = id.into();
+                queue.pending.push(request);
+                queue.replies.insert(id, reply);
+            }
+            if show {
+                show_main(&app);
+            }
+            let _ = app.emit("agent-request", ());
+        }
+    });
+}
+
+/// Requests the window has not taken yet; ones whose caller stopped waiting are dropped.
+pub fn take_agent_requests(app: &AppHandle) -> Vec<serde_json::Value> {
+    let desktop = app.state::<Arc<Desktop>>();
+    let mut queue = desktop.agent.lock().unwrap();
+    let AgentQueue {
+        pending, replies, ..
+    } = &mut *queue;
+    std::mem::take(pending)
+        .into_iter()
+        .filter(|request| {
+            request["id"]
+                .as_u64()
+                .and_then(|id| replies.get(&id))
+                .is_some_and(|reply| !reply.is_closed())
+        })
+        .collect()
+}
+
+/// The window's answer to request `id`: `error`, or `result` for a run.
+pub fn answer_agent(
+    app: &AppHandle,
+    id: u64,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+) {
+    let reply = app
+        .state::<Arc<Desktop>>()
+        .agent
+        .lock()
+        .unwrap()
+        .replies
+        .remove(&id);
+    if let Some(reply) = reply {
+        let _ = reply.send(error.map_or_else(|| Ok(result.unwrap_or_default()), Err));
+    }
 }
 
 /// Hand the clicked approval to the window once; `None` when there is none.

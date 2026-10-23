@@ -13,6 +13,11 @@ const command = (line: string) => {
   fireEvent.change(input, { target: { value: line } });
   fireEvent.keyDown(input, { key: "Enter" });
 };
+/** Sessions open from the "+" menu, bound to the chosen environment. */
+const newSession = (env = "A") => {
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: env }));
+};
 it("restores tabs, results, context, draft input and unconfirmed writes without replaying operations", async () => {
   snapshot = null;
   await restoreWindowState();
@@ -23,14 +28,15 @@ it("restores tabs, results, context, draft input and unconfirmed writes without 
   });
   const envs: Environment[] = [{ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", protocol: "legacy_jsonrpc", context: {}, write_mode: "approval", has_secret: true, tags: [] }];
   const view = render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(screen.getByText(/^Connected to A/)).toBeTruthy());
+  newSession("A");
+  await waitFor(() => expect(screen.getByRole("tabpanel").querySelector(".term-mode")).toBeTruthy());
   command('\\context {"lang":"es_ES"}');
   command("read res.partner 1");
   await waitFor(() => expect(screen.getByText("Ada", { exact: true })).toBeTruthy());
   command("write res.partner [1] {'name':'Grace'}");
   expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  newSession("A");
+  await waitFor(() => expect(screen.getByRole("tabpanel").querySelector(".term-mode")).toBeTruthy());
   fireEvent.change(screen.getByRole("textbox", { name: "Command" }), { target: { value: "unfinished command" } });
   snapshot = JSON.stringify(captureWindowState());
   const saved = JSON.parse(snapshot)["shell.tabs"][0].session;

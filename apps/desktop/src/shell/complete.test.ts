@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { completions, type CompletionContext } from "./complete";
 
 const ctx: CompletionContext = {
-  envs: [{ name: "Production", detail: "" }, { name: "Staging", detail: "" }, { name: "Staging North", detail: "" }],
   models: ["res.partner", "res.users", "sale.order", "sale.order.line"],
   fields: (m) => (m === "res.partner" ? [{ name: "email", label: "Email", type: "char" }, { name: "name", label: "Name", type: "char" }, { name: "company_id", label: "Company", type: "many2one" }] : undefined),
   connected: true,
@@ -16,9 +15,7 @@ describe("completion", () => {
     expect(values("\\his")).toEqual(["\\history"]);
     expect(values("\\d")).toEqual(["\\d", "\\dm"]);
   });
-  it("suggests environments, models, options and fields by position", () => {
-    expect(values("\\c sta")).toEqual(["Staging", "Staging North"]);
-    expect(completions("\\c sta", ctx)?.from).toBe(3);
+  it("suggests models, options and fields by position", () => {
     expect(values("search sale")).toEqual(["sale.order", "sale.order.line"]);
     expect(values("search order")).toEqual(["sale.order", "sale.order.line"]);
     expect(values("search res.partner ")).toEqual(["-d", "-f", "-l", "-o", "--order"]);
@@ -46,7 +43,7 @@ describe("completion inside domains and values", () => {
     { name: "active", label: "Active", type: "boolean" },
     { name: "type", label: "Address type", type: "selection", selection: [["contact", "Contact"], ["invoice", "Invoice"]] as [string, string][] },
   ];
-  const c: CompletionContext = { envs: [], models: ["res.partner"], connected: true, fields: (m) => (m === "res.partner" ? fields : undefined) };
+  const c: CompletionContext = { models: ["res.partner"], connected: true, fields: (m) => (m === "res.partner" ? fields : undefined) };
   const at = (input: string) => completions(input, c);
   it("completes field, operator and selection value in a domain tuple", () => {
     expect(at("search res.partner -d [('na")).toMatchObject({ from: "search res.partner -d [('".length, suffix: "', '", items: [{ value: "name" }] });

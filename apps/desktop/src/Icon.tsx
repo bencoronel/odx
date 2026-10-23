@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 export type IconName = "server" | "check" | "clients" | "activity" | "settings" | "lock" | "unlock" | "sun" | "moon" | "refresh" | "arrow" | "shield"
-  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown" | "filter" | "monitor";
+  | "plus" | "search" | "x" | "clock" | "database" | "user" | "globe" | "key" | "plug" | "alert" | "eye" | "eyeOff" | "pencil" | "infinity" | "code" | "trash" | "copy" | "terminal" | "chevron" | "external" | "table" | "rows" | "caretUp" | "caretDown" | "filter" | "monitor" | "pin" | "spinner";
 
 const paths: Record<IconName, string> = {
   server: "M4 4h16v6H4z M4 14h16v6H4z M8 7h.01 M8 17h.01",
@@ -41,6 +41,8 @@ const paths: Record<IconName, string> = {
   rows: "M4 4h16v7H4z M4 13h16v7H4z M7 7.5h6 M7 16.5h6",
   caretUp: "M7 14l5-5 5 5",
   caretDown: "M7 10l5 5 5-5",
+  spinner: "M12 3a9 9 0 1 0 9 9",
+  pin: "M9 3h6 M10 3v6l-4 5h12l-4-5V3 M12 14v7",
   monitor: "M3 4h18v12H3z M8 20h8 M12 16v4",
 };
 

@@ -29,6 +29,11 @@ export type Command =
   | { kind: "has_group"; group: string }
   | { kind: "call"; call: OdooCall; display: "rows" | "fields" | "models" | "names" | "groups" | "value"; page?: { limit: number; offset: number }; filter?: string };
 
+const ODOO_VERBS = new Set(["search", "count", "read", "name", "read_group", "ref", "metadata", "whoami", "cam", "uhg", "create", "write", "unlink", "call", "\\d", "\\dm", "\\next", "\\prev"]);
+/** Whether a line calls Odoo, judged by its first word so an incomplete command counts too; the rest work on the
+ * session alone (help, history, aliases, context, the screen). Expand aliases first. */
+export const needsOdoo = (line: string) => ODOO_VERBS.has(line.trim().split(/\s+/)[0]?.toLowerCase() ?? "");
+
 export const VERBS = ["search", "count", "read", "read_group", "name", "ref", "metadata", "whoami", "cam", "uhg", "create", "write", "unlink", "call", "help"];
 export const META = ["\\?", "\\l", "\\c", "\\q", "\\x", "\\timing", "\\history", "\\s", "\\d", "\\dm", "\\next", "\\prev", "\\set", "\\alias", "\\grep", "\\cols", "\\context", "\\clear"];
 /** Verbs whose second token is a model, for autocomplete. */

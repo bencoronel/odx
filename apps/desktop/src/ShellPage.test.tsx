@@ -2,9 +2,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import ShellPage from "./ShellPage";
 import App from "./App";
-import { ipc, type Environment } from "./ipc";
+import { ipc, type AgentRequest, type Environment } from "./ipc";
 
 vi.mock("./ipc", () => ({ ipc: {
+  agentTake: vi.fn(), agentReply: vi.fn(async () => undefined), openTableWindow: vi.fn(async () => undefined),
   shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), shellHistoryAdd: vi.fn(), check: vi.fn(), shell: vi.fn(), shellExport: vi.fn(), openUrl: vi.fn(),
   status: vi.fn(), environments: vi.fn(), approvals: vi.fn(), clients: vi.fn(), serviceStatus: vi.fn(), lock: vi.fn(), unlock: vi.fn(),
 } }));
@@ -35,13 +36,28 @@ const requireConfirmation = (reads: string[]) => vi.mocked(ipc.shell).mockImplem
   return { data: true, write: !reads.includes(call.method), upstream_ms: 1, upstream_bytes: 2 };
 });
 
+/** Sessions open from the "+" menu, bound to the chosen environment. */
+const newSession = (env = "A") => {
+  // The tab strip's "+" comes first; the empty state repeats it.
+  fireEvent.click(screen.getAllByRole("button", { name: "New Terminal session" })[0]);
+  fireEvent.click(screen.getByRole("menuitem", { name: env }));
+};
+/** The active session is connected: its mode chip shows next to `database` (fixtures name databases like their env). */
+const connectedTo = (database: string) => waitFor(() => {
+  expect(panel().querySelector(".term-status .term-mode")).toBeTruthy();
+  expect(panel().querySelector(".term-status .term-db")?.textContent).toBe(database);
+});
+const openSession = async (env = "A", database = env) => {
+  newSession(env);
+  await connectedTo(database);
+};
 it("keeps each tab's context, output and unfinished input when switching tabs and pages", async () => {
   const { rerender } = render(<ShellPage envs={envs} />);
-  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  await openSession("A");
   command('\\context {"lang":"es_ES"}');
   const firstTab = screen.getByRole("tab");
   fireEvent.change(screen.getByRole("textbox", { name: "Command" }), { target: { value: "read res.partner 1" } });
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  await openSession("B");
   expect((screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value).toBe("");
   command("\\context");
   expect(within(panel()).getByText("{}", { exact: true })).toBeTruthy();
@@ -62,34 +78,35 @@ it("keeps a running call in its original tab while another session connects else
     ? Promise.resolve({ data: [], write: false, upstream_ms: 1, upstream_bytes: 2 })
     : new Promise((resolve) => { finish = resolve; }));
   render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await openSession("A");
   const firstTab = screen.getByRole("tab");
   command("read res.partner 1");
   const close = screen.getByRole("button", { name: /Close session/ }) as HTMLButtonElement;
   expect(close.disabled).toBe(true);
+  expect(firstTab.querySelector(".spin")).not.toBeNull();
   fireEvent(firstTab, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
   expect(screen.getByRole("tab")).toBe(firstTab);
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
-  command("\\c B");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await openSession("B");
   finish({ data: "result from A", write: false, upstream_ms: 1, upstream_bytes: 2 });
   await waitFor(() => expect(close.disabled).toBe(false));
   expect(within(panel()).queryByText("result from A")).toBeNull();
+  // Finished behind another tab: the tab is marked until shown.
+  expect(firstTab.querySelector(".spin")).toBeNull();
+  expect(within(firstTab).getByRole("status", { name: "Finished while you were away" })).toBeTruthy();
   fireEvent.click(firstTab);
+  expect(within(firstTab).queryByRole("status")).toBeNull();
   expect(within(panel()).getByText("result from A")).toBeTruthy();
-  expect(within(panel()).queryByText(/^Connected to B/)).toBeNull();
+  expect(panel().querySelector(".term-db")?.textContent).toBe("A");
 });
 
 it("opens another environment in a new tab, leaving a pending confirmation where it was", async () => {
   requireConfirmation([]);
   const { rerender } = render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await openSession("A");
   command("write res.partner [1] {'name': 'Ada'}");
   expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
   rerender(<ShellPage envs={envs} connectTo="B" />);
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await connectedTo("B");
   expect(screen.getAllByRole("tab")).toHaveLength(2);
   rerender(<ShellPage envs={envs} connectTo={null} />);
   fireEvent.click(screen.getAllByRole("tab")[0]);
@@ -98,10 +115,9 @@ it("opens another environment in a new tab, leaving a pending confirmation where
 
 it("reuses a tab already connected to the requested environment", async () => {
   const { rerender } = render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await openSession("A");
   rerender(<ShellPage envs={envs} connectTo="B" />);
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await connectedTo("B");
   rerender(<ShellPage envs={envs} connectTo={null} />);
   vi.mocked(ipc.check).mockClear();
   rerender(<ShellPage envs={envs} connectTo="A" command="read res.partner 7" />);
@@ -111,9 +127,9 @@ it("reuses a tab already connected to the requested environment", async () => {
   expect(ipc.check).not.toHaveBeenCalled();
 });
 
-it("uses the untouched active tab instead of opening another", async () => {
+it("opens one session for a requested environment when none is open", async () => {
   render(<ShellPage envs={envs} connectTo="B" />);
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await connectedTo("B");
   expect(screen.getAllByRole("tab")).toHaveLength(1);
 });
 
@@ -127,9 +143,9 @@ it("runs a requested command once connected to the requested environment", async
 it("asks for confirmation only when the core answers confirmation_required", async () => {
   requireConfirmation(["check_access_rights"]);
   render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
-  const sent = () => vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.model !== "ir.model");
+  await openSession("A");
+  // Model and field lookups for completion and headers are not part of the conversation.
+  const sent = () => vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.model !== "ir.model" && call.method !== "fields_get");
   command("call res.partner check_access_rights ['read']");
   await waitFor(() => expect(sent()).toHaveLength(1));
   expect(screen.queryByText("Send to A? [y/N]")).toBeNull();
@@ -145,15 +161,13 @@ it("says the environment is read-only instead of asking to confirm a write it wo
   requireConfirmation([]);
   const blocked = [{ ...envs[0], write_mode: "read_only" as const }, { ...envs[1], write_mode: "temporary" as const, write_until: "2000-01-01T00:00:00Z" }];
   const { rerender } = render(<ShellPage envs={blocked} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await openSession("A");
   const sent = () => vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.model !== "ir.model");
   command("call res.partner action_custom [[1]]");
   expect(await within(panel()).findByText(/A is read-only: this write was not sent/)).toBeTruthy();
   expect(screen.queryByText("Send to A? [y/N]")).toBeNull();
   expect(sent()).toEqual([expect.objectContaining({ confirmed: false })]);
-  command("\\c B");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await openSession("B");
   command("call res.partner action_custom [[1]]");
   expect(await within(panel()).findByText(/temporary write window for B has expired/)).toBeTruthy();
   // A window that closes while the prompt is open blocks the answer too; the core stays the final check.
@@ -166,17 +180,18 @@ it("says the environment is read-only instead of asking to confirm a write it wo
   expect(sent().filter((call) => call.confirmed)).toHaveLength(0);
 });
 
-it("supports keyboard navigation and always keeps one session after closing tabs", () => {
+it("supports keyboard navigation and offers a new session after closing the last one", async () => {
   render(<ShellPage envs={envs} />);
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  await openSession("A");
+  await openSession("B");
   const tabs = screen.getAllByRole("tab");
   fireEvent.keyDown(tabs[1], { key: "ArrowLeft" });
   expect(tabs[0].getAttribute("aria-selected")).toBe("true");
   fireEvent.click(screen.getAllByRole("button", { name: /Close session/ })[0]);
   expect(screen.getAllByRole("tab")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: /Close session/ }));
-  expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(screen.getByRole("textbox", { name: "Command" })).toBeTruthy();
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(screen.getByRole("heading", { name: "No sessions" })).toBeTruthy();
 });
 
 it("drops all sessions and their output when the vault is locked and unlocked again", async () => {
@@ -191,21 +206,20 @@ it("drops all sessions and their output when the vault is locked and unlocked ag
   localStorage.setItem("odx.page", "shell");
   try {
     render(<App />);
-    await screen.findByRole("textbox", { name: "Command" });
-    command("\\c A");
-    await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+    await screen.findByRole("heading", { name: "No sessions" });
+    await openSession("A");
     command("\\context {\"lang\":\"es_ES\"}");
-    fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+    newSession("B");
     expect(screen.getAllByRole("tab")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Lock vault" }));
     const password = await screen.findByLabelText(/^Master password/);
     expect(screen.queryByRole("tab")).toBeNull();
     fireEvent.change(password, { target: { value: "fixture-password" } });
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
-    await screen.findByRole("textbox", { name: "Command" });
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    expect(screen.queryByText(/Connected to A|Session context set/)).toBeNull();
-    expect(screen.getByRole("tab").textContent).toBe("Terminal");
+    await screen.findByRole("heading", { name: "No sessions" });
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByText(/Session context set/)).toBeNull();
+    await openSession("A");
     command("\\context");
     expect(within(panel()).getByText("{}", { exact: true })).toBeTruthy();
   } finally { localStorage.removeItem("odx.page"); }
@@ -223,9 +237,8 @@ it("saves pending session changes before locking the vault", async () => {
   localStorage.setItem("odx.page", "shell");
   try {
     render(<App />);
-    await screen.findByRole("textbox", { name: "Command" });
-    await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await screen.findByRole("heading", { name: "No sessions" });
+    await openSession("A");
     command("\\context {\"lang\":\"es_ES\"}");
     // Lock within the save delay: the change is saved first, while the vault still accepts it.
     fireEvent.click(screen.getByRole("button", { name: "Lock vault" }));
@@ -239,7 +252,8 @@ it("saves pending session changes before locking the vault", async () => {
 it("does not save every tab just because the active tab changed", async () => {
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  newSession("A");
+  newSession("B");
   await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 2000 });
   vi.mocked(ipc.saveShellSessions).mockClear();
   fireEvent.click(screen.getAllByRole("tab")[0]);
@@ -254,7 +268,8 @@ it("does not save every tab just because the active tab changed", async () => {
 
 it("uses distinct tab targets and switches to exactly one panel on click", () => {
   render(<ShellPage envs={envs} />);
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  newSession("A");
+  newSession("B");
   const tabs = screen.getAllByRole("tab");
   expect(tabs[0].id).not.toBe(tabs[1].id);
   expect(tabs[0].getAttribute("aria-controls")).not.toBe(tabs[1].getAttribute("aria-controls"));
@@ -268,44 +283,158 @@ it("uses distinct tab targets and switches to exactly one panel on click", () =>
 
 it("renames tabs with a double click and cancels with Escape", () => {
   render(<ShellPage envs={envs} />);
-  fireEvent.doubleClick(screen.getByRole("tab", { name: "Terminal" }));
+  newSession("A");
+  fireEvent.doubleClick(screen.getByRole("tab", { name: "A" }));
   let name = screen.getByRole("textbox", { name: "Session name" });
   expect((name as HTMLInputElement).selectionStart).toBe(0);
   expect((name as HTMLInputElement).selectionEnd).toBe((name as HTMLInputElement).value.length);
   fireEvent.change(name, { target: { value: "  Ventas  " } });
   fireEvent.keyDown(name, { key: "Enter" });
-  expect(screen.getByRole("tab", { name: "Ventas" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
-  fireEvent.click(screen.getByRole("tab", { name: "Ventas" }));
-  fireEvent.doubleClick(screen.getByRole("tab", { name: "Ventas" }));
+  expect(screen.getByRole("tab", { name: "Ventas A" })).toBeTruthy();
+  newSession("B");
+  fireEvent.click(screen.getByRole("tab", { name: "Ventas A" }));
+  fireEvent.doubleClick(screen.getByRole("tab", { name: "Ventas A" }));
   name = screen.getByRole("textbox", { name: "Session name" });
   fireEvent.change(name, { target: { value: "Discard" } });
   fireEvent.keyDown(name, { key: "Escape" });
-  expect(screen.getByRole("tab", { name: "Ventas" })).toBeTruthy();
-  fireEvent.doubleClick(screen.getByRole("tab", { name: "Ventas" }));
+  expect(screen.getByRole("tab", { name: "Ventas A" })).toBeTruthy();
+  fireEvent.doubleClick(screen.getByRole("tab", { name: "Ventas A" }));
   name = screen.getByRole("textbox", { name: "Session name" });
   fireEvent.change(name, { target: { value: "Contabilidad" } });
   fireEvent.blur(name);
-  expect(screen.getByRole("tab", { name: "Contabilidad" })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Contabilidad A" })).toBeTruthy();
+  // An empty name follows the environment again.
+  fireEvent.doubleClick(screen.getByRole("tab", { name: "Contabilidad A" }));
+  name = screen.getByRole("textbox", { name: "Session name" });
+  fireEvent.change(name, { target: { value: "" } });
+  fireEvent.keyDown(name, { key: "Enter" });
+  expect(screen.getByRole("tab", { name: "A" })).toBeTruthy();
 });
 
-it("closes tabs with the middle mouse button and ignores right clicks", () => {
+it("closes tabs with the middle mouse button and ignores right clicks", async () => {
   render(<ShellPage envs={envs} />);
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
-  const first = screen.getAllByRole("tab", { name: "Terminal" })[0];
+  await openSession("A");
+  await openSession("A");
+  const first = screen.getAllByRole("tab", { name: "A" })[0];
   fireEvent(first, new MouseEvent("auxclick", { button: 2, bubbles: true, cancelable: true }));
   expect(screen.getAllByRole("tab")).toHaveLength(2);
   fireEvent(first, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
-  expect(screen.getAllByRole("tab", { name: "Terminal" })).toHaveLength(1);
-  expect(screen.getByRole("tab", { name: "Terminal" })).not.toBe(first);
-  const last = screen.getByRole("tab");
-  fireEvent(last, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
-  expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(screen.getByRole("tab")).not.toBe(last);
+  expect(screen.getAllByRole("tab", { name: "A" })).toHaveLength(1);
+  expect(screen.getByRole("tab", { name: "A" })).not.toBe(first);
+  fireEvent(screen.getByRole("tab"), new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+  expect(screen.queryByRole("tab")).toBeNull();
+});
+
+it("offers rename, pin and close actions on a tab's right-click menu", async () => {
+  render(<ShellPage envs={envs} />);
+  for (const env of ["A", "B", "A", "B"]) await openSession(env);
+  const names = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
+  const menu = (index: number) => { fireEvent.contextMenu(screen.getAllByRole("tab")[index]); return screen.getByRole("menu"); };
+  const item = (index: number, name: string) => within(menu(index)).getByRole("menuitem", { name: new RegExp(`^${name}($|Ctrl|F2)`) }) as HTMLButtonElement;
+  expect(item(0, "Close to the left").disabled).toBe(true);
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+
+  // Pinning moves the tab first; pinned tabs have no close button and survive the bulk closes.
+  fireEvent.click(item(3, "Pin"));
+  expect(names()).toEqual(["B", "A", "B", "A"]);
+  expect(screen.getAllByRole("button", { name: /Close session/ })).toHaveLength(3);
+  expect(screen.getAllByRole("button", { name: "Unpin" })).toHaveLength(1);
+  // Closing the active tab from another tab's menu leaves that tab in front.
+  fireEvent.click(screen.getAllByRole("tab")[3]);
+  fireEvent.click(item(2, "Close to the right"));
+  expect(names()).toEqual(["B", "A", "B"]);
+  expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+  fireEvent.click(item(2, "Close to the left"));
+  expect(names()).toEqual(["B", "B"]);
+  expect(item(1, "Close others").disabled).toBe(true);
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+  fireEvent.click(item(0, "Unpin"));
+  expect(screen.getAllByRole("button", { name: /Close session/ })).toHaveLength(2);
+  fireEvent.click(item(0, "Rename"));
+  const name = screen.getByRole("textbox", { name: "Session name" });
+  fireEvent.change(name, { target: { value: "Ventas" } });
+  fireEvent.keyDown(name, { key: "Enter" });
+  expect(names()).toEqual(["Ventas B", "B"]);
+  fireEvent.click(item(0, "Close"));
+  expect(names()).toEqual(["B"]);
+});
+
+it("reorders tabs by dragging them, within the pinned or unpinned group", async () => {
+  render(<ShellPage envs={envs} />);
+  for (const env of ["A", "B"]) await openSession(env);
+  const names = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
+  // Each tab 100px wide, side by side.
+  screen.getAllByRole("tab").forEach((tab, i) => vi.spyOn(tab.parentElement!, "getBoundingClientRect").mockReturnValue(
+    { width: 100, height: 34, x: i * 100, y: 0, top: 0, left: i * 100, right: (i + 1) * 100, bottom: 34, toJSON: () => ({}) }));
+  const [a] = screen.getAllByRole("tab");
+  fireEvent.mouseDown(a, { button: 0, clientX: 10 });
+  // Short of the next tab's middle nothing moves.
+  // The tab follows the pointer; short of the next tab's middle there is no landing line.
+  fireEvent.mouseMove(window, { clientX: 140 });
+  expect(a.parentElement!.style.transform).toBe("translateX(130px)");
+  expect(document.querySelector("[data-drop]")).toBeNull();
+  // Past it, a line marks the gap after B; the order changes only on release.
+  fireEvent.mouseMove(window, { clientX: 160 });
+  expect(screen.getAllByRole("tab")[1].parentElement!.getAttribute("data-drop")).toBe("after");
+  expect(names()).toEqual(["A", "B"]);
+  fireEvent.mouseUp(window);
+  expect(names()).toEqual(["B", "A"]);
+  expect(document.querySelector("[data-drop], [data-dragging]")).toBeNull();
+  // After the release the pointer moves nothing.
+  fireEvent.mouseMove(window, { clientX: 40 });
+  expect(names()).toEqual(["B", "A"]);
+
+  // A pinned tab never crosses into the unpinned ones.
+  fireEvent.contextMenu(screen.getAllByRole("tab")[0]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+  fireEvent.mouseDown(screen.getAllByRole("tab")[0], { button: 0, clientX: 10 });
+  fireEvent.mouseMove(window, { clientX: 160 });
+  expect(document.querySelector("[data-drop]")).toBeNull();
+  fireEvent.mouseUp(window);
+  expect(names()).toEqual(["B", "A"]);
+});
+
+it("searches history backwards with Ctrl+R like bash", async () => {
+  vi.mocked(ipc.shellHistory).mockResolvedValue([
+    { at: "2026-01-01T00:00:00Z", command: "count res.partner" },
+    { at: "2026-01-02T00:00:00Z", command: "search res.partner -l 5" },
+    { at: "2026-01-03T00:00:00Z", command: "whoami" },
+  ]);
+  render(<ShellPage envs={envs} />);
+  await openSession("A");
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  // What reads on the line: the query once (its painted copy is hidden from readers).
+  const line = () => { const label = input.closest("label")!.cloneNode(true) as HTMLElement; label.querySelectorAll("[aria-hidden]").forEach((n) => n.remove()); return label.textContent; };
+  fireEvent.change(input, { target: { value: "typed" } });
+  fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+  // The query replaces the line; the newest match follows it, the query marked.
+  fireEvent.change(input, { target: { value: "partner" } });
+  expect(line()).toBe("(reverse-i-search) 'partner': search res.partner -l 5");
+  expect(input.closest("label")!.querySelector("mark")?.textContent).toBe("partner");
+  fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+  expect(line()).toContain("': count res.partner");
+  // A query that stops matching keeps the last match and says so.
+  fireEvent.change(input, { target: { value: "partnerx" } });
+  expect(line()).toBe("(failed reverse-i-search) 'partnerx': search res.partner -l 5");
+  // Ctrl+G gives the line back; an arrow leaves the match to edit; Enter runs it.
+  fireEvent.keyDown(input, { key: "g", ctrlKey: true });
+  expect(input.value).toBe("typed");
+  fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+  fireEvent.change(input, { target: { value: "count" } });
+  fireEvent.keyDown(input, { key: "ArrowRight" });
+  expect(input.value).toBe("count res.partner");
+  fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+  fireEvent.change(input, { target: { value: "who" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input.value).toBe("");
+  await waitFor(() => expect(within(panel()).getAllByText("whoami").length).toBeGreaterThan(0));
 });
 
 it("preserves the tab label width and icon while editing its name", () => {
   render(<ShellPage envs={envs} />);
+  newSession("A");
   const tab = screen.getByRole("tab");
   vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
     width: 148, height: 34, x: 0, y: 0, top: 0, left: 0, right: 148, bottom: 34, toJSON: () => ({}),
@@ -330,7 +459,7 @@ it("numbers history the same in the current tab and in a new tab loaded from the
     if (last?.command !== cmd || last.environment !== (environment ?? null)) stored.push({ at: new Date().toISOString(), environment: environment ?? null, command: cmd });
   });
   render(<ShellPage envs={envs} />);
-  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  await openSession("A");
   for (const line of ["\\context", "\\timing", "\\context", "\\context"]) command(line);
   await waitFor(() => expect(stored.map((h) => h.command)).toEqual(["\\context", "\\timing", "\\context"]));
   const input = () => (screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement).value;
@@ -338,7 +467,7 @@ it("numbers history the same in the current tab and in a new tab loaded from the
   expect(input()).toBe("\\timing");
   command("!3");
   expect(input()).toBe("\\context");
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  newSession("A");
   await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalledTimes(2));
   await waitFor(() => { command("!2"); expect(input()).toBe("\\timing"); });
   command("!3");
@@ -346,10 +475,7 @@ it("numbers history the same in the current tab and in a new tab loaded from the
 });
 
 const answer = (data: (call: Parameters<typeof ipc.shell>[0]) => unknown) => vi.mocked(ipc.shell).mockImplementation(async (call) => ({ data: call.model === "ir.model" ? [] : data(call), write: false, upstream_ms: 3, upstream_bytes: 4 }));
-const connectA = async () => {
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
-};
+const connectA = () => openSession("A");
 
 it("answers uhg with read calls only, looking the user up by the environment login", async () => {
   answer((call) => {
@@ -392,8 +518,10 @@ it("renders read_group with groupby columns and the count, sorts by header and t
   command("read_group res.partner country_id");
   await waitFor(() => expect(within(panel()).getByText("Spain (1)")).toBeTruthy());
   const table = within(panel()).getByRole("table");
-  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["country_id", "count"]);
-  const firstColumn = () => within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "country_id", "count"]);
+  const firstColumn = () => [...table.querySelectorAll("tbody tr")].map((r) => r.querySelector("td:nth-child(2)")?.textContent);
+  // The count column adds up in the footer; the group column has nothing to add.
+  expect([...table.querySelectorAll("tfoot td")].map((td) => td.textContent)).toEqual(["Σ", "", "16"]);
   fireEvent.click(within(table).getByRole("button", { name: "Sort by country_id" }));
   expect(firstColumn()).toEqual(["France (2)", "Spain (1)", "false"]);
   fireEvent.click(within(table).getByRole("button", { name: "Sort by country_id" }));
@@ -431,13 +559,13 @@ it("follows ids and many2one cells as visible read commands and inspects long va
   render(<ShellPage envs={envs} />);
   await connectA();
   command("search res.partner -f country_id,comment");
-  fireEvent.click(await within(panel()).findByRole("button", { name: "Spain (68)" }));
+  fireEvent.doubleClick(await within(panel()).findByRole("button", { name: "Spain (68)" }));
   const typed = (line: string) => [...panel().querySelectorAll(".term-cmd")].some((l) => l.textContent?.includes(line));
   await waitFor(() => expect(typed("read res.country 68 -f *")).toBe(true));
-  expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ model: "res.country", method: "read", args: [[68]], kwargs: {} });
-  fireEvent.click(within(panel()).getAllByRole("button", { name: "7" })[0]);
+  expect(vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.method !== "fields_get").at(-1)).toMatchObject({ model: "res.country", method: "read", args: [[68]], kwargs: {} });
+  fireEvent.doubleClick(within(panel()).getAllByRole("button", { name: "7" })[0]);
   await waitFor(() => expect(typed("read res.partner 7 -f *")).toBe(true));
-  fireEvent.click(within(panel()).getAllByRole("button", { name: /^x{80}…$/ })[0]);
+  fireEvent.doubleClick(within(panel()).getAllByRole("button", { name: /^x{80}…$/ })[0]);
   const dialog = within(panel()).getByRole("dialog", { name: "res.partner 7 · comment" });
   expect(dialog.textContent).toContain("x".repeat(120));
   fireEvent.keyDown(screen.getByRole("textbox", { name: "Command" }), { key: "Escape" });
@@ -474,7 +602,7 @@ it("suggests the newest matching history command and accepts it with the right a
     { at: "2026-10-19T10:01:00Z", command: "search res.users -l 1" },
   ]);
   render(<ShellPage envs={envs} />);
-  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  await openSession("A");
   const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
   fireEvent.change(input, { target: { value: "search res." } });
   await waitFor(() => expect(panel().querySelector(".term-ghost")?.textContent).toBe("users -l 1"));
@@ -518,7 +646,7 @@ it("filters and reshapes the last table, saves ids as $name, pages back and runs
   command("\\set ada");
   command("\\cols email,id");
   const tables = within(panel()).getAllByRole("table");
-  expect(within(tables.at(-1)!).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["email", "id"]);
+  expect(within(tables.at(-1)!).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["", "email", "id"]);
   command("\\cols nope");
   expect(within(panel()).getByText(/Unknown columns: nope/)).toBeTruthy();
   command("\\prev");
@@ -539,7 +667,7 @@ it("restores aliases from the vault even when no saved tab was used", async () =
 
 it("finds text in the output with Ctrl+F and zooms the font with Ctrl +/-", async () => {
   render(<ShellPage envs={envs} />);
-  await waitFor(() => expect(ipc.shellHistory).toHaveBeenCalled());
+  await openSession("A");
   command("\\l");
   const input = screen.getByRole("textbox", { name: "Command" });
   fireEvent.keyDown(input, { key: "f", ctrlKey: true });
@@ -583,7 +711,7 @@ it("opens records in Odoo with Ctrl+click and saves tables to Downloads", async 
   render(<ShellPage envs={envs} />);
   await connectA();
   command("search res.partner -f name,country_id");
-  fireEvent.click(await within(panel()).findByRole("button", { name: "Spain (68)" }), { ctrlKey: true });
+  fireEvent.doubleClick(await within(panel()).findByRole("button", { name: "Spain (68)" }), { ctrlKey: true });
   await waitFor(() => expect(ipc.openUrl).toHaveBeenCalledWith("A", { model: "res.country", id: 68 }));
   fireEvent.click(within(panel()).getByRole("button", { name: "More formats" }));
   fireEvent.click(within(panel()).getByRole("menuitem", { name: "Save as CSV in Downloads" }));
@@ -670,12 +798,12 @@ it("restores saved tabs with their output and reconnects each one when it is fir
   await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
   expect(within(panel()).getByText("out of whoami")).toBeTruthy();
   expect(within(panel()).getByText(/Session restored/)).toBeTruthy();
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to B/)).toBeTruthy());
+  await connectedTo("B");
   expect(ipc.check).toHaveBeenCalledTimes(1);
   expect(ipc.check).toHaveBeenCalledWith("B");
   fireEvent.click(screen.getAllByRole("tab")[0]);
   expect(within(panel()).getByText("out of count res.partner")).toBeTruthy();
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await connectedTo("A");
   expect(ipc.check).toHaveBeenCalledTimes(2);
   // The restore note and the automatic reconnection are shown but not saved, so restarts do not pile them up.
   vi.mocked(ipc.saveShellSessions).mockClear();
@@ -692,7 +820,7 @@ it("does not switch a restored tab to the requested environment", async () => {
   await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "read" && call.environment_id === "A")).toBe(true));
   // The restored session stays as it was; the request gets its own tab, shown.
   expect(screen.getAllByRole("tab")).toHaveLength(2);
-  expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy();
+  await connectedTo("A");
   expect(within(panel()).queryByText("out of whoami")).toBeNull();
   fireEvent.click(screen.getAllByRole("tab")[0]);
   expect(within(panel()).getByText("out of whoami")).toBeTruthy();
@@ -704,11 +832,11 @@ it("does not announce a restored session when only untouched tabs were saved", a
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(within(panel()).queryByText(/Session restored/)).toBeNull();
+  expect(screen.queryByRole("tab")).toBeNull();
+  expect(screen.queryByText(/Session restored/)).toBeNull();
   // A saved session with work still restores, without its untouched tabs.
   cleanup();
-  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t9", tabs: [untouched, savedTab("t2", null, "whoami")] }));
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t9", tabs: [untouched, savedTab("t3", null, "\\l"), savedTab("t2", "A", "whoami")] }));
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(within(panel()).getByText(/Session restored/)).toBeTruthy());
   expect(screen.getAllByRole("tab")).toHaveLength(1);
@@ -721,6 +849,8 @@ it("reports a restored environment that no longer exists and leaves the tab disc
   await waitFor(() => expect(within(panel()).getByText(/Gone no longer exists/)).toBeTruthy());
   expect(ipc.check).not.toHaveBeenCalled();
   expect(panel().querySelector(".term-input .term-prompt")?.textContent).toBe("odoo>");
+  expect((screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement).disabled).toBe(true);
+  expect(within(panel()).getByText("Deleted")).toBeTruthy();
 });
 
 it("saves sessions to the vault only after loading them, without pending confirmations", async () => {
@@ -728,15 +858,14 @@ it("saves sessions to the vault only after loading them, without pending confirm
   vi.mocked(ipc.shellSessions).mockReturnValue(new Promise((resolve) => { load = resolve; }));
   requireConfirmation(["search_read"]);
   render(<ShellPage envs={envs} />);
-  command("\\c A");
-  await waitFor(() => expect(within(panel()).getByText(/^Connected to A/)).toBeTruthy());
+  await openSession("A");
   await new Promise((resolve) => setTimeout(resolve, 1000));
   expect(ipc.saveShellSessions).not.toHaveBeenCalled();
   load(null);
   command("unlink res.partner 5");
   await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 3000 });
   const saved = JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0]);
-  expect(saved.tabs[0].session.env).toEqual({ id: "A", name: "A" });
+  expect(saved.tabs[0]).toMatchObject({ envId: "A", envName: "A", session: { env: { id: "A", name: "A" } } });
   expect(JSON.stringify(saved)).toContain("unlink res.partner 5");
   expect(JSON.stringify(saved)).not.toContain("confirming");
 });
@@ -759,4 +888,416 @@ it("warns when $_ holds ids of another model and does not flag $_ as a syntax er
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(within(panel()).getByText(/\$_ holds ir\.model\.data ids, not res\.company ids/)).toBeTruthy());
   expect(within(panel()).getByText(/^write res\.company \[\[2\]/)).toBeTruthy();
+});
+
+it("asks for the environment when opening a session and keeps it and its write mode in view", async () => {
+  render(<ShellPage envs={envs} />);
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  const menu = screen.getByRole("menu", { name: "New Terminal session" });
+  expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["A", "B"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "B" }));
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(screen.getByRole("tab").textContent).toBe("B");
+  await connectedTo("B");
+  expect(ipc.check).toHaveBeenCalledWith("B");
+  expect(within(panel()).getByText("Approval")).toBeTruthy();
+  expect(within(panel()).queryByRole("combobox")).toBeNull();
+  // Switching environments inside a session is gone: ids from one database must not reach another.
+  command("\\c A");
+  expect(within(panel()).getByText(/This session stays on B/)).toBeTruthy();
+  expect(ipc.check).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a failed session on its environment; its Error chip says why and retries on click", async () => {
+  vi.mocked(ipc.check).mockResolvedValueOnce({ environment_id: "A", status: "unreachable", latency_ms: 1, error: "offline" });
+  render(<ShellPage envs={envs} />);
+  newSession("A");
+  const chip = await within(panel()).findByRole("button", { name: "Retry connection" });
+  expect(chip.textContent).toBe("Error");
+  expect(chip.getAttribute("data-tip")).toBe("Could not connect to A: offline");
+  expect(panel().querySelector(".term-input .term-db")?.textContent).toBe("A");
+  expect(within(panel()).queryByText(/Could not connect/)).toBeNull();
+  let answer!: (health: Awaited<ReturnType<typeof ipc.check>>) => void;
+  vi.mocked(ipc.check).mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+  fireEvent.click(chip);
+  const retrying = within(panel()).getByRole("button", { name: "Retrying…" }) as HTMLButtonElement;
+  expect(retrying.disabled).toBe(true);
+  answer({ environment_id: "A", status: "ok", latency_ms: 1 });
+  await connectedTo("A");
+  expect(ipc.check).toHaveBeenCalledTimes(2);
+  expect(within(panel()).queryByRole("button", { name: /Retry/ })).toBeNull();
+});
+
+it("opens the environment menu with Ctrl+T, closes with Ctrl+W and cycles with Ctrl+Tab", async () => {
+  render(<ShellPage envs={envs} />);
+  fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+  fireEvent.click(screen.getByRole("menuitem", { name: "A" }));
+  await openSession("B");
+  fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  await openSession("A");
+  expect(screen.getAllByRole("tab")).toHaveLength(3);
+  expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+  expect(screen.getAllByRole("tab")[0].getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: true });
+  expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+});
+
+it("lists commands in a panel with \\? and types the chosen one", async () => {
+  render(<ShellPage envs={envs} />);
+  await openSession("A");
+  command("\\?");
+  const help = screen.getByRole("complementary", { name: "Commands" });
+  expect(within(help).getByRole("heading", { name: "Queries" })).toBeTruthy();
+  fireEvent.click(within(help).getByRole("button", { name: /^search <model>/ }));
+  expect((screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement).value).toBe("search ");
+  expect(screen.queryByRole("complementary", { name: "Commands" })).toBeNull();
+});
+
+it("shows the records and values of a write before it is sent, and sends it from the preview", async () => {
+  requireConfirmation([]);
+  render(<ShellPage envs={envs} />);
+  await openSession("A");
+  command("write res.partner [7] {'name': 'Ada'}");
+  const preview = await screen.findByRole("region", { name: "Send to A? [y/N]" });
+  expect(within(preview).getByText("res.partner")).toBeTruthy();
+  expect(within(preview).getByText(/A · 7/)).toBeTruthy();
+  expect(within(preview).getByText("Ada", { exact: false })).toBeTruthy();
+  fireEvent.click(within(preview).getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(ipc.shell).toHaveBeenCalledWith(expect.objectContaining({ method: "write", confirmed: true })));
+  expect(screen.queryByRole("region", { name: "Send to A? [y/N]" })).toBeNull();
+});
+
+it("adds a search box to the session menu when there are many environments, and Enter opens the first match", async () => {
+  const many: Environment[] = Array.from({ length: 10 }, (_, i) => ({ ...envs[0], id: `e${i}`, name: `Client ${i}`, url: `https://client${i}.test`, tags: i === 7 ? ["vip"] : [] }));
+  const { rerender } = render(<ShellPage envs={envs} />);
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  expect(screen.queryByRole("searchbox", { name: "Find environment" })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  rerender(<ShellPage envs={many} />);
+  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
+  const search = screen.getByRole("searchbox", { name: "Find environment" });
+  expect(document.activeElement).toBe(search);
+  fireEvent.change(search, { target: { value: "VIP" } });
+  expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Client 7"]);
+  fireEvent.change(search, { target: { value: "nothing" } });
+  expect(screen.getByText("No matches")).toBeTruthy();
+  fireEvent.change(search, { target: { value: "client3.test" } });
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect(screen.queryByRole("menu")).toBeNull();
+  await waitFor(() => expect(ipc.check).toHaveBeenCalledWith("e3"));
+  expect(screen.getByRole("tab").textContent).toBe("Client 3");
+});
+
+it("prompts with the login, shortening a long one, and shows the database at the end of the input", async () => {
+  const long = [{ ...envs[0], login: "benjamin.coronel@factorlibre.com", database: "erp_prod" }, envs[1]];
+  render(<ShellPage envs={long} />);
+  await openSession("B");
+  const prompt = () => panel().querySelector(".term-input .term-prompt")?.textContent;
+  const database = () => panel().querySelector(".term-input .term-db")?.textContent;
+  expect([prompt(), database()]).toEqual(["fixture>", "B"]);
+  await openSession("A", "erp_prod");
+  expect([prompt(), database()]).toEqual(["benjamin.coronel@fa…>", "erp_prod"]);
+  command("\\timing");
+  expect(within(panel()).getAllByText("benjamin.coronel@fa…>").length).toBeGreaterThan(1);
+});
+
+it("shows the connection only on the status chip, never as output", async () => {
+  let answer!: (health: Awaited<ReturnType<typeof ipc.check>>) => void;
+  vi.mocked(ipc.check).mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+  render(<ShellPage envs={envs} />);
+  newSession("A");
+  expect(within(panel()).getByRole("button", { name: "Connecting…" })).toBeTruthy();
+  expect(within(panel()).queryByText(/Ctrl\+C discards/)).toBeNull();
+  answer({ environment_id: "A", status: "ok", server_version: "17.0", latency_ms: 42 });
+  await connectedTo("A");
+  expect(panel().querySelector(".term-mode")?.getAttribute("data-tip")).toBe("Approval required\nOdoo 17.0 · 42 ms");
+  expect(panel().querySelector(".term-out")?.textContent).not.toMatch(/Connect|17\.0/);
+});
+
+it("keeps Odoo commands typed instead of sending them while disconnected, and still runs local ones", async () => {
+  vi.mocked(ipc.check).mockResolvedValue({ environment_id: "A", status: "unreachable", latency_ms: 1, error: "offline" });
+  render(<ShellPage envs={envs} />);
+  newSession("A");
+  await within(panel()).findByRole("button", { name: "Retry connection" });
+  vi.mocked(ipc.shellHistoryAdd).mockClear();
+  command("search res.partner -l 5");
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  expect(input.value).toBe("search res.partner -l 5");
+  expect(panel().querySelector(".term-hint")?.textContent).toBe("Not connected: click Error to retry, then run it.");
+  expect(vi.mocked(ipc.shell).mock.calls.filter(([call]) => call.model !== "ir.model")).toHaveLength(0);
+  expect(ipc.shellHistoryAdd).not.toHaveBeenCalled();
+  expect(panel().querySelector(".term-out")?.textContent).not.toContain("search res.partner");
+  // An incomplete command is held too, rather than answered with its usage.
+  command("search");
+  expect(panel().querySelector(".term-out")?.textContent).not.toContain("Missing model");
+  command("\\context");
+  expect(within(panel()).getByText("{}", { exact: true })).toBeTruthy();
+});
+
+it("describes table columns with the field label, type and relation after a query", async () => {
+  answer((call) => call.method === "fields_get"
+    ? { name: { string: "Name", type: "char" }, country_id: { string: "Country", type: "many2one", relation: "res.country" } }
+    : [{ id: 7, name: "Ada", country_id: [68, "Spain"] }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f name,country_id");
+  const header = async (column: string) => (await within(panel()).findByRole("button", { name: `Sort by ${column}` })).closest("th")?.getAttribute("data-tip");
+  await waitFor(async () => expect(await header("country_id")).toBe("Country\nmany2one → res.country"));
+  expect(await header("name")).toBe("Name\nchar");
+  const loads = () => vi.mocked(ipc.shell).mock.calls.filter(([call]) => call.method === "fields_get").length;
+  expect(loads()).toBe(1);
+  command("search res.partner -f name");
+  await waitFor(() => expect(within(panel()).getAllByRole("table")).toHaveLength(2));
+  expect(loads()).toBe(1);
+});
+
+it("runs pasted commands in order on Enter, stops at the first error, and pastes them as text on Escape", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.model === "res.users") throw { code: "upstream.remote", detail: "Access denied", outcome: "failed" };
+    return { data: call.model === "ir.model" ? [] : 3, write: false, upstream_ms: 1, upstream_bytes: 2 };
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  const paste = (text: string) => fireEvent.paste(input, { clipboardData: { getData: () => text } });
+  const counted = () => vi.mocked(ipc.shell).mock.calls.map(([call]) => call).filter((call) => call.method === "search_count").map((call) => call.model);
+  paste("count res.partner\ncount res.users\ncount res.country\n");
+  expect(within(panel()).getByText("3 commands pasted")).toBeTruthy();
+  expect(input.value).toBe("");
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() => expect(within(panel()).getByText("Stopped after command 2 of 3.")).toBeTruthy());
+  expect(counted()).toEqual(["res.partner", "res.users"]);
+  // A multi-line command (continuation lines) pastes as usual; Escape turns a pasted list into text.
+  paste("search res.partner\n  -l 5");
+  expect(within(panel()).queryByText(/commands pasted/)).toBeNull();
+  paste("count res.partner\n\\timing");
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(input.value).toBe("count res.partner\n\\timing");
+  expect(counted()).toHaveLength(2);
+});
+
+it("waits for a write's confirmation inside pasted commands, then goes on", async () => {
+  requireConfirmation(["search_count"]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  fireEvent.paste(input, { clipboardData: { getData: () => "write res.partner [7] {'name': 'Ada'}\ncount res.partner" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  const preview = await screen.findByRole("region", { name: "Send to A? [y/N]" });
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "search_count")).toBe(false);
+  fireEvent.click(within(preview).getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "search_count")).toBe(true));
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "write" && call.confirmed)).toBe(true);
+});
+
+it("ignores Enter on an empty line", async () => {
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  const lines = () => panel().querySelectorAll(".term-cmd").length;
+  const before = lines();
+  command("   ");
+  command("");
+  expect(lines()).toBe(before);
+  expect(ipc.shellHistoryAdd).not.toHaveBeenCalled();
+});
+
+it("copies a result's call as a Python script without the API key", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  answer(() => [{ id: 7, name: "Ada", active: true }, { id: 8, name: "Grace", active: false }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command('\\context {"lang": "es_ES"}');
+  command("search res.partner -d [('active','=',True)] -f name -l 2");
+  fireEvent.click(await within(panel()).findByRole("button", { name: "More formats" }));
+  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Copy as Python" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalled());
+  const script = writeText.mock.calls[0][0] as string;
+  expect(script).toContain('url, db, login = "https://A.test", "A", "fixture"');
+  expect(script).toContain('key = "<API key>"');
+  expect(script).toMatch(/execute_kw\(db, uid, key, "res\.partner", "search_read", \[\], \{.*"domain": \[\["active", "=", True\]\].*"context": \{"lang": "es_ES"\}\}\)/);
+});
+
+it("adds up numeric columns of the rows shown, with the average on hover", async () => {
+  answer(() => [{ id: 1, name: "A", amount: 10.5, qty: 2 }, { id: 2, name: "B", amount: 4, qty: false }, { id: 3, name: "C", amount: 1.25, qty: 4 }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search sale.order -f name,amount,qty");
+  const table = await within(panel()).findByRole("table");
+  const foot = () => [...table.querySelectorAll("tfoot td")].map((td) => td.textContent);
+  await waitFor(() => expect(foot()).toEqual(["Σ", "", "", "15.75", "6"]));
+  expect(table.querySelector("tfoot td:nth-child(4) span")?.getAttribute("data-tip")).toBe("Average: 5.25");
+  // One row left: nothing to add up.
+  command("\\grep C");
+  const filtered = within(panel()).getAllByRole("table").at(-1)!;
+  expect(filtered.querySelectorAll("tbody tr")).toHaveLength(1);
+  expect(filtered.querySelector("tfoot")).toBeNull();
+});
+
+it("reads values by their field type and marks each command block by outcome", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.method === "fields_get") return { data: {
+      state: { string: "Status", type: "selection", selection: [["draft", "Quotation"], ["sale", "Sales Order"]] },
+      locked: { string: "Locked", type: "boolean" }, note: { string: "Note", type: "char" },
+      date_order: { string: "Order Date", type: "datetime" },
+    }, write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.model === "nope") throw { code: "upstream.remote", detail: "No model", outcome: "failed" };
+    return { data: [{ id: 1, state: "sale", locked: true, note: false, date_order: "2026-10-23 08:41:07" }, { id: 2, state: "draft", locked: false, note: false, date_order: false }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search sale.order -f state,locked,note,date_order");
+  const table = await within(panel()).findByRole("table");
+  await waitFor(() => expect(within(table).getByText("Sales Order")).toBeTruthy());
+  const cell = (text: string) => within(table).getByText(text).closest("td")!;
+  expect(cell("Sales Order").getAttribute("data-tip")).toBe("sale");
+  expect(cell("✓").getAttribute("data-tip")).toBe("true");
+  expect(cell("✗").className).toContain("bool no");
+  // A boolean field's false is a value; a char field's false is empty.
+  expect([...table.querySelectorAll("tbody tr:nth-child(2) td")].map((td) => td.className.includes("dim"))).toEqual([false, false, false, false, true, true]);
+  const when = [...table.querySelectorAll("td")].find((td) => td.getAttribute("data-tip") === "2026-10-23 08:41:07 UTC")!;
+  expect(when.textContent).toBe(new Date("2026-10-23T08:41:07Z").toLocaleString("en", { dateStyle: "short", timeStyle: "medium" }));
+  command("read nope 1");
+  await waitFor(() => expect(panel().querySelector('.term-group[data-outcome="error"]')).toBeTruthy());
+  expect(panel().querySelector('.term-group[data-outcome="read"]')?.textContent).toContain("search sale.order");
+});
+
+const tabId = (index: number) => screen.getAllByRole("tab")[index].id.replace("shell-tab-", "");
+const agentRun = (id: number, fields: Partial<Extract<AgentRequest, { kind: "run" }>>): AgentRequest =>
+  ({ id, kind: "run", envId: "A", command: "count res.partner", clientId: "c1", clientLabel: "Claude", allowWrites: false, ...fields });
+
+it("runs an agent's command in its tab without bringing it forward, marked with the agent and audited as it", async () => {
+  answer(() => 42);
+  const { rerender } = render(<ShellPage envs={envs} />);
+  await openSession("A");
+  await openSession("B");
+  const a = tabId(0);
+  const handled = vi.fn();
+  rerender(<ShellPage envs={envs} agentRequests={[agentRun(1, { terminal: a })]} onAgentHandled={handled} />);
+  expect(handled).toHaveBeenCalledWith(1);
+  await waitFor(() => expect(ipc.agentReply).toHaveBeenCalled());
+  const [id, result] = vi.mocked(ipc.agentReply).mock.calls[0];
+  expect(id).toBe(1);
+  expect(result).toMatchObject({ terminal: a, env: "A", command: "count res.partner", output: [{ kind: "input", text: "count res.partner" }, { kind: "text", text: "42" }, { kind: "info", text: "3 ms · 4 B" }] });
+  expect(vi.mocked(ipc.shell).mock.calls.find(([call]) => call.method === "search_count")?.[0]).toMatchObject({ environment_id: "A", client_id: "c1" });
+  // B stays in front; A shows that something happened there.
+  expect(screen.getAllByRole("tab")[1].getAttribute("aria-selected")).toBe("true");
+  expect(within(screen.getAllByRole("tab")[0]).getByRole("status", { name: "An agent ran commands here" })).toBeTruthy();
+  fireEvent.click(screen.getAllByRole("tab")[0]);
+  expect(within(panel()).getByText("Claude")).toBeTruthy();
+  expect(within(screen.getAllByRole("tab")[0]).queryByRole("status")).toBeNull();
+});
+
+it("opens a session for an agent's environment, refuses writes it may not request, and shows a tab on request", async () => {
+  requireConfirmation(["search_count"]);
+  const { rerender } = render(<ShellPage envs={envs} />);
+  await openSession("A");
+  rerender(<ShellPage envs={envs} agentRequests={[agentRun(2, { envId: "B", command: "write res.partner [1] {'name': 'X'}" })]} />);
+  await waitFor(() => expect(ipc.agentReply).toHaveBeenCalled());
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(screen.getAllByRole("tab")[0].getAttribute("aria-selected")).toBe("true");
+  const [, result] = vi.mocked(ipc.agentReply).mock.calls[0];
+  expect(JSON.stringify(result)).toContain("Claude may not request writes: not sent.");
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "write" && call.confirmed)).toBe(false);
+  rerender(<ShellPage envs={envs} agentRequests={[{ id: 3, kind: "show", terminal: tabId(1) }]} />);
+  await waitFor(() => expect(screen.getAllByRole("tab")[1].getAttribute("aria-selected")).toBe("true"));
+  expect(ipc.agentReply).toHaveBeenLastCalledWith(3);
+});
+
+it("lists history as date and command, and a click puts the whole command in the input", async () => {
+  vi.mocked(ipc.shellHistory).mockResolvedValue([
+    { at: "2026-10-19T10:00:00Z", environment: "A", command: "search res.partner -d [('name','ilike','ada')] -l 5" },
+    { at: "2026-10-19T10:01:00Z", environment: "B", command: "count res.users" },
+  ]);
+  render(<ShellPage envs={envs} />);
+  await openSession("A");
+  command("\\history");
+  const table = within(panel()).getAllByRole("table").at(-1)!;
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "date", "command"]);
+  fireEvent.doubleClick(within(table).getByRole("button", { name: /^search res\.partner/ }));
+  expect((screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement).value).toBe("search res.partner -d [('name','ilike','ada')] -l 5");
+  // Loaded, not run.
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.model === "res.partner")).toBe(false);
+});
+
+it("opens a table in its own window with the fields that describe it", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => ({ data: call.model === "ir.model" ? [] : call.method === "fields_get"
+    ? { name: { string: "Name", type: "char" } } : [{ id: 7, name: "Ada" }, { id: 8, name: "Grace" }], write: false, upstream_ms: 1, upstream_bytes: 2 }));
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f name");
+  await waitFor(() => expect(within(panel()).getByRole("button", { name: "Sort by name" }).closest("th")?.getAttribute("data-tip")).toBe("Name\nchar"));
+  fireEvent.click(within(panel()).getByRole("button", { name: "Open in a window" }));
+  const [payload, title] = vi.mocked(ipc.openTableWindow).mock.calls[0] as [{ table: { rows: unknown[][]; model: string }; footer: string; fields: { name: string }[] }, string];
+  expect(title).toBe("A (A) - search res.partner -f name");
+  expect(payload.table).toMatchObject({ model: "res.partner", rows: [[7, "Ada"], [8, "Grace"]] });
+  expect(payload.fields.map((f) => f.name)).toEqual(["name"]);
+  expect(payload.footer).toContain("2 rows");
+});
+
+it("drops the greeting and the restore note once a command runs, not when one is held back", async () => {
+  vi.mocked(ipc.check).mockResolvedValueOnce({ environment_id: "A", status: "unreachable", latency_ms: 1, error: "offline" });
+  vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t1", tabs: [savedTab("t1", "A", "whoami")] }));
+  render(<ShellPage envs={envs} />);
+  await screen.findByRole("tabpanel");
+  await within(panel()).findByRole("button", { name: "Retry connection" });
+  expect(within(panel()).getByText(/Session restored/)).toBeTruthy();
+  command("count res.partner");
+  expect(within(panel()).getByText(/Session restored/)).toBeTruthy();
+  command("\\context");
+  await waitFor(() => expect(within(panel()).queryByText(/Session restored/)).toBeNull());
+  expect(within(panel()).getByText("out of whoami")).toBeTruthy();
+});
+
+it("keeps help, history and clearing out of the history", async () => {
+  render(<ShellPage envs={envs} />);
+  await openSession("A");
+  vi.mocked(ipc.shellHistoryAdd).mockClear();
+  for (const line of ["\\?", "help", "\\history", "\\history res.partner", "\\s", "\\clear", "\\timing"]) command(line);
+  expect(vi.mocked(ipc.shellHistoryAdd).mock.calls.map(([line]) => line)).toEqual(["\\timing"]);
+});
+
+it("selects cells, columns and rows instead of text and copies a cell as its value, more as TSV with headers", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  answer(() => [{ id: 7, name: "Ada", email: "a@x" }, { id: 8, name: "Grace", email: "g@x" }, { id: 9, name: "Hopper", email: "h@x" }]);
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f name,email");
+  const table = await within(panel()).findByRole("table");
+  const scroller = panel().querySelector<HTMLElement>(".term-scroll")!;
+  const cell = (r: number, c: number) => table.querySelector<HTMLElement>(`[data-cell="${r}:${c}"]`)!;
+  const copy = () => { fireEvent.keyDown(scroller, { key: "c", ctrlKey: true }); return writeText.mock.calls.at(-1)?.[0]; };
+
+  fireEvent.mouseDown(cell(0, 1));
+  await waitFor(() => expect(copy()).toBe("Ada"));
+  // Shift extends a box from the anchor; the copy carries the headers of its columns.
+  fireEvent.mouseDown(cell(1, 2), { shiftKey: true });
+  await waitFor(() => expect(copy()).toBe("name\temail\nAda\ta@x\nGrace\tg@x"));
+  // No cursor frame over a mouse selection; the keyboard brings it back.
+  expect(table.querySelector("[data-active]")).toBeNull();
+  fireEvent.keyDown(scroller, { key: "ArrowDown", shiftKey: true });
+  expect(table.querySelector("[data-active]")).not.toBeNull();
+  // Ctrl adds loose cells; rows and columns they skip stay blank.
+  fireEvent.mouseDown(cell(0, 0));
+  fireEvent.mouseDown(cell(2, 2), { ctrlKey: true });
+  await waitFor(() => expect(copy()).toBe("id\temail\n7\t\n\th@x"));
+  fireEvent.mouseDown(within(table).getByRole("columnheader", { name: /^email/ }));
+  await waitFor(() => expect(copy()).toBe("email\na@x\ng@x\nh@x"));
+  fireEvent.mouseDown(table.querySelectorAll("tbody .term-row-head")[1]);
+  await waitFor(() => expect(copy()).toBe("id\tname\temail\n8\tGrace\tg@x"));
+  expect(table.querySelectorAll("[data-selected]").length).toBe(4);
+  // A click outside the table clears it.
+  fireEvent.mouseDown(screen.getByRole("textbox", { name: "Command" }));
+  expect(table.querySelectorAll("[data-selected]")).toHaveLength(0);
+  // A double click still acts: an id opens its record.
+  fireEvent.doubleClick(within(cell(2, 0)).getByRole("button"));
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "read", args: [[9]] }));
 });

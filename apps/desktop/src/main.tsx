@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import "./i18n";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -22,5 +22,11 @@ window.addEventListener("keydown", (event) => {
   if ((reload && !import.meta.env.DEV) || selectAll || (command && ["p", "+", "=", "-", "0"].includes(key))) event.preventDefault();
 });
 
-const render = () => createRoot(document.getElementById("root")!).render(<React.StrictMode><App /><ContextMenu dev={import.meta.env.DEV} /></React.StrictMode>);
-void restoreWindowState().catch((error) => console.error("Could not restore window state", error)).then(render);
+// A table window ("?window=table-n") shows one Terminal table; the main window restores its state first.
+if (new URLSearchParams(location.search).get("window")?.startsWith("table-")) {
+  const TableWindow = lazy(() => import("./TableWindow"));
+  createRoot(document.getElementById("root")!).render(<React.StrictMode><Suspense fallback={null}><TableWindow /></Suspense><ContextMenu dev={import.meta.env.DEV} /></React.StrictMode>);
+} else {
+  const render = () => createRoot(document.getElementById("root")!).render(<React.StrictMode><App /><ContextMenu dev={import.meta.env.DEV} /></React.StrictMode>);
+  void restoreWindowState().catch((error) => console.error("Could not restore window state", error)).then(render);
+}

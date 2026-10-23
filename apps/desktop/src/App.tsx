@@ -1,8 +1,8 @@
 import { forgetHealth } from "./HealthChip";
-import { lazy, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
+import { ipc, type AgentRequest, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
 import { ApprovalDialog } from "@/components/ui/approval-dialog";
 import type { Theme } from "./SettingsPage";
 import { flushShellSessions } from "./shellFlush";
@@ -111,6 +111,21 @@ export default function App() {
     const stop = listen("desktop-open-approval", take);
     return () => { void stop.then((unlisten) => unlisten(), () => undefined); };
   }, []);
+  // MCP agents' Terminal requests: taken on each notice and when the window (re)loads; the Terminal mounts to run them.
+  const [agentRequests, setAgentRequests] = useState<AgentRequest[]>([]);
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    const take = () => void Promise.resolve().then(() => ipc.agentTake()).then((requests) => {
+      if (!requests.length) return;
+      setShellVisited(true);
+      if (requests.some((request) => request.kind === "show")) setPage("shell");
+      setAgentRequests((current) => [...current, ...requests]);
+    }).catch(() => undefined);
+    take();
+    const stop = listen("agent-request", take);
+    return () => { void stop.then((unlisten) => unlisten(), () => undefined); };
+  }, [status]);
+  const agentHandled = useCallback((id: number) => setAgentRequests((current) => current.filter((request) => request.id !== id)), []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shellTarget, setShellTarget] = useState<{ env: string; command?: string } | null>(null);
   const [decision, setDecision] = useState<{ approvals: Pending[]; approve: boolean } | null>(null);
@@ -273,7 +288,8 @@ export default function App() {
       {error && <div className="banner danger page-banner" role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><button className="icon-btn sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></button></div>}
       <div className="shell-workspace" hidden={page !== "shell"}>
         {shellVisited && <PageLoadBoundary>
-          <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget?.env} command={shellTarget?.command} onConnectHandled={() => setShellTarget(null)} />
+          <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget?.env} command={shellTarget?.command} onConnectHandled={() => setShellTarget(null)}
+            agentRequests={agentRequests} onAgentHandled={agentHandled} />
         </PageLoadBoundary>}
       </div>
       <PageLoadBoundary key={page}>

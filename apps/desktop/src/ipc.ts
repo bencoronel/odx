@@ -19,7 +19,12 @@ export type ActivityEvent = { request_id?:string|null;details?:AuditDetails|null
 /** Last row position; the next page starts after it. */
 export type ActivityCursor = { at:number;key:string };
 export type ActivityPage = { events:ActivityEvent[];next_cursor?:ActivityCursor|null;complete:boolean };
-export type ShellCall = { environment_id:string;model:string;method:string;args?:unknown[];kwargs?:Record<string,unknown>;context?:Record<string,unknown>;confirmed?:boolean };
+/** `client_id`: an MCP client ran it through terminal_run; the core checks its grant and audits it under that client. */
+export type ShellCall = { environment_id:string;model:string;method:string;args?:unknown[];kwargs?:Record<string,unknown>;context?:Record<string,unknown>;confirmed?:boolean;client_id?:string };
+/** What an MCP agent asked of the window: run a Terminal command, or show a tab. */
+export type AgentRequest =
+  | { id:number;kind:"run";terminal?:string|null;envId:string;command:string;clientId:string;clientLabel:string;allowWrites:boolean }
+  | { id:number;kind:"show";terminal:string };
 export type ShellResult = { data:unknown;write:boolean;upstream_ms:number;upstream_bytes:number };
 export type HistoryEntry = { at:string;environment?:string|null;command:string };
 export type HeaderEntry = { name:string;value:string;enabled:boolean };
@@ -43,6 +48,8 @@ export type SettingsView = { settings:Settings;defaults:Settings;bounds:Record<k
 export type AgentSetup = "no_cli" | "missing" | "added" | "outdated";
 export type Agent = "claude" | "codex";
 export const ipc = {
+ openTableWindow:(table:unknown,title:string)=>invoke<void>("table_window_open",{table,title}),
+ agentTake:()=>invoke<AgentRequest[]>("agent_take"), agentReply:(id:number,result?:unknown,error?:string)=>invoke<void>("agent_reply",{id,result:result ?? null,error:error ?? null}),
  agentSetup:(agent:Agent)=>invoke<AgentSetup>("agent_setup",{agent}), agentInstall:(agent:Agent)=>invoke<AgentSetup>("agent_install",{agent}),
  restart:()=>invoke<void>("desktop_restart"),
  settings:()=>invoke<SettingsView>("settings_get"), saveSettings:(settings:Settings)=>invoke<SettingsView>("settings_save",{settings}),

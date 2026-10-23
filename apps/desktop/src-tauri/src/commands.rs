@@ -870,6 +870,41 @@ pub async fn window_keep_above(window: tauri::WebviewWindow, above: bool) -> Res
 }
 
 #[tauri::command]
+pub fn table_window_open(
+    app: tauri::AppHandle,
+    table: serde_json::Value,
+    title: String,
+) -> Result<(), AppError> {
+    crate::desktop::open_table_window(&app, table, &title)
+        .map_err(|_| AppError::new("system.operation_failed"))
+}
+
+/// The table opened in the calling window; `None` once taken or for any other window.
+#[tauri::command]
+pub fn table_window_take(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Option<serde_json::Value> {
+    crate::desktop::take_table(&app, window.label())
+}
+
+/// Agent requests waiting for the window (run a Terminal command, show a tab).
+#[tauri::command]
+pub fn agent_take(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    crate::desktop::take_agent_requests(&app)
+}
+
+#[tauri::command]
+pub fn agent_reply(
+    app: tauri::AppHandle,
+    id: u64,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+) {
+    crate::desktop::answer_agent(&app, id, result, error);
+}
+
+#[tauri::command]
 pub fn desktop_take_approval(app: tauri::AppHandle) -> Option<String> {
     crate::desktop::take_open_approval(&app)
 }

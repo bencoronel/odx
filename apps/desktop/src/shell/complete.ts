@@ -1,10 +1,9 @@
 import { MODEL_VERBS } from "./commands";
 
-export type SuggestionKind = "command" | "environment" | "model" | "option" | "field" | "operator" | "value";
+export type SuggestionKind = "command" | "model" | "option" | "field" | "operator" | "value";
 export type Suggestion = { value: string; detail?: string; translateDetail?: boolean; kind: SuggestionKind };
-export type Field = { name: string; label: string; type: string; selection?: [string, string][] };
+export type Field = { name: string; label: string; type: string; relation?: string; selection?: [string, string][] };
 export type CompletionContext = {
-  envs: { name: string; detail: string }[];
   /** `undefined` means not loaded for the connected environment. */
   models?: string[];
   fields: (model: string) => Field[] | undefined;
@@ -37,7 +36,6 @@ export const COMMANDS: { name: string; detail: string; translateDetail: true }[]
   { name: "write", detail: "write", translateDetail: true },
   { name: "unlink", detail: "unlink", translateDetail: true },
   { name: "call", detail: "call", translateDetail: true },
-  { name: "\\c", detail: "connect", translateDetail: true },
   { name: "\\l", detail: "list", translateDetail: true },
   { name: "\\d", detail: "fields", translateDetail: true },
   { name: "\\dm", detail: "models", translateDetail: true },
@@ -52,7 +50,6 @@ export const COMMANDS: { name: string; detail: string; translateDetail: true }[]
   { name: "\\alias", detail: "alias", translateDetail: true },
   { name: "\\context", detail: "context", translateDetail: true },
   { name: "\\clear", detail: "clear", translateDetail: true },
-  { name: "\\q", detail: "disconnect", translateDetail: true },
   { name: "\\?", detail: "help", translateDetail: true },
 ];
 const OPTIONS: Record<string, { name: string; detail: string; translateDetail: true }[]> = {
@@ -186,13 +183,6 @@ function structured(input: string, ctx: CompletionContext): Completion | null {
 export function completions(input: string, ctx: CompletionContext): Completion | null {
   const inside = structured(input, ctx);
   if (inside) return inside;
-  // Environment names after \c may contain spaces.
-  const connect = /^\\c\s+/.exec(input);
-  if (connect) {
-    const from = connect[0].length;
-    const items = rank(ctx.envs, (e) => e.name, input.slice(from)).map((e) => ({ value: e.name, detail: e.detail, kind: "environment" as const }));
-    return { from, items, suffix: "" };
-  }
   const from = input.search(/\S*$/);
   const partial = input.slice(from);
   const before = input.slice(0, from).trim().split(/\s+/).filter(Boolean);

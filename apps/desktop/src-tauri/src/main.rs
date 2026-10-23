@@ -107,6 +107,10 @@ fn main() {
             tauri::WindowEvent::Destroyed if window.label() == "main" => {
                 desktop::on_destroyed(window.app_handle())
             }
+            // A table window closed before loading must not leave its data behind.
+            tauri::WindowEvent::Destroyed if window.label().starts_with("table-") => {
+                desktop::take_table(window.app_handle(), window.label());
+            }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                 desktop::remember_main_bounds(window)
             }
@@ -148,6 +152,9 @@ fn main() {
             }
             app.manage(services);
             notify_approvals(app.handle().clone(), core.approval_notices());
+            let (agent_requests, agent_queue) = tokio::sync::mpsc::unbounded_channel();
+            core.set_desktop(agent_requests);
+            desktop::serve_agents(app.handle().clone(), agent_queue);
             app.manage(core);
             Ok(())
         })
@@ -157,8 +164,12 @@ fn main() {
             commands::agent_setup,
             commands::agent_install,
             commands::desktop_take_approval,
+            commands::agent_take,
+            commands::table_window_open,
             commands::window_keep_above,
             commands::window_keep_above_supported,
+            commands::table_window_take,
+            commands::agent_reply,
             commands::desktop_restore,
             commands::desktop_suspend,
             commands::desktop_cancel_suspend,

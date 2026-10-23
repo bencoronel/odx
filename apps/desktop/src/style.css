@@ -512,7 +512,7 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .keys-group { margin-bottom: 2px; color: var(--text-3); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
 .approval-detail > .panel { border-left: 3px solid var(--tone); }
 .approval-detail[aria-busy="true"] > .panel { opacity: .6; }
-.banner.nudge { animation: nudge .3s ease-in-out; }
+.banner.nudge, .chip.nudge { animation: nudge .3s ease-in-out; }
 .reject-reason { width: 100%; }
 .record-ids { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .record-ids .count { margin-right: 4px; }
@@ -558,6 +558,9 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .client-chips .status-dot { width: 6px; height: 6px; box-shadow: none; }
 .chip-sep { width: 1px; height: 14px; margin: 0 4px; background: var(--border-strong); }
 .chip.chip-tone { color: var(--tone); background: var(--tone-soft); border-color: transparent; }
+button.chip-action { font: inherit; cursor: pointer; }
+button.chip-action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--tone) 45%, transparent); }
+button.chip-action:disabled { cursor: default; }
 .client-date { font-size: var(--fs-xs); white-space: nowrap; cursor: default; }
 .client-date.unused { font-style: italic; }
 .client-label { max-width: 360px; }
@@ -567,11 +570,11 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .option:hover { border-color: var(--border-strong); }
 .option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .option-text { display: grid; min-width: 0; }
+.option > .chip { flex: none; margin-left: auto; }
+.option-group-title { grid-column: 1 / -1; padding: 4px 2px 0; color: var(--text-3); font-size: var(--fs-xs); }
 .option-text strong { font-size: var(--fs-md); font-weight: 500; }
 .option-text small { color: var(--text-3); font-size: var(--fs-xs); }
 .option-text code { font-size: var(--fs-xs); font-weight: 400; white-space: nowrap; }
-.option > .chip { flex: none; margin-left: auto; }
-.option-group-title { grid-column: 1 / -1; padding: 4px 2px 0; color: var(--text-3); font-size: var(--fs-xs); }
 .env-avatar.sm { width: 22px; height: 22px; }
 .env-avatar.sm .favicon { width: 14px; height: 14px; }
 .snippet { position: relative; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); }
@@ -604,9 +607,17 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 /* Shell */
 .shell-workspace:not([hidden]), .shell-sessions { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .shell-workspace[hidden], .shell-panel[hidden] { display: none !important; }
-.shell-tabs { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 4px; flex: 0 0 auto; overflow-x: auto; padding: 8px 12px 0; border-bottom: 1px solid var(--border); }
+/* Height of a tab (34px + borders) plus padding, so the strip keeps its size with no tabs open. */
+.shell-tabs { display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 4px; flex: 0 0 auto; min-height: 46px; overflow-x: auto; padding: 8px 12px 0; border-bottom: 1px solid var(--border); }
 .shell-tab { display: flex; flex-direction: row; align-items: center; flex: 0 0 auto; border: 1px solid var(--border); border-bottom: 2px solid transparent; border-radius: var(--r) var(--r) 0 0; background: var(--surface); }
 .shell-tab[data-active="true"] { border-bottom-color: var(--accent); background: var(--surface-2); }
+/* The dragged tab follows the pointer above the others; the line marks the gap it will land in. */
+.shell-tab { position: relative; }
+.shell-tab[data-dragging] { z-index: 2; opacity: .9; box-shadow: var(--shadow); pointer-events: none; }
+.shell-tabs:has([data-dragging]) { cursor: grabbing; }
+.shell-tab[data-drop]::after { content: ""; position: absolute; top: 2px; bottom: 0; width: 2px; border-radius: 1px; background: var(--text); pointer-events: none; }
+.shell-tab[data-drop="before"]::after { left: -4px; }
+.shell-tab[data-drop="after"]::after { right: -4px; }
 .shell-tab [role="tab"], .shell-tab-editor { display: flex; align-items: center; gap: 6px; min-width: 100px; height: 34px; padding: 0 10px; color: var(--text-3); white-space: nowrap; box-sizing: border-box; }
 .shell-tab [role="tab"] { cursor: pointer; }
 .shell-tab [aria-selected="true"], .shell-tab[data-active="true"] .shell-tab-editor { color: var(--text); }
@@ -619,6 +630,7 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .shell-tab .shell-tab-close { margin-right: 4px; opacity: 0; pointer-events: none; }
 .shell-tab:hover .shell-tab-close, .shell-tab .shell-tab-close:focus-visible { opacity: 1; pointer-events: auto; }
 .shell-tab:hover .shell-tab-close:disabled { opacity: .45; }
+.shell-tab .shell-tab-pin { margin-right: 4px; color: var(--text-3); }
 .shell-panel:not([hidden]) { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .term { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 12px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--fs-sm); overflow: hidden; cursor: text; }
 .term-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px 4px; line-height: 1.55; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
@@ -644,20 +656,35 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .term-table { border-collapse: separate; border-spacing: 0; font-size: inherit; min-width: 100%; }
 .term-table th, .term-table td { padding: 3px 14px 3px 0; white-space: nowrap; vertical-align: top; }
 .term-table th:first-child, .term-table td:first-child { padding-left: 10px; }
+.term-table tfoot td { border-top: 1px solid var(--border-strong); color: var(--text-2); font-weight: 600; font-variant-numeric: tabular-nums; }
 .term-table th { text-align: left; font-weight: 600; color: var(--text-2); }
 .term-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--border-strong); }
 .term-table td { color: var(--text); border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
 .term-table tbody tr:last-child td { border-bottom: 0; }
 .term-table tbody tr:hover td { background: var(--hover); }
 /* Pinned cells need an opaque background so scrolled cells pass beneath them. */
-.term-table .pin { position: sticky; left: 0; z-index: 1; background: var(--surface-2); box-shadow: inset -1px 0 0 var(--border); }
+/* Row numbers: a fixed gutter at the left; a click selects the row, the corner selects everything. */
+.term-table .term-row-head { position: sticky; left: 0; z-index: 1; width: 44px; min-width: 44px; max-width: 44px; padding: 3px 8px 3px 0; background: var(--surface-2); color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; cursor: default; }
+.term-table thead .term-row-head { z-index: 3; background: var(--surface); }
+.term-table .pin { position: sticky; left: 44px; z-index: 1; background: var(--surface-2); box-shadow: inset -1px 0 0 var(--border); }
+/* Cells, columns and rows are what gets selected, not text. */
+.term-table:not(.expanded) { -webkit-user-select: none; user-select: none; }
+/* Stronger than the row hover, which would otherwise hide the selection under the pointer. */
+.term-table tbody tr td[data-selected], .term-table tbody tr:hover td.pin[data-selected], .term-table thead tr th[data-selected], .term-table tbody tr .term-row-head[data-selected] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+/* A copy flashes exactly what went to the clipboard. */
+.term-table[data-copied] td[data-selected] { animation: copied .6s ease-out; }
+@keyframes copied { from { background: color-mix(in srgb, var(--accent) 55%, transparent); } }
+.term-table th[data-selected], .term-table .term-row-head[data-selected] { color: var(--accent-text); }
+.term-table thead th:not(.term-row-head):not(.term-header-end) { cursor: default; }
 .term-table thead th.pin { z-index: 3; background: var(--surface); }
 .term-table tbody tr:hover td.pin { background: color-mix(in srgb, var(--hover) 100%, var(--surface-2)); }
-.term-scroll:focus .term-table td[data-active] { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+/* The cursor cell: a thicker frame inside the selection's outline. */
+.term-scroll:focus .term-table td[data-active] { outline: 2px solid var(--accent); outline-offset: -2px; }
 .term-sort { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .term-sort:hover { color: var(--text); }
 .term-sort .icon { width: 11px; height: 11px; opacity: 0; }
-.term-sort:hover .icon { opacity: .45; }
+.term-sort { margin-left: 3px; }
+.term-sort:hover .icon, .term-table th:hover .term-sort .icon { opacity: .45; }
 .term-sort .icon.on { opacity: 1; color: var(--accent-text); }
 .term-table td.dim { color: var(--text-3); }
 .term-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -667,6 +694,8 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .term-table.expanded th { border: 0; color: var(--text-3); font-weight: 400; }
 .term-table.expanded tr:first-child th { color: var(--text-2); }
 .term { position: relative; }
+/* The card hangs from the tab strip: no gap, no top border (the strip draws that line), square top corners. */
+.shell-panel .term { margin-top: 0; border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
 .term-menu { position: absolute; left: 14px; bottom: 42px; z-index: 5; min-width: 260px; max-width: calc(100% - 28px); max-height: 194px; overflow: auto; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); }
 .term-menu li { display: flex; align-items: baseline; gap: 10px; height: 21px; padding: 0 6px; border-radius: var(--r-sm); line-height: 21px; cursor: pointer; }
 .term-menu li[aria-selected="true"] { background: var(--accent-soft); }
@@ -683,6 +712,12 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .term-input.confirm .term-prompt { color: var(--warn); }
 .term-input .term-prompt { line-height: 1.9em; }
 .term-editor { position: relative; flex: 1; min-width: 0; display: block; min-height: 1.9em; }
+.term-status { display: inline-flex; flex: none; align-items: center; gap: 8px; max-width: 45%; min-height: 1.9em; font-family: var(--font); font-size: var(--fs-xs); cursor: default; }
+.term-status > :not(.term-db) { flex: none; }
+/* Mode, connecting, error and deleted share one width, so the line does not jump as the state changes.
+   Sized for the longest label ("Reintentando…"); a longer translation is cut rather than pushing the input. */
+.term-status .chip { justify-content: flex-start; width: 11em; overflow: hidden; white-space: nowrap; transition: color .2s, background-color .2s; }
+.term-db { min-width: 6ch; overflow: hidden; color: var(--text-3); font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .term-highlight { position: absolute; inset: 0; overflow: hidden; white-space: pre; line-height: 1.9em; color: var(--text); pointer-events: none; }
 .term-input textarea.highlighted { color: transparent; caret-color: var(--text); }
 .term-input textarea.highlighted::selection { background: var(--accent-soft); color: transparent; }
@@ -694,6 +729,13 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .term-cmd { position: relative; padding-right: 96px; }
 .term-cmd-actions { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; gap: 6px; opacity: 0; transition: opacity .12s; user-select: none; }
 .term-group:hover .term-cmd-actions, .term-cmd-actions:focus-within { opacity: 1; }
+/* A thin mark left of each command and its output; it sits in the output's padding, so text does not move. */
+.term-group[data-outcome] { margin-left: -8px; padding-left: 6px; border-left: 2px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.term-group[data-outcome="write"] { border-left-color: var(--warn); }
+.term-group[data-outcome="error"] { border-left-color: var(--danger); }
+.term-table td.bool { text-align: center; }
+.term-table td.bool.yes { color: var(--ok); }
+.term-table td.bool.no { color: var(--text-3); }
 .term-cmd-actions .icon-btn { width: 22px; height: 22px; flex: 0 0 auto; }
 .term-cmd-actions .icon { width: 12px; height: 12px; }
 .term-folded { margin-left: 10px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text-3); font-family: var(--font); font-size: var(--fs-xs); cursor: pointer; user-select: none; }
@@ -713,23 +755,67 @@ kbd { display: inline-block; min-width: 18px; margin: 0 2px; padding: 0 4px; bor
 .term-error-more summary { color: var(--text-3); cursor: pointer; user-select: none; }
 .term-error-more summary:hover { color: var(--text); }
 /* Floats over the last output line so the editor never moves. */
-.term-hint { position: absolute; right: 10px; bottom: calc(100% + 4px); z-index: 4; max-width: min(70%, 520px); padding: 2px 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: var(--r-sm); background: var(--surface); color: var(--warn); font-family: var(--font); font-size: var(--fs-xs); white-space: nowrap; text-overflow: ellipsis; box-shadow: var(--shadow-sm); pointer-events: none; }
+.term-hint { position: absolute; left: 14px; bottom: calc(100% + 4px); z-index: 4; max-width: min(70%, 520px); padding: 2px 8px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: var(--r-sm); background: var(--surface); color: var(--warn); font-family: var(--font); font-size: var(--fs-xs); white-space: nowrap; text-overflow: ellipsis; box-shadow: var(--shadow-sm); pointer-events: none; }
 .term-running .icon { width: 12px; height: 12px; vertical-align: -1px; }
 .term-link, .term-more { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: inherit; cursor: pointer; }
 .term-link { color: var(--accent-text); text-underline-offset: 2px; }
 .term-link:hover { text-decoration: underline; }
+/* A command keeps its syntax colors; the hover underline says it can be picked. */
+.term-link.term-command { color: inherit; }
 .term-more:hover { text-decoration: underline dotted; }
 .term-inspect { position: absolute; top: 8px; right: 8px; bottom: 52px; z-index: 6; display: flex; flex-direction: column; width: min(560px, calc(100% - 16px)); border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); cursor: auto; }
+/* Session bar: the environment, its write mode and the command list. */
+/* The search box stays put while the list scrolls. */
+.shell-env-menu { width: 260px; max-height: 60vh; grid-template-rows: auto minmax(0, 1fr); }
+.shell-env-options { display: grid; min-height: 0; overflow: auto; }
+.shell-env-search { margin: 2px 2px 4px; }
+.shell-env-empty { padding: 6px 8px; }
+.shell-env-menu .favicon { width: 14px; height: 14px; }
+.shell-empty { flex: 1; }
+.term-help { position: absolute; top: 8px; right: 8px; bottom: 52px; z-index: 6; display: flex; flex-direction: column; width: min(460px, calc(100% - 16px)); border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow); font-family: var(--font); cursor: default; }
+.term-help-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px 12px; }
+.term-help h4 { margin: 10px 0 4px; color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; }
+.term-help ul { display: grid; gap: 1px; }
+.term-help li button { display: grid; gap: 1px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.term-help li button:hover { background: var(--hover); }
+.term-help li code { font-size: var(--fs-xs); }
+.term-help li span { color: var(--text-3); font-size: var(--fs-xs); }
+.term-help .hint { margin-top: 8px; font-size: var(--fs-xs); line-height: 1.5; }
+/* An agent's command: its name before the prompt. */
+.term-agent { margin-right: 6px; padding: 0 6px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent-text); font-family: var(--font); font-size: var(--fs-xs); font-weight: 600; }
+.shell-tab-unseen { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+/* A table in its own window: the table fills it. */
+.table-window { flex: 1; min-height: 0; margin: 0; border: 0; border-radius: 0; }
+.window-subtitle { padding-left: 8px; border-left: 1px solid var(--border); color: var(--text-3); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-window-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface); font-family: var(--font); }
+.table-window-bar .search { flex: 0 1 360px; min-width: 160px; }
+.table-window .term-out { position: relative; display: flex; flex-direction: column; padding: 0; }
+/* A control in the header's last cell (the column picker), pinned to the right edge. */
+.term-table .term-header-end { position: sticky; right: 0; z-index: 2; width: 1%; padding: 0 6px; text-align: right; }
+.term-table thead .term-header-end { z-index: 3; background: var(--surface); }
+.term-table tbody .term-header-end, .term-table tfoot .term-header-end { background: var(--surface-2); }
+.table-columns .filter-panel { position: fixed; left: auto; width: 300px; max-height: 60vh; overflow: auto; }
+.table-window .term-block { display: flex; flex: 1; flex-direction: column; width: auto; min-height: 0; margin: 0; }
+.table-window .term-scroll { flex: 1; max-height: none; border: 0; border-radius: 0; }
+/* Pasted commands: the choice before running them, then the progress. */
+.term-batch { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border-top: 1px solid var(--border); background: var(--surface); font-family: var(--font); font-size: var(--fs-sm); cursor: default; }
+.term-batch kbd { margin-left: 2px; }
+/* Pending write, above the confirmation prompt. */
+.term-confirm { display: grid; gap: 8px; max-height: 45%; overflow: auto; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--warn-soft); font-family: var(--font); font-size: var(--fs-sm); cursor: default; }
+.term-confirm header { min-width: 0; }
 .term-inspect-head { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
 .term-inspect-head .term-copy { opacity: 1; }
 .term-inspect-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 600; }
 .term-inspect-body { flex: 1; min-height: 0; margin: 0; padding: 10px 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.term-search { display: flex; align-items: baseline; gap: 12px; padding: 0 14px 8px; white-space: pre; overflow: hidden; }
-.term-search-match { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.term-search-meta { margin-left: auto; color: var(--text-3); font-family: var(--font); font-size: var(--fs-xs); white-space: nowrap; }
+.term-search { display: flex; flex: 1; min-width: 0; line-height: 1.9em; white-space: pre; overflow: hidden; }
+.term-search-match { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.term-input.searching { gap: 0; }
+/* As in bash, only the query and the match stand out. */
+.term-input.searching .term-prompt, .term-search { color: var(--text-3); font-weight: 400; }
+.term-search-match mark { background: var(--accent-soft); color: var(--accent-text); border-radius: 2px; }
 .hl-cmd { color: var(--accent-text); font-weight: 600; }
 .hl-err { color: var(--danger); text-decoration: underline wavy color-mix(in srgb, var(--danger) 60%, transparent); }
-.hl-model, .hl-env { color: var(--info); }
+.hl-model { color: var(--info); }
 .hl-method { color: var(--info); font-style: italic; }
 .hl-opt { color: var(--warn); }
 .hl-str { color: var(--ok); }

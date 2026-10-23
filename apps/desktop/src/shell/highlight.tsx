@@ -35,7 +35,6 @@ export function highlight(line: string, aliases: readonly string[] = []): ReactN
       else if (depth === 0 && text.startsWith("-")) cls = "hl-opt";
       else if (depth === 0 && word === 1 && MODEL_VERBS.includes(verb)) cls = "hl-model";
       else if (depth === 0 && word === 2 && verb === "call") cls = "hl-method";
-      else if (depth === 0 && verb === "\\c") cls = "hl-env";
     }
     if (depth === 0 && !punct) word++;
     else if (punct && depth === 0 && "])}".includes(text)) word++;
