@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Odx: inputs of the 21 tools",
+  "title": "Odx: inputs of the 25 tools",
   "description": "Select $defs by name. Additional semantic rules are in tools.md. Not an MCP outputSchema.",
   "$defs": {
     "envs": {
@@ -1686,6 +1686,126 @@
         "env",
         "model",
         "method"
+      ],
+      "additionalProperties": false
+    },
+    "terminals": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "terminal_read": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal tab id from terminals."
+        },
+        "last": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5,
+          "description": "How many of the latest commands to return."
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        }
+      },
+      "required": [
+        "terminal"
+      ],
+      "additionalProperties": false
+    },
+    "terminal_run": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal tab id from terminals."
+        },
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact environment name from envs; runs in a tab of it, opening one if needed. Give terminal or env, not both."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "One Terminal command, as the user would type it.",
+          "examples": [
+            "search res.partner -d [('is_company','=',True)] -f name,email -l 5",
+            "count sale.order -d [('state','=','sale')]"
+          ]
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600,
+          "default": 120,
+          "description": "Seconds to wait, including the user's confirmation of a write."
+        },
+        "format": {
+          "enum": [
+            "compact",
+            "json"
+          ],
+          "default": "compact",
+          "description": "compact: plain text; json: typed values plus structuredContent."
+        },
+        "trunc": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 200,
+          "description": "Max characters per text cell in compact output; 0 disables it. The total output limit still applies."
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    },
+    "show": {
+      "type": "object",
+      "properties": {
+        "terminal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal tab id from terminals."
+        }
+      },
+      "required": [
+        "terminal"
       ],
       "additionalProperties": false
     }

@@ -158,6 +158,7 @@ async fn headers_reach_every_upstream_path_and_remain_private_and_encrypted() {
         kwargs: Default::default(),
         context: Default::default(),
         confirmed: false,
+        client_id: None,
     })
     .await
     .unwrap();

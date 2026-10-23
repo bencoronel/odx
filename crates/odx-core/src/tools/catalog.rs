@@ -21,8 +21,8 @@ use tokio::sync::oneshot;
 
 const SCHEMAS: &str = include_str!("tools.schema.json");
 
-/// All 21 tools in alphabetical order.
-pub const TOOLS: [&str; 21] = [
+/// All 25 tools in alphabetical order.
+pub const TOOLS: [&str; 25] = [
     "access",
     "call",
     "compare",
@@ -39,6 +39,10 @@ pub const TOOLS: [&str; 21] = [
     "search",
     "search_count",
     "search_read",
+    "show",
+    "terminal_read",
+    "terminal_run",
+    "terminals",
     "unlink",
     "view",
     "wait",
@@ -75,6 +79,30 @@ fn describe(name: &str) -> (&'static str, &'static str, bool, bool) {
         "envs" => (
             "Environments",
             "Odoo environments granted to this client, with their write modes and tags. Makes no Odoo calls.",
+            true,
+            false,
+        ),
+        "terminals" => (
+            "Terminal sessions",
+            "Odx Terminal tabs on environments granted to this client: id, name, environment, whether it is the tab in front, how many commands it ran and the last one. Read from what the app saved, a second or so behind. Makes no Odoo calls.",
+            true,
+            false,
+        ),
+        "terminal_read" => (
+            "Terminal history",
+            "Recent commands of one Odx Terminal tab with their output: text lines, errors and tables (columns and rows). Commands an agent ran carry its name. Makes no Odoo calls.",
+            true,
+            false,
+        ),
+        "terminal_run" => (
+            "Run in Terminal",
+            "Type and run one Odx Terminal command (the Terminal syntax: search, read, count, \\d, call…) in a tab, or in a session of env, and return its output. The user can watch it in that tab; the window does not come forward (use show for that). Reads run at once. A write runs only if this client may request writes, and only after the user confirms it in the Terminal, so the call waits for that answer. Audited as this client.",
+            false,
+            true,
+        ),
+        "show" => (
+            "Show in Odx",
+            "Bring the Odx window forward on something for the user to see: for now a Terminal tab. Use it when you want to show the user a result, not for every command.",
             true,
             false,
         ),
@@ -599,6 +627,10 @@ impl Core {
             "access" => self.tool_access(&client, arguments).await,
             "compare" => self.tool_compare(&client, arguments).await,
             "download" => self.tool_download(&client, arguments).await,
+            "terminals" => self.tool_terminals(&client, arguments).await,
+            "terminal_read" => self.tool_terminal_read(&client, arguments).await,
+            "terminal_run" => self.tool_terminal_run(&client, arguments).await,
+            "show" => self.tool_show(&client, arguments).await,
             _ => Err(ToolError::invalid(format!("unknown tool: {name}"))),
         }
     }
@@ -1778,7 +1810,7 @@ mod tests {
     #[test]
     fn published_catalog_is_sorted_complete_and_self_contained() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 21);
+        assert_eq!(defs.len(), 25);
         assert!(defs.iter().find(|d| d.name == "write").unwrap().destructive);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         let mut sorted = names.clone();

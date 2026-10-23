@@ -30,5 +30,6 @@ pub use output::{Format, Outcome, ToolError, ToolOutput};
 pub use policy::{Authorization, Rule, RuleDraft, RuleKind, RuleView};
 pub use shell::{HistoryEntry, ShellCall, ShellResult};
 pub use tools::catalog::{ToolDefinition, tool_definitions};
+pub use tools::terminal::DesktopRequest;
 
 mod database;

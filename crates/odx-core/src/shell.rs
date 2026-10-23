@@ -1,6 +1,7 @@
 //! Desktop admin Shell. Explicit write confirmation replaces approval; read-only environments still deny writes. Shares limits, revision checks, redaction and audit.
 use crate::{
     audit::AuditDetails,
+    clients::Capability,
     error::OdxError,
     execution::Core,
     output::{Outcome, ToolError},
@@ -27,6 +28,9 @@ pub struct ShellCall {
     /// The human confirmed the displayed write.
     #[serde(default)]
     pub confirmed: bool,
+    /// An MCP client ran this through `terminal_run`: its grant is checked and the audit names it.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -184,9 +188,33 @@ impl Core {
                 Outcome::NotSent,
             ));
         }
+        let actor = call.client_id.clone();
         let (env, global, session, now) = {
             let s = self.inner.lock().await;
             let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+            // The app already limits agents to their grant; the core checks again, as for any client call.
+            if let Some(client_id) = &actor {
+                let grant = v
+                    .data()
+                    .clients
+                    .iter()
+                    .find(|g| &g.id == client_id && !g.revoked)
+                    .ok_or(OdxError::Unauthorized)?;
+                let in_scope =
+                    grant.all_environments || grant.environment_ids.contains(&call.environment_id);
+                let capability = if write {
+                    Capability::OdooWriteRequest
+                } else {
+                    Capability::OdooRead
+                };
+                if !in_scope || !grant.capabilities.contains(&capability) {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "the client may not run this in that environment",
+                        Outcome::NotSent,
+                    ));
+                }
+            }
             let env = v.data().connection_environment(&call.environment_id)?;
             (env, v.data().global_context.clone(), s.session, v.now())
         };
@@ -201,7 +229,7 @@ impl Core {
             effective_context(&global, &env.context, &Value::Object(call_context)),
         );
         self.reject_credential_call(
-            None,
+            actor.as_deref(),
             &env,
             &call.model,
             &call.method,
@@ -221,7 +249,7 @@ impl Core {
             .await?;
         let mut audit = self
             .log_as(
-                None,
+                actor.as_deref(),
                 &env.id,
                 &operation,
                 "attempted",
@@ -239,7 +267,7 @@ impl Core {
             .await
         {
             audit.finish_odx_error(&env, &e);
-            self.log_outcome_as(audit, None, &env.id, &operation, "not_sent")
+            self.log_outcome_as(audit, actor.as_deref(), &env.id, &operation, "not_sent")
                 .await?;
             return Err(e.into());
         }
@@ -248,7 +276,7 @@ impl Core {
             Ok(uid) => uid,
             Err(e) => {
                 audit.finish_odx_error(&env, &e);
-                self.log_outcome_as(audit, None, &env.id, &operation, "failed")
+                self.log_outcome_as(audit, actor.as_deref(), &env.id, &operation, "failed")
                     .await?;
                 return Err(e.into());
             }
@@ -279,7 +307,7 @@ impl Core {
         }
         // Already sent: keep the real outcome; append() sets audit_failed, which blocks new operations.
         let _ = self
-            .log_outcome_as(audit, None, &env.id, &operation, outcome)
+            .log_outcome_as(audit, actor.as_deref(), &env.id, &operation, outcome)
             .await;
         // Release after the outcome is logged so drain() waits for it.
         drop(permits);

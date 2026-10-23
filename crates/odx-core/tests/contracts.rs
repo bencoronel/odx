@@ -358,7 +358,12 @@ fn comparable(tool: &str, out: &ToolOutput) -> Value {
 
 #[tokio::test]
 async fn every_tool_succeeds_and_fails_alike_on_every_protocol() {
-    let names: Vec<&str> = tool_definitions().iter().map(|d| d.name).collect();
+    // Terminal tools go to the desktop app, not to Odoo, so protocols do not apply; see the terminal tests.
+    let names: Vec<&str> = tool_definitions()
+        .iter()
+        .map(|d| d.name)
+        .filter(|name| !["show", "terminal_read", "terminal_run", "terminals"].contains(name))
+        .collect();
     let cases = cases();
     let mut tools: Vec<&str> = cases.iter().map(|c| c.tool).collect();
     tools.sort();

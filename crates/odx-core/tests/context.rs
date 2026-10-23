@@ -84,6 +84,7 @@ async fn typed_global_environment_and_call_contexts_are_merged_and_disabled_entr
             kwargs: Default::default(),
             context: serde_json::from_value(json!({"lang":"de_DE"})).unwrap(),
             confirmed: false,
+            client_id: None,
         })
         .await
         .unwrap();

@@ -305,6 +305,10 @@ pub struct Core {
     pub(crate) inner: Mutex<Inner>,
     pub(crate) odoo: OdooClient,
     pub(crate) limits: Limits,
+    /// The desktop window, for tools that show or run things in it; unset without the app.
+    pub(crate) desktop: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedSender<crate::tools::terminal::DesktopRequest>>,
+    >,
 }
 impl Core {
     pub fn new(path: impl AsRef<Path>) -> Result<Arc<Self>> {
@@ -323,6 +327,7 @@ impl Core {
             }),
             odoo: OdooClient::new()?,
             limits: Limits::default(),
+            desktop: std::sync::Mutex::new(None),
         }))
     }
     /// Managed `download`/`to_file` directory beside the vault.
@@ -1941,6 +1946,7 @@ mod approval_end_tests {
                     kwargs: Default::default(),
                     context: Default::default(),
                     confirmed: false,
+                    client_id: None,
                 })
                 .await
             })
