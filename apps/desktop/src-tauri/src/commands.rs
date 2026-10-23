@@ -822,6 +822,10 @@ pub async fn desktop_suspend(
     .map_err(AppError::from)
 }
 #[tauri::command]
+pub fn desktop_flushed(app: tauri::AppHandle) {
+    crate::desktop::flushed(&app);
+}
+#[tauri::command]
 pub fn desktop_cancel_suspend(app: tauri::AppHandle, ticket: u64) {
     crate::desktop::cancel_suspend(&app, ticket);
 }

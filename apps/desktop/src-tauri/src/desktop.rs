@@ -10,6 +10,8 @@ use zeroize::Zeroizing;
 
 /// Deadline for draining sent operations on exit.
 pub const EXIT_DRAIN: std::time::Duration = std::time::Duration::from_secs(10);
+/// Longest wait for the lock on quit, which includes the window's Terminal flush.
+pub const EXIT_LOCK: std::time::Duration = std::time::Duration::from_secs(5);
 /// Deadline for WebKit to report a suspended window as destroyed.
 const DESTROY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -56,6 +58,10 @@ pub struct Desktop {
     agent: Mutex<AgentQueue>,
     /// Terminal tables opened in their own windows, by window label, in memory until that window takes them.
     tables: Mutex<(u64, std::collections::HashMap<String, serde_json::Value>)>,
+    /// Lock waiting for the window to save pending Terminal changes.
+    flush: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// One lock at a time: sleep and screen lock fire together, and a second flush request would cut the first short.
+    locking: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -708,6 +714,9 @@ pub fn on_destroyed(app: &AppHandle) {
 
 /// Lock the core and revoke pending approvals, as in `commands::vault_lock`.
 async fn lock(app: &AppHandle) {
+    let desktop = app.state::<Arc<Desktop>>().inner().clone();
+    let _one_at_a_time = desktop.locking.lock().await;
+    flush_window(app).await;
     clear_window_state(app);
     if let Some(core) = app.try_state::<Arc<Core>>() {
         let core = core.inner().clone();
@@ -715,9 +724,59 @@ async fn lock(app: &AppHandle) {
     }
 }
 
-/// Lock after the computer sleeps: a monotonic sleep does not advance while suspended, so the wall clock jumps past it.
-// shortcut: moving the system clock forward by more than the gap also locks; listen to OS sleep notifications if that bites.
+/// Let the window save pending Terminal changes before the vault starts rejecting them.
+async fn flush_window(app: &AppHandle) {
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (sender, done) = tokio::sync::oneshot::channel();
+    *app.state::<Arc<Desktop>>().flush.lock().unwrap() = Some(sender);
+    if window.emit("desktop-flush", ()).is_ok() {
+        let _ = tokio::time::timeout(WAIT, done).await;
+    }
+}
+
+pub fn flushed(app: &AppHandle) {
+    if let Some(sender) = app.state::<Arc<Desktop>>().flush.lock().unwrap().take() {
+        let _ = sender.send(());
+    }
+}
+
+/// Lock when the computer goes to sleep, on logind's `PrepareForSleep`; systems without logind fall back to clock gaps.
 pub fn lock_on_sleep(app: AppHandle) {
+    #[cfg(target_os = "linux")]
+    std::thread::spawn(move || {
+        if let Err(error) = watch_sleep(&app) {
+            eprintln!("odx: sleep is not watched through logind, using clock gaps: {error}");
+            lock_on_clock_gap(app);
+        }
+    });
+    #[cfg(not(target_os = "linux"))]
+    lock_on_clock_gap(app);
+}
+
+#[cfg(target_os = "linux")]
+fn watch_sleep(app: &AppHandle) -> zbus::Result<()> {
+    let connection = zbus::blocking::Connection::system()?;
+    let manager = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+    )?;
+    for signal in manager.receive_signal("PrepareForSleep")? {
+        // true before sleeping, false after waking.
+        if signal.body().deserialize::<bool>()? {
+            tauri::async_runtime::block_on(lock_if_unlocked(app));
+        }
+    }
+    Ok(())
+}
+
+/// Lock after the computer sleeps: a monotonic sleep does not advance while suspended, so the wall clock jumps past it.
+/// Moving the system clock forward by more than the gap also locks, which is why logind is preferred.
+fn lock_on_clock_gap(app: AppHandle) {
     const CHECK: std::time::Duration = std::time::Duration::from_secs(5);
     const GAP: std::time::Duration = std::time::Duration::from_secs(30);
     tauri::async_runtime::spawn(async move {
@@ -783,7 +842,7 @@ fn watch_screen_lock(app: &AppHandle) -> zbus::Result<()> {
     Ok(())
 }
 
-/// Lock, drain sent operations up to `EXIT_DRAIN`, then exit or restart.
+/// Lock (up to `EXIT_LOCK`), drain sent operations up to `EXIT_DRAIN`, then exit or restart.
 /// Restart goes through here because Tauri ignores `prevent_exit` for `RESTART_EXIT_CODE`.
 pub fn quit(app: &AppHandle, restart: bool) {
     let desktop = app.state::<Arc<Desktop>>().inner().clone();
@@ -796,7 +855,13 @@ pub fn quit(app: &AppHandle, restart: bool) {
     save_main_placement(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        lock(&app).await;
+        // Quit must always finish: a stuck lock (a peer hung after sleep, a blocked store) cannot hold the exit.
+        if tokio::time::timeout(EXIT_LOCK, lock(&app)).await.is_err() {
+            eprintln!(
+                "odx: exiting after {} s without finishing the lock",
+                EXIT_LOCK.as_secs()
+            );
+        }
         if let Some(core) = app.try_state::<Arc<Core>>() {
             let core = core.inner().clone();
             if !core.drain(EXIT_DRAIN).await {

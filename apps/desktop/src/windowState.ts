@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, useEffect, type Dispatch, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { flushShellSessions } from "./shellFlush";
 
 let restored: Record<string, unknown> = {};
 const providers = new Map<string, () => unknown>();
@@ -80,6 +81,8 @@ export function useWindowLifecycle(onError: (error: unknown) => void) {
     const stops = [
       listen<number>("desktop-suspend", ({ payload }) => { pending = payload; retrySuspend(); }),
       listen("desktop-resume", () => { pending = null; }),
+      // The backend locks from the tray, on sleep or screen lock, and waits for this first.
+      listen("desktop-flush", () => { void flushShellSessions().finally(() => invoke("desktop_flushed")).catch(() => undefined); }),
     ];
     void Promise.all(stops).then(async () => {
       const ticket = await invoke<number | null>("desktop_ready");

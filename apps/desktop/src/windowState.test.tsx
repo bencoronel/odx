@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { registerShellFlush } from "./shellFlush";
 import { discardRestoredWindowState, captureWindowState, preventUnloadUntil, restoreWindowState, usePreventUnload, useWindowLifecycle, useWindowState } from "./windowState";
 
 const { events } = vi.hoisted(() => ({ events: new Map<string, (event: { payload: number }) => void>() }));
@@ -33,6 +34,19 @@ const close = async () => {
   act(() => { events.get("desktop-suspend")!({ payload: 7 }); });
 };
 const saves = () => vi.mocked(invoke).mock.calls.filter(([name]) => name === "desktop_suspend");
+
+it("answers a backend flush request only after pending Terminal changes are saved", async () => {
+  let save!: () => void;
+  registerShellFlush(() => new Promise<void>((resolve) => { save = resolve; }));
+  render(<Work />);
+  await waitFor(() => expect(events.has("desktop-flush")).toBe(true));
+  act(() => { events.get("desktop-flush")!({ payload: 0 }); });
+  await Promise.resolve();
+  expect(invoke).not.toHaveBeenCalledWith("desktop_flushed");
+  save();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_flushed"));
+  registerShellFlush(undefined);
+});
 
 it("waits for ongoing work, then saves the latest draft and restores it in a new WebView", async () => {
   const view = render(<Work busy />);
