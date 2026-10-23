@@ -40,43 +40,103 @@ fn mcp_stdio() -> ! {
 }
 
 /// Notify new requests. If notifications fail, show availability in the window; requests remain in Approvals and the status bar.
+/// A burst shows its first request, then one summary when the cooldown ends; the tray icon is marked while any wait.
 fn notify_approvals(
     app: tauri::AppHandle,
+    core: Arc<odx_core::Core>,
     mut notices: tokio::sync::broadcast::Receiver<odx_core::ApprovalNotice>,
 ) {
+    use std::time::Duration;
     use tauri::Emitter;
+    use tokio::time::Instant;
+    const COOLDOWN: Duration = Duration::from_secs(10);
+    const ATTENTION_CHECK: Duration = Duration::from_secs(5);
     tauri::async_runtime::spawn(async move {
+        let mut last_shown: Option<Instant> = None;
+        // Requests that arrived during the cooldown, for the summary.
+        let mut held: Vec<String> = Vec::new();
+        let mut attention = false;
+        let mut check = tokio::time::interval(ATTENTION_CHECK);
         loop {
-            let notice = match notices.recv().await {
-                Ok(notice) => notice,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => break,
-            };
-            let _ = app.emit("approvals-changed", &notice.approval_id);
-            let who = notice.client_label.as_deref().unwrap_or(desktop::tr(
-                &app,
-                "A client",
-                "Un cliente",
-            ));
-            let (method, model, environment) =
-                (&notice.method, &notice.model, &notice.environment_name);
-            let body = if desktop::spanish(&app) {
-                format!("{who} solicita {method} en {model} · {environment}")
-            } else {
-                format!("{who} requests {method} on {model} · {environment}")
-            };
-            desktop::notify(
-                &app,
-                desktop::tr(&app, "Pending approval", "Aprobación pendiente"),
-                body,
-                Some(notice.approval_id.clone()),
-            );
-            if let Some(window) = app.get_webview_window("main") {
-                let _ =
-                    window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+            let summary_at = last_shown.map_or_else(Instant::now, |shown| shown + COOLDOWN);
+            tokio::select! {
+                received = notices.recv() => {
+                    let notice = match received {
+                        Ok(notice) => notice,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    };
+                    let _ = app.emit("approvals-changed", &notice.approval_id);
+                    if !attention {
+                        attention = true;
+                        desktop::set_tray_attention(&app, true);
+                    }
+                    if last_shown.is_some_and(|shown| shown.elapsed() < COOLDOWN) {
+                        held.push(notice.approval_id.clone());
+                    } else {
+                        last_shown = Some(Instant::now());
+                        notify_approval(&app, &notice);
+                    }
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window
+                            .request_user_attention(Some(tauri::UserAttentionType::Informational));
+                    }
+                }
+                _ = tokio::time::sleep_until(summary_at), if !held.is_empty() => {
+                    // Only held requests still waiting; decided, expired or already notified ones are no longer news.
+                    let held = std::mem::take(&mut held);
+                    let waiting = core.approvals().await.map_or(0, |pending| {
+                        pending.iter().filter(|p| held.contains(&p.id)).count()
+                    });
+                    if waiting > 0 {
+                        last_shown = Some(Instant::now());
+                        notify_more(&app, waiting);
+                    }
+                }
+                _ = check.tick() => {
+                    let pending = core.approvals().await.is_ok_and(|pending| !pending.is_empty());
+                    if pending != attention {
+                        attention = pending;
+                        desktop::set_tray_attention(&app, pending);
+                    }
+                }
             }
         }
     });
+}
+
+fn notify_approval(app: &tauri::AppHandle, notice: &odx_core::ApprovalNotice) {
+    let who = notice
+        .client_label
+        .as_deref()
+        .unwrap_or(desktop::tr(app, "A client", "Un cliente"));
+    let (method, model, environment) = (&notice.method, &notice.model, &notice.environment_name);
+    let body = if desktop::spanish(app) {
+        format!("{who} solicita {method} en {model} · {environment}")
+    } else {
+        format!("{who} requests {method} on {model} · {environment}")
+    };
+    desktop::notify(
+        app,
+        desktop::tr(app, "Pending approval", "Aprobación pendiente"),
+        body,
+        Some(notice.approval_id.clone()),
+    );
+}
+
+fn notify_more(app: &tauri::AppHandle, count: usize) {
+    let body = match (desktop::spanish(app), count) {
+        (true, 1) => "Hay 1 aprobación más pendiente".to_string(),
+        (true, n) => format!("Hay {n} aprobaciones más pendientes"),
+        (false, 1) => "1 more approval is pending".to_string(),
+        (false, n) => format!("{n} more approvals are pending"),
+    };
+    desktop::notify(
+        app,
+        desktop::tr(app, "Pending approvals", "Aprobaciones pendientes"),
+        body,
+        None,
+    );
 }
 
 fn main() {
@@ -151,7 +211,7 @@ fn main() {
                 tauri::async_runtime::spawn(async move { services.start_socket(core).await });
             }
             app.manage(services);
-            notify_approvals(app.handle().clone(), core.approval_notices());
+            notify_approvals(app.handle().clone(), core.clone(), core.approval_notices());
             let (agent_requests, agent_queue) = tokio::sync::mpsc::unbounded_channel();
             core.set_desktop(agent_requests);
             desktop::serve_agents(app.handle().clone(), agent_queue);

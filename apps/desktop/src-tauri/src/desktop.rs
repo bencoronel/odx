@@ -58,6 +58,8 @@ pub struct Desktop {
     agent: Mutex<AgentQueue>,
     /// Terminal tables opened in their own windows, by window label, in memory until that window takes them.
     tables: Mutex<(u64, std::collections::HashMap<String, serde_json::Value>)>,
+    /// Threads blocked on a notification's action (`NotificationWaiter`).
+    notification_waiters: std::sync::atomic::AtomicUsize,
     /// Lock waiting for the window to save pending Terminal changes.
     flush: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     /// One lock at a time: sleep and screen lock fire together, and a second flush request would cut the first short.
@@ -1096,6 +1098,65 @@ fn record_notification(app: &AppHandle, error: Option<String>) {
     }
 }
 
+/// Mark the tray icon while approvals wait, so they show even with the window closed.
+pub fn set_tray_attention(app: &AppHandle, on: bool) {
+    let (Some(tray), Some(icon)) = (app.tray_by_id("main"), app.default_window_icon()) else {
+        return;
+    };
+    let icon = if on {
+        with_attention_dot(icon)
+    } else {
+        icon.clone().to_owned()
+    };
+    if let Err(error) = tray.set_icon(Some(icon)) {
+        eprintln!("odx: could not update the tray icon: {error}");
+    }
+}
+
+/// The icon with a filled dot in its top-right corner.
+fn with_attention_dot(icon: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let (width, height) = (icon.width(), icon.height());
+    let mut rgba = icon.rgba().to_vec();
+    let radius = width.min(height) as f32 * 0.22;
+    let (cx, cy) = (width as f32 - radius, radius);
+    for y in 0..height {
+        for x in 0..width {
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            if dx * dx + dy * dy <= radius * radius {
+                let i = ((y * width + x) * 4) as usize;
+                rgba[i..i + 4].copy_from_slice(&[0xe5, 0x48, 0x4d, 0xff]);
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, width, height)
+}
+
+/// A slot for a thread blocked on a notification's action, released when it ends; bounds the threads that
+/// notifications left open in the tray (GNOME keeps them until dismissed) can hold.
+struct NotificationWaiter(AppHandle);
+
+impl NotificationWaiter {
+    const MAX: usize = 8;
+    fn claim(app: &AppHandle) -> Option<Self> {
+        let waiting = &app.state::<Arc<Desktop>>().notification_waiters;
+        waiting
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < Self::MAX).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Self(app.clone()))
+    }
+}
+
+impl Drop for NotificationWaiter {
+    fn drop(&mut self) {
+        self.0
+            .state::<Arc<Desktop>>()
+            .notification_waiters
+            .fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Notify new approval requests. Report failures in stderr and the window; requests remain visible in Approvals and the status bar.
 /// A click on the notification (Linux "default" action) opens the window on `approval`.
 pub fn notify(app: &AppHandle, title: &'static str, body: String, approval: Option<String>) {
@@ -1109,7 +1170,10 @@ pub fn notify(app: &AppHandle, title: &'static str, body: String, approval: Opti
         .unwrap_or_else(|| {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png")
         });
-    let action = approval.as_ref().map(|_| tr(app, "Open", "Abrir"));
+    // One blocking thread waits per notification with an action; past the cap, new ones show without "Open".
+    let waiter =
+        approval.and_then(|approval| NotificationWaiter::claim(app).map(|w| (w, approval)));
+    let action = waiter.as_ref().map(|_| tr(app, "Open", "Abrir"));
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let shown = tauri::async_runtime::spawn_blocking(move || {
@@ -1133,10 +1197,9 @@ pub fn notify(app: &AppHandle, title: &'static str, body: String, approval: Opti
             Err(error) => return record_notification(&app, Some(error)),
         };
         #[cfg(all(unix, not(target_os = "macos")))]
-        if let Some(approval) = approval {
-            // ponytail: one blocking thread per open notification until clicked or closed;
-            // move to a shared D-Bus listener if they pile up.
+        if let Some((waiter, approval)) = waiter {
             let _ = tauri::async_runtime::spawn_blocking(move || {
+                let _waiter = waiter;
                 handle.wait_for_action(|action| {
                     if action == "default" {
                         *app.state::<Arc<Desktop>>().open_approval.lock().unwrap() = Some(approval);
@@ -1148,7 +1211,7 @@ pub fn notify(app: &AppHandle, title: &'static str, body: String, approval: Opti
             .await;
         }
         #[cfg(not(all(unix, not(target_os = "macos"))))]
-        let _ = (handle, approval);
+        let _ = (handle, waiter);
     });
 }
 
@@ -1195,6 +1258,16 @@ mod tests {
         assert!(state.save(current, "{\"shell\":true}".into(), true));
         assert!(state.destroying);
         assert!(state.snapshot.is_some());
+    }
+
+    #[test]
+    fn attention_dot_fills_only_the_top_right_corner() {
+        let icon = tauri::image::Image::new_owned(vec![0; 32 * 32 * 4], 32, 32);
+        let marked = with_attention_dot(&icon);
+        let pixel = |x: u32, y: u32| &marked.rgba()[((y * 32 + x) * 4) as usize..][..4];
+        assert_eq!(pixel(28, 3), [0xe5, 0x48, 0x4d, 0xff]);
+        assert_eq!(pixel(3, 28), [0, 0, 0, 0]);
+        assert_eq!(pixel(3, 3), [0, 0, 0, 0]);
     }
 
     #[test]
