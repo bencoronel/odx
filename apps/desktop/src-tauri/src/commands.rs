@@ -861,6 +861,12 @@ pub fn window_keep_above_supported() -> bool {
     crate::desktop::keep_above_supported()
 }
 
+/// Bring the calling window to the front after it shows itself (first paint of a new WebView).
+#[tauri::command]
+pub async fn window_present(window: tauri::WebviewWindow) {
+    let _ = tauri::async_runtime::spawn_blocking(move || crate::desktop::activate(&window)).await;
+}
+
 /// Keep the calling window above the others (or not).
 #[tauri::command]
 pub async fn window_keep_above(window: tauri::WebviewWindow, above: bool) -> Result<(), AppError> {

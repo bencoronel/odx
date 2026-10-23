@@ -117,17 +117,37 @@ pub fn keep_above(window: &tauri::WebviewWindow, above: bool) -> Result<(), Stri
     if !kde() {
         return Err("not supported on this desktop".into());
     }
-    kwin_keep_above(&window.title().map_err(|e| e.to_string())?, above)
+    kwin_window_script(
+        &window.title().map_err(|e| e.to_string())?,
+        &format!("w.keepAbove = {above};"),
+    )
 }
 
-/// Ask KWin with a one-off script, loaded and unloaded over D-Bus, to set `keepAbove` on this process's window.
-// ponytail: windows are matched by title, so two table windows of the same command toggle together; a unique
-// title marker is the upgrade if that ever matters.
-fn kwin_keep_above(caption: &str, above: bool) -> Result<(), String> {
+/// Bring a window to the front where the app alone cannot: KWin on Wayland ignores focus requests from apps
+/// (focus stealing prevention) and only marks them as wanting attention, so ask KWin itself. Blocks ~200 ms.
+pub fn activate(window: &tauri::WebviewWindow) {
+    if !wayland() || !kde() {
+        return;
+    }
+    // Plasma 6 names it activeWindow, Plasma 5 activeClient.
+    const ACTIVATE: &str = "w.minimized = false; \
+        if (\"activeWindow\" in workspace) workspace.activeWindow = w; else workspace.activeClient = w;";
+    let result = window
+        .title()
+        .map_err(|e| e.to_string())
+        .and_then(|title| kwin_window_script(&title, ACTIVATE));
+    if let Err(error) = result {
+        eprintln!("odx: could not bring the window to the front: {error}");
+    }
+}
+
+/// Ask KWin with a one-off script, loaded and unloaded over D-Bus, to run `action` on this process's window `w`.
+/// Windows are matched by title, which `invisible_tag` keeps unique between table windows.
+fn kwin_window_script(caption: &str, action: &str) -> Result<(), String> {
     use std::sync::atomic::AtomicU64;
     static SCRIPTS: AtomicU64 = AtomicU64::new(0);
     let plugin = format!(
-        "odx-keep-above-{}-{}",
+        "odx-window-{}-{}",
         std::process::id(),
         SCRIPTS.fetch_add(1, Ordering::Relaxed)
     );
@@ -135,7 +155,7 @@ fn kwin_keep_above(caption: &str, above: bool) -> Result<(), String> {
     let caption = serde_json::to_string(caption).map_err(|e| e.to_string())?;
     let script = format!(
         "const windows = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
-         for (const w of windows) if (w.pid === {} && w.caption === {caption}) w.keepAbove = {above};\n",
+         for (const w of windows) if (w.pid === {} && w.caption === {caption}) {{ {action} }}\n",
         std::process::id()
     );
     std::fs::write(&path, script).map_err(|e| e.to_string())?;
@@ -182,20 +202,20 @@ pub fn open_table_window(
     table: serde_json::Value,
     title: &str,
 ) -> tauri::Result<()> {
-    let label = {
+    let (label, number) = {
         let desktop = app.state::<Arc<Desktop>>();
         let mut tables = desktop.tables.lock().unwrap();
         tables.0 += 1;
         let label = format!("table-{}", tables.0);
         tables.1.insert(label.clone(), table);
-        label
+        (label, tables.0)
     };
     let window = tauri::WebviewWindowBuilder::new(
         app,
         &label,
         tauri::WebviewUrl::App(format!("index.html?window={label}").into()),
     )
-    .title(title)
+    .title(format!("{title}{}", invisible_tag(number)))
     .inner_size(960.0, 620.0)
     .min_inner_size(420.0, 260.0)
     // ODX's own frame, as the main window: no system title bar, rounded, shown after its first paint.
@@ -206,6 +226,14 @@ pub fn open_table_window(
     #[cfg(target_os = "linux")]
     enable_clipboard_access(&window);
     Ok(())
+}
+
+/// `number` in zero-width characters, so tables of the same command still get distinct window titles.
+fn invisible_tag(number: u64) -> String {
+    format!("{number:b}")
+        .chars()
+        .map(|bit| if bit == '1' { '\u{200C}' } else { '\u{200B}' })
+        .collect()
 }
 
 pub fn take_table(app: &AppHandle, label: &str) -> Option<serde_json::Value> {
@@ -613,7 +641,9 @@ pub fn show_main(app: &AppHandle) {
         let _ = window.emit("desktop-resume", ());
         let _ = window.unminimize();
         window.show()?;
-        window.set_focus()
+        window.set_focus()?;
+        std::thread::spawn(move || activate(&window));
+        Ok(())
     })();
     desktop.window.lock().unwrap().creating = false;
     if let Err(error) = result {
@@ -1165,6 +1195,17 @@ mod tests {
         assert!(state.save(current, "{\"shell\":true}".into(), true));
         assert!(state.destroying);
         assert!(state.snapshot.is_some());
+    }
+
+    #[test]
+    fn invisible_tags_are_distinct_and_zero_width() {
+        let tags: std::collections::HashSet<_> = (1..=64).map(invisible_tag).collect();
+        assert_eq!(tags.len(), 64);
+        assert!(
+            tags.iter()
+                .flat_map(|tag| tag.chars())
+                .all(|c| c == '\u{200B}' || c == '\u{200C}')
+        );
     }
 
     #[test]

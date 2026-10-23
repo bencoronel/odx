@@ -174,6 +174,7 @@ fn main() {
             commands::desktop_suspend,
             commands::desktop_cancel_suspend,
             commands::desktop_flushed,
+            commands::window_present,
             commands::context_get,
             commands::context_set,
             commands::headers_get,

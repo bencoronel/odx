@@ -34,7 +34,8 @@ function useRevealWindow() {
   useEffect(() => {
     if (revealed) return;
     revealed = true;
-    void appWindow.show().then(() => appWindow.setFocus()).catch(() => undefined);
+    // KWin on Wayland ignores setFocus from apps; window_present asks KWin itself.
+    void appWindow.show().then(() => appWindow.setFocus()).then(() => invoke("window_present")).catch(() => undefined);
   }, []);
 }
 
