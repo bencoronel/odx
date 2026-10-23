@@ -56,6 +56,37 @@ it("stays silent when the startup check fails and shows install errors without c
   expect((screen.getByRole("button", { name: "Update and restart" }) as HTMLButtonElement).disabled).toBe(false);
 });
 
+it("rechecks on focus once a day has passed and shows a newer version after dismissing one", async () => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(0);
+  const { UpdateNotice } = await load();
+  render(<UpdateNotice />);
+  fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+  fireEvent(window, new Event("focus"));
+  expect(check).toHaveBeenCalledOnce();
+  vi.mocked(check).mockResolvedValueOnce({ version: "0.1.0-alpha.5", downloadAndInstall } as unknown as Update);
+  now.mockReturnValue(24 * 60 * 60 * 1000);
+  fireEvent(window, new Event("focus"));
+  expect((await screen.findByRole("status")).textContent).toContain("Odx 0.1.0-alpha.5 is available.");
+  expect(check).toHaveBeenCalledTimes(2);
+  now.mockRestore();
+});
+
+it("retries an hour after a failed check instead of a day", async () => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(0);
+  vi.mocked(check).mockRejectedValueOnce("offline");
+  const { UpdateNotice } = await load();
+  render(<UpdateNotice />);
+  await waitFor(() => expect(check).toHaveBeenCalledOnce());
+  now.mockReturnValue(30 * 60 * 1000);
+  fireEvent(window, new Event("focus"));
+  expect(check).toHaveBeenCalledOnce();
+  now.mockReturnValue(60 * 60 * 1000);
+  fireEvent(window, new Event("focus"));
+  await screen.findByRole("button", { name: "Update and restart" });
+  expect(check).toHaveBeenCalledTimes(2);
+  now.mockRestore();
+});
+
 it("offers only the release page outside an AppImage", async () => {
   vi.mocked(getBundleType).mockResolvedValue("deb" as never);
   const { UpdateNotice } = await load();
@@ -65,6 +96,17 @@ it("offers only the release page outside an AppImage", async () => {
   expect(screen.queryByRole("button", { name: "Update and restart" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("gives .deb and .rpm installs a checksum-verified install command", async () => {
+  vi.mocked(getBundleType).mockResolvedValue("deb" as never);
+  const { UpdatesPanel, installCommand } = await load();
+  render(<UpdatesPanel />);
+  fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+  const command = await screen.findByText(/sha256sum -c odx-linux-amd64\.deb\.sha256 && sudo apt install \.\/odx-linux-amd64\.deb$/);
+  expect(command.textContent).toContain("releases/download/v0.1.0-alpha.4/odx-linux-amd64.deb ");
+  expect(installCommand("rpm" as never, "1.0.0")).toContain("sudo dnf install ./odx-linux-x86_64.rpm");
+  expect(installCommand("appimage" as never, "1.0.0")).toBeNull();
 });
 
 it("checks manually in Settings with version, up-to-date, error and available results", async () => {

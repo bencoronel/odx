@@ -1108,6 +1108,7 @@
     "installing": "Actualizando…",
     "openReleases": "Abrir página de versiones",
     "manual": "Esta instalación no puede actualizarse sola. Descarga la nueva versión desde la página de versiones.",
+    "command": "O actualiza desde una terminal: este comando comprueba la suma de verificación del paquete antes de instalarlo.",
     "checkFailed": "No se pudo buscar actualizaciones. Comprueba la conexión e inténtalo de nuevo.",
     "installFailed": "No se pudo instalar la actualización. La versión actual sigue en uso."
   },

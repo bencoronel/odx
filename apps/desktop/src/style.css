@@ -330,6 +330,8 @@ fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 /* Keep above: lit while on. */
 .window-controls button.on { color: var(--accent-text); }
 .window-controls svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
+/* Long one-line install command: wrap instead of widening the panel. */
+.update-command { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .protocol-options > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); }
 .protocol-options[open] > summary { margin-bottom: 8px; }
 
