@@ -1,15 +1,14 @@
 import { Fragment } from "react";
 import type { Pending } from "./ipc";
 import { useTranslation } from "react-i18next";
+import { Json } from "./json";
+import { isRecord } from "./shell/commands";
 
 export function methodTone(method: string) {
   return method === "unlink" ? "danger" : ["create", "write"].includes(method) ? "warn" : "info";
 }
 
 const isEmpty = (value: unknown) => value == null || (typeof value === "object" && Object.keys(value).length === 0);
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-/** One line when short; indented when it would wrap. */
-const show = (value: unknown) => { const line = JSON.stringify(value); return line.length > 80 ? JSON.stringify(value, null, 2) : line; };
 
 /** Positional argument `index`, or its Odoo keyword name. */
 function param(item: Pick<Pending, "args" | "kwargs">, index: number, name: string): unknown {
@@ -52,7 +51,7 @@ function RelationSteps({ steps }: { steps: NonNullable<ReturnType<typeof relatio
   const { t } = useTranslation();
   return <ul className="relation-steps">{steps.map((step, index) => <li key={index} className={DANGEROUS.has(step.kind) ? "tone-danger" : undefined}>
     {t(`approvals.relation.${step.kind}`, { id: step.id, ids: Array.isArray(step.values) ? step.values.join(", ") : "" })}
-    {(step.kind === "create" || step.kind === "update") && <code> {show(step.values)}</code>}
+    {(step.kind === "create" || step.kind === "update") && <code> <Json value={step.values} /></code>}
   </li>)}</ul>;
 }
 
@@ -64,7 +63,7 @@ export function ValuesTable({ values }: { values: Record<string, unknown>[] }) {
       <thead><tr><th scope="col">{t("approvals.field")}</th><th scope="col">{t("approvals.value")}</th></tr></thead>
       <tbody>{Object.entries(record).map(([field, value]) => <tr key={field}>
         <th scope="row" className="mono">{field}</th>
-        <td>{relationSteps(value) ? <RelationSteps steps={relationSteps(value)!} /> : <code>{typeof value === "string" ? value : show(value)}</code>}</td>
+        <td>{relationSteps(value) ? <RelationSteps steps={relationSteps(value)!} /> : <code>{typeof value === "string" ? value : <Json value={value} />}</code>}</td>
       </tr>)}</tbody>
     </table>)}
     {values.length > SHOWN_RECORDS && <p className="hint">{t("approvals.moreRecords", { count: values.length - SHOWN_RECORDS })}</p>}
@@ -76,20 +75,6 @@ export function CallDetails({ item }: { item: Pick<Pending, "args" | "kwargs" | 
   const rows = ([["arguments", item.args], ["namedArguments", item.kwargs], ["context", item.context]] as const).filter(([, value]) => !isEmpty(value));
   if (!rows.length) return null;
   return <dl className="call">
-    {rows.map(([key, value]) => <Fragment key={key}><dt>{t(`approvals.${key}`)}</dt><dd><code>{show(value)}</code></dd></Fragment>)}
+    {rows.map(([key, value]) => <Fragment key={key}><dt>{t(`approvals.${key}`)}</dt><dd><code><Json value={value} /></code></dd></Fragment>)}
   </dl>;
-}
-
-/** The request as a Terminal command, to repeat or adjust it by hand. The call context is left out: the Terminal sets it per session (\\context). */
-export function shellCommand(item: Pick<Pending, "model" | "method" | "args" | "kwargs">): string {
-  const { context: _context, ...kwargs } = isRecord(item.kwargs) ? item.kwargs : {};
-  const args = Array.isArray(item.args) ? item.args : [];
-  const json = JSON.stringify;
-  if (!Object.keys(kwargs).length) {
-    const ids = recordIds({ ...item, kwargs: {} });
-    if (item.method === "write" && ids && args.length === 2 && isRecord(args[1])) return `write ${item.model} ${ids.join(",")} ${json(args[1])}`;
-    if (item.method === "unlink" && ids && args.length === 1) return `unlink ${item.model} ${ids.join(",")}`;
-    if (item.method === "create" && args.length === 1) return `create ${item.model} ${json(args[0])}`;
-  }
-  return `call ${item.model} ${item.method} ${json(args)} ${json(kwargs)}`;
 }

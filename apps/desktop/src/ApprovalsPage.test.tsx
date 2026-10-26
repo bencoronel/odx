@@ -3,8 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useState } from "react";
 import ApprovalsPage from "./ApprovalsPage";
 import type { Pending } from "./ipc";
-import { shellCommand } from "./ApprovalDetails";
-import { parse } from "./shell/commands";
 afterEach(cleanup);
 // jsdom lacks scrollIntoView, which the page uses for keyboard selection.
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
@@ -114,6 +112,21 @@ it("selects the request that takes the decided one's place", () => {
   fireEvent.click(screen.getAllByRole("option")[1], { detail: 1 });
   view.rerender(<Harness envs={[]} deciding={new Set()} decide={vi.fn()} decideMany={vi.fn()} openInShell={vi.fn()} pending={[pending[0], pending[2]]} />);
   expect(screen.getAllByRole("option")[1].getAttribute("aria-selected")).toBe("true");
+});
+
+it("keeps the request that took the decided one's place when a new one arrives before it, and ignores held keys", () => {
+  const pending = [request("a", "write", []), request("b", "write", []), request("c", "write", [])];
+  const decide = vi.fn();
+  const view = page(pending, new Set(), decide);
+  fireEvent.click(screen.getAllByRole("option")[1], { detail: 1 });
+  const props = { envs: [], deciding: new Set<string>(), decide, decideMany: vi.fn(), openInShell: vi.fn() };
+  // b decided: c takes row 1; then z arrives first and c moves to row 2.
+  view.rerender(<Harness {...props} pending={[pending[0], pending[2]]} />);
+  view.rerender(<Harness {...props} pending={[request("z", "write", []), pending[0], pending[2]]} />);
+  fireEvent.keyDown(document.body, { key: "a", repeat: true });
+  expect(decide).not.toHaveBeenCalled();
+  fireEvent.keyDown(document.body, { key: "a" });
+  expect(decide).toHaveBeenCalledWith(pending[2], true);
 });
 
 it("filters by model, method, environment or client and keeps keys within the matches", () => {
@@ -262,22 +275,6 @@ it("links the environment and copies the request as a Terminal command", () => {
   expect(screen.getByRole("button", { name: "Copy as Terminal command" })).toBeTruthy();
 });
 
-it("copies commands the Terminal parses back into the same call, without the context", () => {
-  const cases: [Pick<Pending, "model" | "method" | "args" | "kwargs">, string][] = [
-    [{ model: "res.partner", method: "write", args: [[7, 8], { name: "Ana López", active: false }], kwargs: { context: { lang: "es_ES" } } }, "write res.partner 7,8 "],
-    [{ model: "res.partner", method: "unlink", args: [[3]], kwargs: {} }, "unlink res.partner 3"],
-    [{ model: "res.partner", method: "create", args: [[{ name: "A" }, { name: "B" }]], kwargs: {} }, "create res.partner "],
-    [{ model: "account.move", method: "action_post", args: [[55]], kwargs: { context: {} } }, "call account.move action_post "],
-    [{ model: "res.partner", method: "write", args: [], kwargs: { ids: [1], vals: { name: "x" } } }, "call res.partner write "],
-  ];
-  for (const [item, start] of cases) {
-    const text = shellCommand(item);
-    expect(text.startsWith(start)).toBe(true);
-    const { context: _context, ...kwargs } = item.kwargs as Record<string, unknown>;
-    expect(parse(text)).toMatchObject({ kind: "call", call: { model: item.model, method: item.method, args: item.args, kwargs } });
-  }
-});
-
 it("starts a Shift range at the target when the anchor has been decided", () => {
   const pending = ["a", "b", "c", "d", "e"].map((id) => ({ ...request(id, "write", [[1], { x: 1 }]), model: `m.${id}` }));
   const view = page(pending);
@@ -309,4 +306,23 @@ it("builds the copied command only when copying", async () => {
   expect(button.getAttribute("data-tip")).toBeNull();
   fireEvent.click(button);
   await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('write res.partner 7 {"name":"Ana"}'));
+});
+
+it("creates a field rule from a write, with its effective context, and approves the request too", async () => {
+  const { ipc } = await import("./ipc");
+  const save = vi.spyOn(ipc, "saveRule").mockResolvedValue({} as never);
+  const decide = vi.fn();
+  const write = { ...request("w", "write", [[1, 2], { name: "x", email: "y" }]), context: { lang: "es_ES" } };
+  page([write, request("u", "unlink", [[3]])], new Set(), decide);
+  fireEvent.click(screen.getByRole("button", { name: "Create rule" }));
+  expect((screen.getByRole("textbox", { name: /^Fields/ }) as HTMLInputElement).value).toBe("name, email");
+  fireEvent.click(screen.getByRole("button", { name: "Create rule" }));
+  await vi.waitFor(() => expect(decide).toHaveBeenCalledWith(write, true));
+  expect(save).toHaveBeenCalledWith({
+    environment_id: "env-A", model: "res.partner", method: "write", kind: "fields", fields: ["name", "email"], values: undefined,
+    context: { lang: "es_ES" }, max_records: 2, expires_at: null,
+  });
+  // unlink always asks: no rule for it.
+  fireEvent.click(screen.getAllByRole("option")[1], { detail: 1 });
+  expect(screen.queryByRole("button", { name: "Create rule" })).toBeNull();
 });

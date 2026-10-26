@@ -7,8 +7,11 @@ import SearchField from "./SearchField";
 import { formatRemaining, relativeTime, useNow } from "./time";
 import { useTranslation } from "react-i18next";
 import { formatDateTime } from "./i18n/format";
-import { CallDetails, ValuesTable, methodTone, recordIds, shellCommand, writtenValues } from "./ApprovalDetails";
+import { CallDetails, ValuesTable, methodTone, recordIds, writtenValues } from "./ApprovalDetails";
+import { shellCommand } from "./shell/commands";
 import CopyButton from "./CopyButton";
+import { RuleDialog, fromApproval } from "./RulesPanel";
+import { modalOpen } from "./modal";
 
 export default function ApprovalsPage({ pending, envs, deciding, decide, decideMany, openInShell, openEnvironment, filter, setFilter, focusId }: {
   pending: Pending[];
@@ -35,6 +38,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
+  const [ruleFor, setRuleFor] = useState<Pending | null>(null);
   const query = filter.trim().toLowerCase();
   const visible = query ? pending.filter((p) => [p.method, p.model, p.environment_name, p.client_label ?? t("approvals.local")]
     .some((text) => text.toLowerCase().includes(query))) : pending;
@@ -43,6 +47,8 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   const found = visible.findIndex((p) => p.id === selectedId);
   if (found >= 0) lastIndex.current = found;
   const selected: Pending | undefined = found >= 0 ? visible[found] : visible[Math.min(lastIndex.current, visible.length - 1)];
+  // The row taken by position becomes the selection, so a request arriving later cannot slide under the cursor.
+  useEffect(() => { if (found < 0 && selected) setSelectedId(selected.id); }, [found, selected]);
   // Multiple selection: Ctrl toggles, Shift extends a range from the anchor. Below two, the cursor rules.
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const anchor = useRef<string | null>(null);
@@ -83,7 +89,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   // A approves, R rejects and Shift+R asks for a reason first. With several selected, A and R act on all of them.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
+      if (event.altKey || modalOpen()) return;
       const command = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       const typing = (event.target as Element).closest?.("input, textarea, select, [contenteditable]");
@@ -95,6 +101,8 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
       }
       if (key === "?" && !typing) { event.preventDefault(); setShowKeys((open) => !open); return; }
       if (!selected || typing) return;
+      // A held key must not decide one request after another.
+      if ((key === "a" || key === "r") && event.repeat) return;
       if (command) {
         if (key === "a") { event.preventDefault(); setPicked(new Set(visible.map((p) => p.id))); }
         return;
@@ -239,10 +247,14 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
           </dl>
           {values && <ValuesTable values={values} />}
           {values ? <details className="raw-call"><summary>{t("approvals.rawCall")}</summary><CallDetails item={item} /></details> : <CallDetails item={item} />}
-          <div className="copy-command"><CopyButton text={() => shellCommand(item)} label={t("approvals.copyCommand")} className="btn ghost sm" /></div>
+          <div className="copy-command">
+            {item.method !== "unlink" && <button type="button" className="btn ghost sm" disabled={busy || expired} onClick={() => setRuleFor(item)}><Icon name="shield" />{t("rules.create")}</button>}
+            <CopyButton text={() => shellCommand(item)} label={t("approvals.copyCommand")} className="btn ghost sm" />
+          </div>
         </div>
       </div>}
     </section>
+    {ruleFor && <RuleDialog key={ruleFor.id} initial={fromApproval(ruleFor)} open onOpenChange={(open) => { if (!open) setRuleFor(null); }} approve={() => decide(ruleFor, true)} />}
   </div>;
 }
 
