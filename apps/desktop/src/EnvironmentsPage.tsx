@@ -1,10 +1,11 @@
 import PanelTitle, { useCollapsed } from "./PanelTitle";
 import SettingsTable from "./SettingsTable";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import RulesPanel from "./RulesPanel";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ipc, type Environment, type EnvironmentDraft, type EnvironmentProxyInput, type EnvironmentProxyView, type Pending, type ProxiesView, type WriteMode } from "./ipc";
 import EnvironmentForm, { ProtocolSelect, type FormDraft, connectionComplete, protocolLabels, proxyChoice, proxyOptions, urlError, type ConnectionValues, type Protocol } from "./EnvironmentForm";
-import { ApprovalDialog } from "@/components/ui/approval-dialog";
-import { Icon, type IconName } from "./Icon";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { Icon } from "./Icon";
 import { ListResizer, useListWidth } from "./ListResizer";
 import { EnvIcon } from "./EnvIcon";
 import SearchField from "./SearchField";
@@ -20,7 +21,8 @@ import { useWindowState, usePreventUnload } from "./windowState";
 import TagEditor, { sameTag, uniqueTags } from "./TagEditor";
 import EnvironmentFilters from "./EnvironmentFilters";
 import { groupByHost, hostOf } from "./hosts";
-import { useDismiss } from "./ContextMenu";
+import { FloatingMenu, MenuItems, MoreMenu } from "./Menu";
+import { modalOpen } from "./modal";
 
 export default function EnvironmentsPage({ envs, pending = [], focusId, refresh, busy, creating, setCreating, save, update, remove, clone, openShell, changeMode, draftRef }: {
   envs: Environment[];
@@ -45,6 +47,7 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
   const tagColors = useTagColors();
   useEffect(() => { loadTagColors().catch(() => undefined); }, []);
   const [listMenu, setListMenu] = useState<{ env: Environment; x: number; y: number } | null>(null);
+  const closeListMenu = useCallback(() => setListMenu(null), []);
   const [detailAction, setDetailAction] = useState<DetailAction | null>(null);
   const [selectedId, setSelectedId] = useWindowState<string | null>("environments.selected", focusId ?? null);
   // Requests from elsewhere (an approval, the command palette) select even when the page is already open.
@@ -123,7 +126,7 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
   // Ctrl+F or / focuses the search; Ctrl+N starts a new environment.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.altKey || document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
+      if (event.altKey || modalOpen()) return;
       // Shift is allowed alone: "/" needs it on layouts such as Spanish (Shift+7).
       const command = event.ctrlKey || event.metaKey;
       if (command && event.shiftKey) return;
@@ -215,12 +218,12 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
           {filtered && <button type="button" className="btn sm" onClick={clearFilters}><Icon name="x" />{t("environments.clearFilters")}</button>}</li>}
       </ul>
     </aside>
-    {listMenu && <FloatingMenu x={listMenu.x} y={listMenu.y} label={listMenu.env.name} close={() => setListMenu(null)} items={[
+    {listMenu && <FloatingMenu at={{ left: listMenu.x, top: listMenu.y }} label={listMenu.env.name} className="more-menu-list floating" close={closeListMenu}><MenuItems close={closeListMenu} items={[
       { label: t("environments.openShell"), icon: "terminal", run: () => openShell(listMenu.env) },
       { label: t("environments.cloneEnvironment"), icon: "copy", run: () => setDetailAction("clone") },
       ...creating ? [] : [{ label: t("environments.addDatabase"), icon: "database" as const, run: () => void addDatabase(listMenu.env) }],
       { label: t("environments.deleteEnvironment"), icon: "trash", danger: true, run: () => setDetailAction("delete") },
-    ]} />}
+    ]} /></FloatingMenu>}
     <section className="detail-pane">
       {creating && focusHint && <p className="banner info compact" role="status"><Icon name="alert" />{t("environments.focusWhileCreating", { name: envs.find((env) => env.id === focusHint)?.name ?? "" })}</p>}
       {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} draftRef={draftRef} cancel={() => setCreating(false)} save={async (draft, tags, proxy) => { setSelectedId((await save(draft, tags, proxy)).id); }} />
@@ -268,10 +271,17 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
   // Edits build on the latest local tags, not on props that update only after the save round trip.
   const [tags, setTags] = useState(env.tags);
   useEffect(() => setTags(env.tags), [env.tags]);
+  // One tag save at a time, in order: an earlier save landing last would undo a later edit. Only the latest reports.
+  const tagSaves = useRef(Promise.resolve());
+  const tagVersion = useRef(0);
   const saveTags = (next: string[]) => {
     setTags(next);
     setTagError("");
-    ipc.setTags(env.id, next).then(refresh).catch((reason) => { setTags(env.tags); setTagError(normalizeAppError(reason)); });
+    const version = ++tagVersion.current;
+    const latest = () => version === tagVersion.current;
+    tagSaves.current = tagSaves.current.then(() => ipc.setTags(env.id, next)).then(
+      () => { if (latest()) void refresh(); },
+      (reason) => { if (latest()) { setTags(env.tags); setTagError(normalizeAppError(reason)); } });
   };
   useEffect(() => {
     if (!action) return;
@@ -299,7 +309,7 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
       </div>
       <HealthChip env={env} />
       <button className="btn sm" disabled={busy} onClick={openShell}><Icon name="terminal" />{t("environments.openShell")}</button>
-      <MoreMenu disabled={busy} items={[
+      <MoreMenu label={t("environments.moreActions")} disabled={busy} items={[
         { label: t("environments.cloneEnvironment"), icon: "copy", run: () => setCloneName(suggestedName()) },
         { label: t("environments.deleteEnvironment"), icon: "trash", danger: true, run: () => setDeleting(true) },
       ]} />
@@ -317,8 +327,9 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
     <ConnectionPanel env={env} busy={busy} pendingCount={pendingCount} update={update} renaming={renaming} />
     <SettingsTable kind="context" environmentId={env.id} pendingCount={pendingCount} onSaved={refresh} />
     <SettingsTable kind="headers" environmentId={env.id} pendingCount={pendingCount} onSaved={() => forgetHealth(env.id)} />
+    <RulesPanel env={env} />
 
-    <ApprovalDialog
+    <ConfirmDialog
       open={cloneName !== null}
       busy={busy}
       title={t("environments.cloneTitle", { name: env.name })}
@@ -332,8 +343,8 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
         <input autoFocus value={cloneName ?? ""} maxLength={200} onChange={(e) => setCloneName(e.target.value)} />
         {cloneName && envNames.includes(cloneName.trim()) && <small className="hint text-danger">{t("environments.nameExists")}</small>}
       </label>
-    </ApprovalDialog>
-    <ApprovalDialog
+    </ConfirmDialog>
+    <ConfirmDialog
       open={deleting}
       busy={busy}
       destructive
@@ -347,59 +358,11 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
         <div><dt>{t("common.database")}</dt><dd className="mono">{env.database}</dd></div>
         <div><dt>URL</dt><dd className="mono">{env.url}</dd></div>
       </dl>
-    </ApprovalDialog>
+    </ConfirmDialog>
   </div>;
 }
 
 type DetailAction = "clone" | "delete" | "rename";
-type MenuItem = { label: string; icon: IconName; danger?: boolean; run: () => void };
-/** "More actions" menu for actions that are not used every day. */
-function MoreMenu({ items, disabled }: { items: MenuItem[]; disabled: boolean }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLSpanElement>(null);
-  useDismiss(open, () => root.current, () => setOpen(false));
-  return <span className="more-menu" ref={root} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
-    <button type="button" className="btn sm icon-only" disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t("environments.moreActions")} data-tip={open ? undefined : t("environments.moreActions")} onClick={() => setOpen(!open)}>⋯</button>
-    {open && <div className="more-menu-list" role="menu" aria-label={t("environments.moreActions")}>
-      <MenuItems items={items} close={() => setOpen(false)} />
-    </div>}
-  </span>;
-}
-
-/** Menu at the pointer, kept inside the window; closes on outside click, Escape, scroll or blur. */
-function FloatingMenu({ x, y, label, items, close }: { x: number; y: number; label: string; items: MenuItem[]; close: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.left = `${Math.max(4, Math.min(x, window.innerWidth - el.offsetWidth - 4))}px`;
-    el.style.top = `${Math.max(4, Math.min(y, window.innerHeight - el.offsetHeight - 4))}px`;
-    el.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-  }, [x, y]);
-  useEffect(() => {
-    const outside = (event: Event) => { if (!ref.current?.contains(event.target as Node)) close(); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
-    window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("keydown", escape);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("blur", close);
-    return () => {
-      window.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("keydown", escape);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("blur", close);
-    };
-  }, [close]);
-  return <div ref={ref} className="more-menu-list floating" role="menu" aria-label={label} style={{ left: x, top: y }}>
-    <MenuItems items={items} close={close} />
-  </div>;
-}
-
-function MenuItems({ items, close }: { items: MenuItem[]; close: () => void }) {
-  return <>{items.map((item) => <button key={item.label} type="button" role="menuitem" className={item.danger ? "text-danger" : undefined} onClick={() => { close(); item.run(); }}><Icon name={item.icon} />{item.label}</button>)}</>;
-}
-
 /** Show the editing notice beside the title without shifting content. */
 function RevokeNotice() {
   const { t } = useTranslation();
@@ -481,7 +444,7 @@ function ConnectionPanel({ env, busy, pendingCount, update, renaming = 0 }: { en
       {collapsed && !values && <span className="panel-summary">{protocolText}{proxyView && proxies && <> · {t("environments.proxySummary", { proxy: proxyLabel })}</>}</span>}
       {(!collapsed || values !== null) && <PanelActions busy={busy} editing={values !== null} start={start} cancel={cancel} canSave={changed && values !== null && connectionComplete(values, retarget)} />}
     </header>
-    <ApprovalDialog open={confirming} busy={busy} tone="warn"
+    <ConfirmDialog open={confirming} busy={busy} tone="warn"
       title={t("environments.saveConnection")}
       description={t("environments.saveConnectionWarning", { count: pendingCount })}
       confirmLabel={t("settingsTable.saveAndRevoke")}

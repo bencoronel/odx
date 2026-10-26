@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { flushShellSessions } from "./shellFlush";
 
+export type Theme = "light" | "dark" | "system";
+
 let restored: Record<string, unknown> = {};
 const providers = new Map<string, () => unknown>();
 const blockers = new Set<{ current: boolean }>();
@@ -96,4 +98,13 @@ export function useWindowLifecycle(onError: (error: unknown) => void) {
       for (const stop of stops) void stop.then((unlisten) => unlisten());
     };
   }, []);
+}
+
+/** The theme preference every window starts from. */
+export function storedTheme(): Theme {
+  try {
+    const stored = localStorage.getItem("odx.theme");
+    if (stored === "light" || stored === "dark" || stored === "system") return stored;
+  } catch { /* Preferences are optional when storage is unavailable. */ }
+  return "system";
 }

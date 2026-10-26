@@ -54,10 +54,10 @@ it("formats values using the selected locale", async () => {
 it("renders translated phrases and plural forms in both languages", async () => {
   await setLanguage("en");
   expect(i18n.t("navigation.environments.title")).toBe("Environments");
-  expect(i18n.t("common.connections", { count: 1 })).toBe("1 connection");
-  expect(i18n.t("common.connections", { count: 3 })).toBe("3 connections");
+  expect(i18n.t("activity.newEvents", { count: 1 })).toBe("1 new event");
+  expect(i18n.t("activity.newEvents", { count: 3 })).toBe("3 new events");
   await setLanguage("es");
   expect(i18n.t("navigation.environments.title")).toBe("Entornos");
-  expect(i18n.t("common.connections", { count: 1 })).toBe("1 conexión");
-  expect(i18n.t("common.connections", { count: 3 })).toBe("3 conexiones");
+  expect(i18n.t("activity.newEvents", { count: 1 })).toBe("1 evento nuevo");
+  expect(i18n.t("activity.newEvents", { count: 3 })).toBe("3 eventos nuevos");
 });

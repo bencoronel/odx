@@ -2,9 +2,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, expect, it, vi } from "vitest";
 import EnvironmentForm from "./EnvironmentForm";
 import EnvironmentsPage from "./EnvironmentsPage";
-import { ipc, type Environment } from "./ipc";
+import { ipc } from "./ipc";
 import { i18n } from "./i18n";
-vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), databases: vi.fn().mockResolvedValue(["prod", "staging"]), checkDraft: vi.fn() } }));
+import { envFixture } from "./test/fixtures";
+vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), databases: vi.fn().mockResolvedValue(["prod", "staging"]), checkDraft: vi.fn(), rules: vi.fn().mockResolvedValue([]) } }));
 vi.mock("./HealthChip", () => ({ HealthChip: () => null, HealthDot: () => null, checkHealth: vi.fn(), forgetHealth: vi.fn() }));
 afterEach(async () => { cleanup(); await i18n.changeLanguage("en"); localStorage.removeItem("odx.collapsed.connection"); });
 
@@ -43,7 +44,7 @@ it("creates the environment with the selected protocol", async () => {
 
 it("changes the protocol when editing the connection", async () => {
   localStorage.setItem("odx.collapsed.connection", "0");
-  const env: Environment = { id: "fixture", name: "Fixture", url: "https://example.test", database: "fixture-db", login: "fixture-user", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [] };
+  const env = envFixture();
   const update = vi.fn().mockResolvedValue(undefined);
   render(<EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={update} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} changeMode={vi.fn()} />);
   const form = screen.getByRole("form", { name: "Connection" });
@@ -109,6 +110,20 @@ it("ignores a database list that arrives for an older URL", async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   fireEvent.focus(screen.getByRole("combobox", { name: "Database" }));
   expect(screen.queryByRole("option", { name: "old-db" })).toBeNull();
+});
+
+it("drops a connection test result that arrives after the values changed", async () => {
+  let answer!: (report: Awaited<ReturnType<typeof ipc.checkDraft>>) => void;
+  vi.mocked(ipc.checkDraft).mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+  render(<EnvironmentForm busy={false} tagSuggestions={[]} save={vi.fn()} cancel={vi.fn()} />);
+  for (const [label, value] of [[/^Odoo URL/, "https://old.example.test"], [/^Database/, "db"], [/^User/, "user"], [/^API key or password/, "secret"]] as const) {
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+  fireEvent.change(screen.getByLabelText(/^Odoo URL/), { target: { value: "https://new.example.test" } });
+  answer({ environment_id: "draft", status: "ok", server_version: "17.0", latency_ms: 42 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByText(/Odoo 17\.0/)).toBeNull();
 });
 
 it("restores what was typed after being unmounted", () => {

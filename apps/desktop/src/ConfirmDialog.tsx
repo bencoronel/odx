@@ -1,11 +1,11 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { useEffect, useState, type ReactNode, type RefObject } from "react";
-import { Icon } from "@/Icon";
+import { Icon } from "./Icon";
 import { useTranslation } from "react-i18next";
-import { formatAppError, normalizeAppError, type ErrorState } from "@/appError";
-import { usePreventUnload } from "@/windowState";
+import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { usePreventUnload } from "./windowState";
 
-type ApprovalDialogProps = {
+type ConfirmDialogProps = {
   open: boolean;
   busy: boolean;
   title: string;
@@ -21,7 +21,7 @@ type ApprovalDialogProps = {
   onConfirm: () => Promise<void>;
 };
 
-export function ApprovalDialog({
+export function ConfirmDialog({
   open,
   busy,
   title,
@@ -34,7 +34,7 @@ export function ApprovalDialog({
   initialFocus,
   onOpenChange,
   onConfirm,
-}: ApprovalDialogProps) {
+}: ConfirmDialogProps) {
   usePreventUnload(open || busy);
   const { t } = useTranslation();
   const [error, setError] = useState<ErrorState>("");

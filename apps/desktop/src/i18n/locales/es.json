@@ -13,7 +13,6 @@
     "copiedToClipboard": "Copiado al portapapeles",
     "copyError": "No se pudo copiar al portapapeles. Vuelve a intentarlo.",
     "dismissError": "Descartar error",
-    "done": "Hecho",
     "environment": "Entorno",
     "database": "Base de datos",
     "url": "URL",
@@ -25,10 +24,6 @@
     "collapse": "Plegar",
     "inThisEnvironment": " en este entorno",
     "deletedClient": "Cliente borrado",
-    "connections_one": "{{count}} conexión",
-    "connections_other": "{{count}} conexiones",
-    "pendingApprovals_one": "{{count}} aprobación pendiente",
-    "pendingApprovals_other": "{{count}} aprobaciones pendientes",
     "visible": "Visible",
     "hidden": "Oculto",
     "enabled": "Activado",
@@ -176,7 +171,6 @@
     "errors": {
       "headerName": "Completa el nombre de la cabecera para guardarla.",
       "contextKey": "Completa la clave de contexto para guardarlo.",
-      "contextJson": "El valor de contexto debe ser JSON válido.",
       "contextJsonInvalid": "El valor de contexto debe ser JSON válido."
     },
     "hidden_one": "Ocultas ({{count}})",
@@ -225,11 +219,6 @@
     "onlyInherited": "Solo valores globales"
   },
   "environmentForm": {
-    "errors": {
-      "contextJson": "El contexto debe ser un objeto JSON válido.",
-      "contextObject": "El contexto debe ser un objeto JSON, por ejemplo: {\"lang\":\"es_ES\"}.",
-      "url": "Introduce una URL HTTP o HTTPS sin credenciales, parámetros ni fragmentos."
-    },
     "protocol": "Protocolo",
     "protocols": {
       "auto": "Automático",
@@ -243,12 +232,9 @@
     "odooUrl": "URL de Odoo",
     "user": "Usuario",
     "apiKey": "API key o contraseña",
-    "unchanged": "Sin cambios",
     "createTitle": "Nuevo entorno",
     "createAction": "Crear entorno",
     "connection": "Conexión",
-    "context": "Contexto",
-    "environmentContext": "Contexto del entorno",
     "credential": "Credencial",
     "keepSecretPlaceholder": "Sin cambios: déjalo vacío para conservarla.",
     "newTargetSecretPlaceholder": "Clave API obligatoria para la nueva URL, base de datos o usuario",
@@ -315,7 +301,7 @@
       "exportedFile": "32 MiB por archivo; 4.096 archivos en total",
       "wait": "60 s por defecto / 600 s como máximo; sondeo cada 3 s como mínimo",
       "activity": "100 eventos por página; la base cifrada conserva como máximo 80.000 páginas ocupadas y tiene un tope de 384 MiB",
-      "auditQueue": "128 eventos; detalle de hasta 16 KiB por evento"
+      "auditQueue": "128 eventos; detalle de hasta 80 KiB por evento"
     },
     "limitsTab": "Límites",
     "execution": {
@@ -440,11 +426,8 @@
     "updated": "Contraseña actualizada. Utilízala en el próximo desbloqueo."
   },
   "clients": {
-    "revoke": "Revocar",
     "revokeError": "No se pudo revocar el cliente.",
     "allEnvironments": "Todos, también los nuevos",
-    "noEnvironments": "Sin entornos",
-    "name": "Nombre",
     "environments": "Entornos",
     "environmentScope": "Alcance de entornos",
     "selectedEnvironments": "Solo estos",
@@ -474,7 +457,15 @@
     "outdated": "{{agent}} ejecuta Odx desde otra ruta.",
     "detected": "{{agent}} está instalado en este equipo.",
     "add": "Añadir",
-    "update": "Actualizar"
+    "update": "Actualizar",
+    "connections": "Conexiones abiertas",
+    "unknownAgent": "Agente desconocido",
+    "calls_one": "{{count}} llamada",
+    "calls_other": "{{count}} llamadas",
+    "since": "desde {{time}}",
+    "disconnect": "Desconectar",
+    "disconnecting": "Desconectando…",
+    "disconnectHint": "Cierra el conector de esa sesión. El agente puede reconectar con /mcp."
   },
   "proxy": {
     "errors": {
@@ -647,7 +638,6 @@
     "writes": "Escrituras",
     "errors": "Errores",
     "refresh": "Actualizar actividad",
-    "incompleteHistory": "Parte del historial no se pudo leer entero (sesión interrumpida o segmento dañado). Se muestra lo recuperable.",
     "emptyTitle": "Sin actividad",
     "noMatches": "Ningún evento coincide con los filtros.",
     "filterBy": "Filtrar por {{name}}",
@@ -667,7 +657,14 @@
     "newEvents_other": "{{count}} eventos nuevos",
     "today": "Hoy",
     "yesterday": "Ayer",
-    "replay": "Repetir en Terminal"
+    "replay": "Repetir en Terminal",
+    "client": "Cliente",
+    "allClients": "Todos los clientes",
+    "period": "Periodo",
+    "anyTime": "Cualquier momento",
+    "lastHour": "Última hora",
+    "lastWeek": "Últimos 7 días",
+    "openTable": "Ver como tabla"
   },
   "shell": {
     "initial": "Odx Terminal · \\? para ver la ayuda",
@@ -717,7 +714,6 @@
       "date": "fecha",
       "command": "comando"
     },
-    "uncertainResult": "Resultado incierto: Odoo puede haber aplicado la escritura. No se reintentó; comprueba el estado antes de repetirla.",
     "fields": "campos",
     "field": "campo",
     "relationship": "relación",
@@ -780,6 +776,7 @@
       "contextObject": "El contexto debe ser un objeto, p. ej. {'lang': 'es_ES'}",
       "fieldsUsage": "Uso: \\d <modelo> [filtro] [--names name,email]",
       "technicalNames": "names: entre 1 y 1.000 nombres técnicos únicos",
+      "repeatedOption": "La opción {{option}} aparece dos veces",
       "unexpectedArgument": "Argumento inesperado: {{argument}} (¿falta -d o -f?)",
       "missingValues": "Faltan los valores, p. ej. {'name': 'Ada'}",
       "invalidMethod": "Falta un método público válido",
@@ -879,6 +876,7 @@
     "copyCommand": "Copiar comando",
     "fold": "Plegar resultado",
     "unfold": "Desplegar resultado",
+    "showAllRows": "Se muestran {{shown}} de {{count}} filas · ver todas",
     "linesHidden_one": "{{count}} línea oculta",
     "linesHidden_other": "{{count}} líneas ocultas",
     "copiedAs": "Copiado como {{format}}",
@@ -1093,7 +1091,16 @@
   },
   "desktop": {
     "trayUnavailable": "La bandeja del sistema no está disponible. Al cerrar la ventana se bloquea el almacén y se detiene Odx.",
-    "notificationsUnavailable": "Las notificaciones del escritorio no están disponibles. Las solicitudes nuevas solo aparecen en Aprobaciones y en la barra de estado."
+    "notificationsUnavailable": "Las notificaciones del escritorio no están disponibles. Las solicitudes nuevas solo aparecen en Aprobaciones y en la barra de estado.",
+    "open": "Abrir",
+    "lock": "Bloquear",
+    "quit": "Salir",
+    "aClient": "Un cliente",
+    "pendingApproval": "Aprobación pendiente",
+    "pendingApprovals": "Aprobaciones pendientes",
+    "request": "{{who}} solicita {{method}} en {{model}} · {{environment}}",
+    "moreOne": "Hay 1 aprobación más pendiente",
+    "moreOther": "Hay {{n}} aprobaciones más pendientes"
   },
   "updates": {
     "title": "Actualizaciones",
@@ -1145,5 +1152,42 @@
     "records": "Registros",
     "columns": "Columnas",
     "findColumn": "Buscar un campo"
+  },
+  "rules": {
+    "title": "Reglas de auto-aprobación",
+    "create": "Crear regla",
+    "createTitle": "Aprobar automáticamente {{method}} en {{model}}",
+    "createDescription": "A partir de ahora, las solicitudes que coincidan en {{environment}} se aprueban sin preguntar, venga de quien venga. Las reglas solo se aplican en modo aprobación; unlink siempre pregunta.",
+    "kind": "Condición",
+    "kinds": {
+      "method": "Cualquier argumento",
+      "fields": "Solo estos campos",
+      "values": "Exactamente estos valores"
+    },
+    "fields": "Campos",
+    "fieldsHint": "Separados por comas o espacios. Los comandos relacionales siempre preguntan.",
+    "values": "Valores (JSON)",
+    "valuesInvalid": "Debe ser un objeto JSON.",
+    "maxRecords": "Máx. registros por llamada",
+    "expires": "Caduca",
+    "expiry": {
+      "never": "Nunca",
+      "hour": "En 1 hora",
+      "day": "En 24 horas",
+      "week": "En 7 días",
+      "month": "En 30 días"
+    },
+    "context": "Contexto (debe coincidir exactamente)",
+    "approveToo": "Aprobar también esta solicitud",
+    "onlyApproval": "Las reglas solo se aplican en modo aprobación.",
+    "empty": "Sin reglas. Créalas desde una aprobación pendiente.",
+    "expired": "Caducada",
+    "until": "Hasta {{time}}",
+    "delete": "Eliminar regla",
+    "edit": "Editar regla",
+    "editTitle": "Editar regla: {{method}} en {{model}}",
+    "editDescription": "Los cambios se aplican a las solicitudes nuevas; las llamadas autorizadas por la versión anterior que aún no se hayan enviado no se envían.",
+    "records_one": "hasta {{count}} registro",
+    "records_other": "hasta {{count}} registros"
   }
 }

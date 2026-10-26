@@ -34,12 +34,10 @@ export function ProtocolSelect({ id, className, value, onChange }: { id?: string
   return <Select id={id} className={className} label={t("environmentForm.protocol")} value={value} options={protocolOptions.map((option) => ({ ...option, label: t(option.label) }))} onChange={onChange} />;
 }
 
-export function ConnectionFields({ idPrefix, values, change, editing, autoFocus, databases, loadDatabases, children }: {
+function ConnectionFields({ idPrefix, values, change, autoFocus, databases, loadDatabases, children }: {
   idPrefix: string;
   values: ConnectionValues;
   change: (values: ConnectionValues) => void;
-  /** An empty credential preserves the saved value when editing. */
-  editing: boolean;
   autoFocus?: boolean;
   /** Databases the server lists; `null` once it refused to list them. */
   databases: string[] | null;
@@ -72,7 +70,7 @@ export function ConnectionFields({ idPrefix, values, change, editing, autoFocus,
     </>)}
     {section(t("environmentForm.accessTitle"), <>
         <label className="field"><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
-        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required={!editing} autoComplete="new-password" value={values.secret} placeholder={editing ? t("environmentForm.unchanged") : undefined} onChange={set("secret")} /></label>
+        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required autoComplete="new-password" value={values.secret} onChange={set("secret")} /></label>
     </>)}
     {section(t("environmentForm.identityTitle"), <>
         <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
@@ -142,19 +140,25 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     ipc.databases(url).then((names) => { if (latestUrl.current === url) setDatabases(names); }, () => { if (latestUrl.current === url) setDatabases(null); });
   }
   const canTest = !!(values.url.trim() && values.database.trim() && values.login.trim() && values.secret);
+  // What a test result is about: one that ends after an edit describes values no longer in the form and is dropped.
+  const tested = JSON.stringify([{ ...draft(), name: "" }, proxyChoice(proxy)]);
+  const latestTested = useRef(tested);
+  latestTested.current = tested;
   async function testConnection() {
     setError("");
     setTest(null);
     const invalidUrl = urlError(values.url);
     if (invalidUrl) { setError(invalidUrl); return; }
     setTesting(true);
+    const asked = tested;
     // The name is irrelevant to the connection, but the draft requires one.
     try {
       const report = await ipc.checkDraft({ ...draft(), name: draft().name || "draft" }, proxyChoice(proxy));
+      if (latestTested.current !== asked) return;
       setTest(report);
       if (report.status === "ok") loadDatabases();
     }
-    catch (reason) { setError(normalizeAppError(reason)); }
+    catch (reason) { if (latestTested.current === asked) setError(normalizeAppError(reason)); }
     finally { setTesting(false); }
   }
 
@@ -174,7 +178,7 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
       <h2 id="create-environment-title" className="grow">{t("environmentForm.createTitle")}</h2>
     </header>
     <fieldset disabled={busy} className="form-sections">
-      <ConnectionFields idPrefix="environment" values={values} change={change} editing={false} autoFocus databases={databases} loadDatabases={loadDatabases}>
+      <ConnectionFields idPrefix="environment" values={values} change={change} autoFocus databases={databases} loadDatabases={loadDatabases}>
         <div className="field"><span id="environment-proxy-label">{t("proxy.title")}</span>
           {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span className="hint">…</span>}</div>
         <div className="field span-2"><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>

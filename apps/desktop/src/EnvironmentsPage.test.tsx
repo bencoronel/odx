@@ -2,13 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, it, vi } from "vitest";
 import EnvironmentsPage from "./EnvironmentsPage";
 import { ipc, type Environment } from "./ipc";
-vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined) } }));
+import { envFixture } from "./test/fixtures";
+vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined), rules: vi.fn().mockResolvedValue([]), deleteRule: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("./HealthChip", () => ({ HealthChip: () => null, HealthDot: () => null, checkHealth: vi.fn(), forgetHealth: vi.fn() }));
 afterEach(() => {
   cleanup();
   for (const key of ["connection", "context", "headers"]) localStorage.removeItem(`odx.collapsed.${key}`);
 });
-const env: Environment = { id: "fixture", name: "Fixture", url: "https://example.test", database: "fixture-db", login: "fixture-user", protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [] };
+const env = envFixture();
 function page() {
   return <EnvironmentsPage refresh={vi.fn().mockResolvedValue(undefined)} envs={[env]} busy={false} creating={false} setCreating={vi.fn()} save={vi.fn()} update={vi.fn()} remove={vi.fn()} clone={vi.fn()} openShell={vi.fn()} changeMode={vi.fn()} />;
 }
@@ -399,12 +400,12 @@ it("keeps quick tag edits and treats tags differing in case as one", async () =>
   const a: Environment = { ...env, id: "a", name: "Alpha", tags: ["Prod", "x", "y"] };
   const b: Environment = { ...env, id: "b", name: "Beta", tags: ["prod"] };
   vi.mocked(ipc.setTags).mockClear();
-  // Saves never finish, so props keep the old tags.
-  vi.mocked(ipc.setTags).mockReturnValue(new Promise(() => {}));
+  // Props keep the old tags (nothing refreshes them); saves go out one at a time, in order.
+  vi.mocked(ipc.setTags).mockResolvedValue(undefined as never);
   render(withProps({ envs: [a, b] }));
   fireEvent.click(screen.getByRole("button", { name: "Remove tag x" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove tag y" }));
-  expect(vi.mocked(ipc.setTags).mock.calls.at(-1)).toEqual(["a", ["Prod"]]);
+  await waitFor(() => expect(vi.mocked(ipc.setTags).mock.calls).toEqual([["a", ["Prod", "y"]], ["a", ["Prod"]]]));
   fireEvent.click(screen.getByRole("button", { name: "Filters" }));
   const box = screen.getByRole("checkbox", { name: /Prod/ });
   expect(box.closest("label")!.textContent).toBe("Prod2");
@@ -468,4 +469,35 @@ it("acts on the focused environment with Delete, F2 and Ctrl+D", async () => {
 it("creating the first environment leaves the list empty instead of saying nothing matches", () => {
   render(withProps({ envs: [], creating: true }));
   expect(screen.queryByText("No matches")).toBeNull();
+});
+
+it("edits a rule from the environment, keeping its target, id and current expiry", async () => {
+  const { ipc } = await import("./ipc");
+  const expires = new Date(Date.now() + 86_400_000).toISOString();
+  const rule = { id: "r1", environment_id: "fixture", model: "res.partner", method: "write", kind: "fields", fields: ["name"], context: { lang: "es_ES" },
+    max_records: 5, expires_at: expires, revision: 1, created_at: "2026-10-01T00:00:00Z", expired: false };
+  vi.mocked(ipc.rules).mockResolvedValue([rule] as never);
+  const save = vi.fn().mockResolvedValue({});
+  Object.assign(ipc, { saveRule: save });
+  render(page());
+  fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
+  fireEvent.change(screen.getByRole("textbox", { name: /^Fields/ }), { target: { value: "name email" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith({ id: "r1", environment_id: "fixture", model: "res.partner", method: "write", kind: "fields",
+    fields: ["name", "email"], values: undefined, context: { lang: "es_ES" }, max_records: 5, expires_at: expires }));
+});
+
+it("never turns an expired rule permanent on edit: it starts with a 24 h expiry", async () => {
+  const rule = { id: "r2", environment_id: "fixture", model: "res.partner", method: "write", kind: "method", context: {},
+    max_records: 1, expires_at: "2026-01-01T00:00:00Z", revision: 1, created_at: "2025-12-01T00:00:00Z", expired: true };
+  vi.mocked(ipc.rules).mockResolvedValue([rule] as never);
+  const save = vi.fn().mockResolvedValue({});
+  Object.assign(ipc, { saveRule: save });
+  render(page());
+  fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  const expires = Date.parse(save.mock.lastCall![0].expires_at);
+  expect(expires - Date.now()).toBeGreaterThan(23 * 3_600_000);
+  expect(expires - Date.now()).toBeLessThanOrEqual(24 * 3_600_000);
 });

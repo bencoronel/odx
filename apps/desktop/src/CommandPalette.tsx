@@ -6,6 +6,7 @@ import { PAGE_ORDER, pages, shortcut, type Page } from "./Sidebar";
 import type { Environment } from "./ipc";
 import { modeTone } from "./ModeSelect";
 import { hostOf } from "./hosts";
+import { modalOpen } from "./modal";
 
 type Group = "pages" | "environments" | "actions";
 /** `env` rows show the server and offer the Terminal as a second action (Ctrl+Enter). */
@@ -28,7 +29,8 @@ export default function CommandPalette({ open, setOpen, envs, setPage, showEnvir
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "k") return;
-      if (document.querySelector('[role="alertdialog"]')) return;
+      // Ctrl+K closes the palette itself; it opens only when nothing modal is up.
+      if (!open && modalOpen()) return;
       event.preventDefault();
       setOpen(!open);
     };

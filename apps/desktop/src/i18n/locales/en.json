@@ -13,7 +13,6 @@
     "copiedToClipboard": "Copied to clipboard",
     "copyError": "Could not copy to the clipboard. Try again.",
     "dismissError": "Dismiss error",
-    "done": "Done",
     "environment": "Environment",
     "database": "Database",
     "url": "URL",
@@ -25,10 +24,6 @@
     "collapse": "Collapse",
     "inThisEnvironment": " in this environment",
     "deletedClient": "Deleted client",
-    "connections_one": "{{count}} connection",
-    "connections_other": "{{count}} connections",
-    "pendingApprovals_one": "{{count}} pending approval",
-    "pendingApprovals_other": "{{count}} pending approvals",
     "visible": "Visible",
     "hidden": "Hidden",
     "enabled": "Enabled",
@@ -176,7 +171,6 @@
     "errors": {
       "headerName": "Enter a header name before saving.",
       "contextKey": "Enter a context key before saving.",
-      "contextJson": "Context value must be valid JSON.",
       "contextJsonInvalid": "Context value must be valid JSON."
     },
     "hidden_one": "Hidden ({{count}})",
@@ -225,11 +219,6 @@
     "onlyInherited": "Global values only"
   },
   "environmentForm": {
-    "errors": {
-      "contextJson": "Context must be a valid JSON object.",
-      "contextObject": "Context must be a JSON object, for example: {\"lang\":\"en_US\"}.",
-      "url": "Enter an HTTP or HTTPS URL without credentials, query parameters or fragments."
-    },
     "protocol": "Protocol",
     "protocols": {
       "auto": "Automatic",
@@ -243,12 +232,9 @@
     "odooUrl": "Odoo URL",
     "user": "User",
     "apiKey": "API key or password",
-    "unchanged": "Unchanged",
     "createTitle": "New environment",
     "createAction": "Create environment",
     "connection": "Connection",
-    "context": "Context",
-    "environmentContext": "Environment context",
     "credential": "Credential",
     "keepSecretPlaceholder": "Leave blank to keep the saved credential.",
     "newTargetSecretPlaceholder": "API key required for the new URL, database or user",
@@ -315,7 +301,7 @@
       "exportedFile": "32 MiB per file; 4,096 files total",
       "wait": "60 s by default / 600 s maximum; poll interval at least 3 s",
       "activity": "100 events per page; encrypted database keeps at most 80,000 occupied pages and is capped at 384 MiB",
-      "auditQueue": "128 events; details up to 16 KiB per event"
+      "auditQueue": "128 events; details up to 80 KiB per event"
     },
     "limitsTab": "Limits",
     "execution": {
@@ -440,11 +426,8 @@
     "updated": "Password updated. Use it the next time you unlock the vault."
   },
   "clients": {
-    "revoke": "Revoke",
     "revokeError": "Could not revoke the client.",
     "allEnvironments": "All, including new ones",
-    "noEnvironments": "No environments",
-    "name": "Name",
     "environments": "Environments",
     "environmentScope": "Environment scope",
     "selectedEnvironments": "Selected only",
@@ -474,7 +457,15 @@
     "outdated": "{{agent}} runs Odx from another path.",
     "detected": "{{agent}} is installed on this computer.",
     "add": "Add",
-    "update": "Update"
+    "update": "Update",
+    "connections": "Open connections",
+    "unknownAgent": "Unknown agent",
+    "calls_one": "{{count}} call",
+    "calls_other": "{{count}} calls",
+    "since": "since {{time}}",
+    "disconnect": "Disconnect",
+    "disconnecting": "Disconnecting…",
+    "disconnectHint": "Closes that session's connector. The agent can reconnect with /mcp."
   },
   "proxy": {
     "errors": {
@@ -647,7 +638,6 @@
     "writes": "Writes",
     "errors": "Errors",
     "refresh": "Refresh activity",
-    "incompleteHistory": "Part of the history could not be read (interrupted session or damaged segment). Showing recoverable records.",
     "emptyTitle": "No activity",
     "noMatches": "No events match the filters.",
     "filterBy": "Filter by {{name}}",
@@ -667,7 +657,14 @@
     "newEvents_other": "{{count}} new events",
     "today": "Today",
     "yesterday": "Yesterday",
-    "replay": "Repeat in Terminal"
+    "replay": "Repeat in Terminal",
+    "client": "Client",
+    "allClients": "All clients",
+    "period": "Period",
+    "anyTime": "Any time",
+    "lastHour": "Last hour",
+    "lastWeek": "Last 7 days",
+    "openTable": "Open as table"
   },
   "shell": {
     "initial": "Odx Terminal · \\? for help",
@@ -717,7 +714,6 @@
       "date": "date",
       "command": "command"
     },
-    "uncertainResult": "Uncertain result: Odoo may have applied the write. It was not retried; check the state before trying again.",
     "fields": "fields",
     "field": "field",
     "relationship": "relation",
@@ -780,6 +776,7 @@
       "contextObject": "Context must be an object, e.g. {'lang': 'en_US'}",
       "fieldsUsage": "Usage: \\d <model> [filter] [--names name,email]",
       "technicalNames": "names: 1 to 1,000 unique technical names",
+      "repeatedOption": "Option {{option}} is given twice",
       "unexpectedArgument": "Unexpected argument: {{argument}} (did you mean -d or -f?)",
       "missingValues": "Missing values, e.g. {'name': 'Ada'}",
       "invalidMethod": "Missing a valid public method",
@@ -879,6 +876,7 @@
     "copyCommand": "Copy command",
     "fold": "Fold output",
     "unfold": "Unfold output",
+    "showAllRows": "Showing {{shown}} of {{count}} rows · show all",
     "linesHidden_one": "{{count}} line hidden",
     "linesHidden_other": "{{count}} lines hidden",
     "copiedAs": "Copied as {{format}}",
@@ -1093,7 +1091,16 @@
   },
   "desktop": {
     "trayUnavailable": "System tray unavailable. Closing the window locks the vault and stops Odx.",
-    "notificationsUnavailable": "Desktop notifications are unavailable. New requests appear only in Approvals and the status bar."
+    "notificationsUnavailable": "Desktop notifications are unavailable. New requests appear only in Approvals and the status bar.",
+    "open": "Open",
+    "lock": "Lock",
+    "quit": "Quit",
+    "aClient": "A client",
+    "pendingApproval": "Pending approval",
+    "pendingApprovals": "Pending approvals",
+    "request": "{{who}} requests {{method}} on {{model}} · {{environment}}",
+    "moreOne": "1 more approval is pending",
+    "moreOther": "{{n}} more approvals are pending"
   },
   "updates": {
     "title": "Updates",
@@ -1145,5 +1152,42 @@
     "records": "Records",
     "columns": "Columns",
     "findColumn": "Find a field"
+  },
+  "rules": {
+    "title": "Auto-approval rules",
+    "create": "Create rule",
+    "createTitle": "Auto-approve {{method}} on {{model}}",
+    "createDescription": "From now on, matching requests in {{environment}} are approved without asking, from any agent. Rules only apply in approval mode; unlink always asks.",
+    "kind": "Condition",
+    "kinds": {
+      "method": "Any arguments",
+      "fields": "Only these fields",
+      "values": "Exactly these values"
+    },
+    "fields": "Fields",
+    "fieldsHint": "Separated by commas or spaces. Relational commands always ask.",
+    "values": "Values (JSON)",
+    "valuesInvalid": "Must be a JSON object.",
+    "maxRecords": "Max records per call",
+    "expires": "Expires",
+    "expiry": {
+      "never": "Never",
+      "hour": "In 1 hour",
+      "day": "In 24 hours",
+      "week": "In 7 days",
+      "month": "In 30 days"
+    },
+    "context": "Context (must match exactly)",
+    "approveToo": "Also approve this request",
+    "onlyApproval": "Rules only apply in approval mode.",
+    "empty": "No rules. Create one from a pending approval.",
+    "expired": "Expired",
+    "until": "Until {{time}}",
+    "delete": "Delete rule",
+    "edit": "Edit rule",
+    "editTitle": "Edit rule: {{method}} on {{model}}",
+    "editDescription": "Changes apply to new requests; calls authorized by the previous version and not yet sent are not sent.",
+    "records_one": "up to {{count}} record",
+    "records_other": "up to {{count}} records"
   }
 }

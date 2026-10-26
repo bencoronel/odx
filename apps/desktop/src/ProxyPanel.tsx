@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ApprovalDialog } from "@/components/ui/approval-dialog";
+import { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon } from "./Icon";
 import Select from "./Select";
 import { ipc, type Environment, type ProxiesView, type ProxyInput, type ProxyTest, type ProxyView } from "./ipc";
@@ -12,11 +12,11 @@ export const PROXY_MASK = "••••••••••••";
 
 export type ProxyKind = "http" | "https" | "socks5h";
 export type ProxyDraft = { kind: ProxyKind; host: string; port: string; username: string; password: string };
-export const proxyKindLabels: Record<ProxyKind, string> = { http: "HTTP", https: "HTTPS", socks5h: "SOCKS5" };
+const proxyKindLabels: Record<ProxyKind, string> = { http: "HTTP", https: "HTTPS", socks5h: "SOCKS5" };
 const proxyKindOptions = (Object.keys(proxyKindLabels) as ProxyKind[]).map((kind) => ({ value: kind, label: proxyKindLabels[kind] }));
 const defaultPorts: Record<ProxyKind, string> = { http: "3128", https: "3128", socks5h: "1080" };
 
-export const emptyProxy = (kind: ProxyKind = "http"): ProxyDraft => ({ kind, host: "", port: defaultPorts[kind], username: "", password: "" });
+const emptyProxy = (kind: ProxyKind = "http"): ProxyDraft => ({ kind, host: "", port: defaultPorts[kind], username: "", password: "" });
 
 /** The backend normalizes URLs to `scheme://host:port`. */
 export function draftFromView(view: Omit<ProxyInput, "name">): ProxyDraft {
@@ -42,7 +42,7 @@ export function proxyError(draft: ProxyDraft): ErrorState | null {
 }
 
 /** Saved proxy credentials arrive as placeholders and remain hidden. */
-export function ProxyFields({ idPrefix, value, change, error }: { idPrefix: string; value: ProxyDraft; change: (draft: ProxyDraft) => void;
+function ProxyFields({ idPrefix, value, change, error }: { idPrefix: string; value: ProxyDraft; change: (draft: ProxyDraft) => void;
   /** Shown by the caller in an element with id `${idPrefix}-error`; marks the field it refers to. */
   error?: ErrorState | null }) {
   const { t } = useTranslation();
@@ -65,13 +65,13 @@ export function ProxyFields({ idPrefix, value, change, error }: { idPrefix: stri
   </div>;
 }
 
-export function ProxyKindSelect({ id, value, change, className }: { id: string; value: ProxyKind; change: (kind: ProxyKind) => void; className?: string }) {
+function ProxyKindSelect({ id, value, change, className }: { id: string; value: ProxyKind; change: (kind: ProxyKind) => void; className?: string }) {
   const { t } = useTranslation();
   return <Select id={id} className={className} label={t("proxy.kind")} value={value} options={proxyKindOptions} onChange={change} />;
 }
 
 /** Preserve host and credentials; update the port only if it was the default. */
-export function withKind(draft: ProxyDraft, kind: ProxyKind): ProxyDraft {
+function withKind(draft: ProxyDraft, kind: ProxyKind): ProxyDraft {
   return { ...draft, kind, port: draft.port === defaultPorts[draft.kind] ? defaultPorts[kind] : draft.port };
 }
 
@@ -86,12 +86,17 @@ function ProxyTester({ id, draft, invalid }: { id: string | null; draft: ProxyDr
   const [state, setState] = useState<TestState | null>(null);
   useEffect(() => { ipc.environments().then((list) => { setEnvs(list); setTarget((current) => current || list[0]?.id || ""); }, () => setEnvs([])); }, []);
   // Any edit makes the last result stale.
-  useEffect(() => setState(null), [draft]);
+  useEffect(() => setState(null), [draft, target]);
+  const latest = useRef("");
   if (!envs?.length) return envs ? <p className="hint">{t("proxy.testNeedsEnvironment")}</p> : null;
   const url = envs.find((env) => env.id === target)?.url ?? envs[0].url;
+  latest.current = JSON.stringify([draft, url]);
   const run = () => {
     setState({ running: true });
-    ipc.testProxy(id, { name: "", ...proxyInput(draft) }, url).then((result) => setState({ result }), (e) => setState({ error: normalizeAppError(e) }));
+    // A result for a proxy or target edited since is dropped (the edit already cleared the state).
+    const asked = JSON.stringify([draft, url]);
+    const current = () => latest.current === asked;
+    ipc.testProxy(id, { name: "", ...proxyInput(draft) }, url).then((result) => { if (current()) setState({ result }); }, (e) => { if (current()) setState({ error: normalizeAppError(e) }); });
   };
   return <div className="proxy-test">
     <span className="row gap-2">
@@ -190,13 +195,13 @@ export default function ProxyPanel({ pendingCount = 0, onSaved }: { pendingCount
     })}</ul>}
     {editing?.id === null && editor}
     {error && <div className="panel-body"><p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
-    <ApprovalDialog open={confirm !== null} busy={saving} tone="warn"
+    <ConfirmDialog open={confirm !== null} busy={saving} tone="warn"
       title={t("proxy.saveTitle")}
       description={t("proxy.pendingWarning", { count: pendingCount })}
       confirmLabel={t("settingsTable.saveAndRevoke")}
       onOpenChange={(open) => { if (!open && !saving) setConfirm(null); }}
       onConfirm={async () => { if (confirm) await confirm(); setConfirm(null); }} />
-    <ApprovalDialog open={deleting !== null} busy={saving} destructive
+    <ConfirmDialog open={deleting !== null} busy={saving} destructive
       title={t("proxy.deleteTitle")}
       description={deleting ? `${t("proxy.deleteWarning", { name: deleting.name })}${view.default === deleting.id ? ` ${t("proxy.deleteDefaultWarning")}` : ""}` : ""}
       confirmLabel={t("common.delete")}

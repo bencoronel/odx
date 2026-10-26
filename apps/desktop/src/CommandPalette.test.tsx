@@ -3,11 +3,12 @@ import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import CommandPalette from "./CommandPalette";
 import type { Environment } from "./ipc";
+import { envFixture } from "./test/fixtures";
 
 afterEach(cleanup);
-const envs: Environment[] = [
-  { id: "p", name: "Production", url: "https://erp.example.test", database: "prod", login: "fixture", protocol: "json2", context: {}, write_mode: "read_only", has_secret: true, tags: ["customer"] },
-  { id: "s", name: "Staging", url: "https://staging.test", database: "stage", login: "fixture", protocol: "json2", context: {}, write_mode: "approval", has_secret: true, tags: [] },
+const envs = [
+  envFixture({ id: "p", name: "Production", url: "https://erp.example.test", database: "prod", login: "fixture", protocol: "json2", tags: ["customer"] }),
+  envFixture({ id: "s", name: "Staging", url: "https://staging.test", database: "stage", login: "fixture", protocol: "json2", write_mode: "approval" }),
 ];
 
 function Harness(props: { setPage: () => void; showEnvironment: () => void; openShell: (env: Environment) => void; lock: () => void }) {

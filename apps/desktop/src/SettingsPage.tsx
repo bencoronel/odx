@@ -5,16 +5,15 @@ import PasswordPage from "./PasswordPage";
 import { LanguageSelect } from "./LanguageSelector";
 import { UpdatesPanel } from "./Updates";
 import PanelTitle, { useCollapsed } from "./PanelTitle";
-import { ApprovalDialog } from "@/components/ui/approval-dialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon, type IconName } from "./Icon";
 import { ipc, type Settings, type SettingsView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
-import { usePreventUnload } from "./windowState";
+import { usePreventUnload, type Theme } from "./windowState";
 import { loadEnvironmentDefaults, saveEnvironmentDefaults, type EnvironmentDefaults } from "./EnvironmentForm";
 
-export type Theme = "light" | "dark" | "system";
 
 function ThemeSelector({ theme, change }: { theme: Theme; change: (theme: Theme) => void }) {
   const { t } = useTranslation();
@@ -124,7 +123,7 @@ type SettingsMessage = { key: "settingsPage.saved" } | { error: AppError };
 type Draft = Record<keyof Settings, string>;
 const toDraft = (s: Settings) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, String(v)])) as Draft;
 
-export function fieldError(view: SettingsView, draft: Draft, key: keyof Settings): string {
+function fieldError(view: SettingsView, draft: Draft, key: keyof Settings): string {
   const value = Number(draft[key]);
   const { min, max } = view.bounds[key];
   if (draft[key].trim() === "" || !Number.isSafeInteger(value) || value < min || value > max) return i18n.t("settingsPage.rangeError", { min, max });
@@ -211,7 +210,7 @@ function LimitsPanel() {
       <button type="button" className="btn sm" disabled={saving || !dirty} onClick={() => { setDraft(toDraft(view.settings)); setMessage(null); }}>{t("common.discard")}</button>
       <button type="submit" className="btn sm primary" disabled={saving || !valid || !changed}>{saving ? t("common.saving") : t("common.save")}</button>
     </div>}
-    <ApprovalDialog
+    <ConfirmDialog
       open={confirming}
       busy={saving}
       destructive

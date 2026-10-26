@@ -1,13 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ApprovalDialog } from "./approval-dialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 
-describe("ApprovalDialog", () => {
+describe("ConfirmDialog", () => {
   it("requires an explicit confirmation and displays the reviewed call", async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
     render(
-      <ApprovalDialog
+      <ConfirmDialog
         open
         busy={false}
         title="Confirm sending to Odoo"

@@ -3,8 +3,7 @@ import { lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ipc, type AgentRequest, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
-import { ApprovalDialog } from "@/components/ui/approval-dialog";
-import type { Theme } from "./SettingsPage";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { flushShellSessions } from "./shellFlush";
 import CommandPalette from "./CommandPalette";
 import UnlockScreen from "./UnlockScreen";
@@ -20,7 +19,8 @@ import ServiceStatusBar from "./ServiceStatus";
 import DesktopNotices from "./DesktopNotices";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
-import { discardRestoredWindowState, hasWindowState, useWindowState, usePreventUnload, useWindowLifecycle } from "./windowState";
+import { discardRestoredWindowState, hasWindowState, storedTheme, useWindowState, usePreventUnload, useWindowLifecycle, type Theme } from "./windowState";
+import { modalOpen } from "./modal";
 
 // Secondary pages load on first visit; Environments, the default page, stays in the main chunk.
 const SettingsPage = lazy(() => import("./SettingsPage"));
@@ -38,18 +38,11 @@ function initialPage(): Page {
   return "environments";
 }
 
-function initialTheme(): Theme {
-  try {
-    const stored = localStorage.getItem("odx.theme");
-    if (stored === "light" || stored === "dark" || stored === "system") return stored;
-  } catch { /* Preferences are optional when storage is unavailable. */ }
-  return "system";
-}
 const lightQuery = () => window.matchMedia?.("(prefers-color-scheme: light)");
 
 export default function App() {
   const { t, i18n } = useTranslation();
-  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const [theme, setTheme] = useState<Theme>(storedTheme);
   const [systemLight, setSystemLight] = useState(() => !!lightQuery()?.matches);
   // "System" follows the OS live.
   useEffect(() => {
@@ -76,7 +69,7 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
       // Not behind the palette or a confirmation.
-      if (document.querySelector('[role="dialog"],[role="alertdialog"]')) return;
+      if (modalOpen()) return;
       const target = PAGE_ORDER[Number(event.key) - 1];
       if (!target) return;
       event.preventDefault();
@@ -98,7 +91,14 @@ export default function App() {
   const [approvalFocus, setApprovalFocus] = useState<string | null>(null);
 
   // Tray and notifications are drawn by Rust; keep them in the window's language.
-  useEffect(() => { void invoke("desktop_set_language", { language: i18n.resolvedLanguage }).catch(() => undefined); }, [i18n.resolvedLanguage]);
+  // Tray and notification texts the desktop shell shows itself; it fills in the {…} parts.
+  useEffect(() => {
+    const texts = { open: t("desktop.open"), lock: t("desktop.lock"), quit: t("desktop.quit"), aClient: t("desktop.aClient"),
+      pendingApproval: t("desktop.pendingApproval"), pendingApprovals: t("desktop.pendingApprovals"),
+      request: t("desktop.request", { who: "{who}", method: "{method}", model: "{model}", environment: "{environment}" }),
+      moreOne: t("desktop.moreOne"), moreOther: t("desktop.moreOther", { n: "{n}" }) };
+    void invoke("desktop_set_texts", { texts }).catch(() => undefined);
+  }, [i18n.resolvedLanguage, t]);
 
   // A clicked approval notification opens that request, also when it recreated the window.
   useEffect(() => {
@@ -281,7 +281,7 @@ export default function App() {
   }
 
 
-  return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="shell">
+  return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="app-frame">
     <Sidebar page={page} setPage={setPage} busy={busy} lock={lock} openPalette={() => setPaletteOpen(true)}
       counts={{ environments: envs.length, approvals: pending.length }} />
     <main className="main" id="main-content" aria-busy={busy}>
@@ -343,7 +343,7 @@ export default function App() {
     <CommandPalette open={paletteOpen} setOpen={setPaletteOpen} envs={envs} setPage={setPage} lock={lock}
       showEnvironment={(env) => { setEnvironmentFocus(env.id); setPage("environments"); }}
       openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }} />
-    <ApprovalDialog
+    <ConfirmDialog
       open={modeDecision !== null}
       busy={busy}
       tone={modeDecision?.mode === "permanent" ? "danger" : "warn"}
@@ -371,8 +371,8 @@ export default function App() {
         </div>
       </label>}
       <p className="banner info compact"><Icon name="shield" />{t("app.writeMode.warning")}</p>
-    </ApprovalDialog>
-    <ApprovalDialog
+    </ConfirmDialog>
+    <ConfirmDialog
       open={decision !== null}
       busy={false}
       tone={decision?.approve && !decision.approvals.some((a) => a.method === "unlink") ? "warn" : "danger"}
@@ -396,7 +396,7 @@ export default function App() {
       {decision?.approve === false && <label className="field"><span>{t("approvals.reasonLabel")}</span>
         <input ref={batchReasonInput} value={batchReason} maxLength={500} placeholder={t("approvals.batchReasonPlaceholder")} onChange={(event) => setBatchReason(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void decideAll(decision.approvals, false, batchReason); setDecision(null); } }} /></label>}
-    </ApprovalDialog>
+    </ConfirmDialog>
     {notice && <div className="toast" role="status"><Icon name="check" /><span>{notice.text}</span>
       {notice.activity && <button type="button" className="btn ghost sm" onClick={() => { setNotice(null); setPage("activity"); }}>{t("approvals.viewActivity")}</button>}
       <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={() => setNotice(null)}><Icon name="x" /></button>

@@ -4,13 +4,15 @@ import HeaderInput, { headerNames, headerValues, reservedHeaderNames } from "./H
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ipc, type HeaderEntry, type ContextEntry } from "./ipc";
 import { Icon } from "./Icon";
-import { ApprovalDialog } from "@/components/ui/approval-dialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { preventUnloadUntil, usePreventUnload } from "./windowState";
 
 /** Returning the backend placeholder preserves sensitive header values. */
 export const HEADER_MASK = "••••••••••••";
+/** Headers whose values the core shows back (headers.rs VISIBLE); any other value is a secret and stays dotted while typed. */
+const VISIBLE_HEADERS = ["accept", "accept-language", "cache-control", "user-agent", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-request-id"];
 
 const emptyHeader = (): HeaderEntry => ({ name: "", value: "", enabled: true });
 const defaults: HeaderEntry[] = [
@@ -122,7 +124,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
         : t("settingsTable.onlyInherited")}</span>}
       {saveStatus && <span className="hint" role="status">{t(saveStatus as never)}</span>}
     </header>
-    <ApprovalDialog open={confirm !== null} busy={false} tone="warn"
+    <ConfirmDialog open={confirm !== null} busy={false} tone="warn"
       title={headerMode ? t("settingsTable.saveHeaders") : t("settingsTable.saveContext")}
       description={t("settingsTable.pendingWarning", { count: pendingCount, scope: environmentId ? t("common.inThisEnvironment") : "" })}
       confirmLabel={t("settingsTable.saveAndRevoke")}
@@ -153,7 +155,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
             return <tr key={index} ref={blank ? newRow : undefined} className={blank ? "headers-new-row" : undefined}>
               <td>{!blank && <input type="checkbox" aria-label={t(headerMode ? "settingsTable.enableHeader" : "settingsTable.enableContext", { index: index + 1 })} checked={h.enabled} onChange={(e) => save(change(index, { enabled: e.target.checked }))} />}</td>
               <td><HeaderInput className="inline-input mono" aria-label={blank ? (headerMode ? t("settingsTable.newHeaderName") : t("settingsTable.newContextKey")) : t(headerMode ? "settingsTable.headerName" : "settingsTable.contextKey", { index: index + 1 })} value={h.name} required={!blank && h.value !== ""} placeholder={blank ? t("settingsTable.key") : undefined} spellCheck={false} suggestions={suggestions} caseSensitive={!headerMode} disabledSuggestions={headerMode ? reservedHeaderNames : []} onBlur={() => save(displayed)} onChange={(name) => change(index, { name })} /></td>
-              <td><HeaderInput className={`inline-input mono ${headerMode && h.value === HEADER_MASK ? "secret-mask" : ""}`} aria-label={blank ? (headerMode ? t("settingsTable.newHeaderValue") : t("settingsTable.newContextValue")) : t(headerMode ? "settingsTable.headerValue" : "settingsTable.contextValue", { index: index + 1 })} value={h.value} placeholder={blank ? t("settingsTable.value") : undefined} data-tip={headerMode ? (h.value === HEADER_MASK ? t("settingsTable.savedSecret") : undefined) : t("settingsTable.contextValueHelp")} spellCheck={false} suggestions={headerMode ? headerValues.get(h.name.toLowerCase()) ?? [] : []} onBlur={() => save(displayed)} onChange={(value) => change(index, { value: headerMode && h.value === HEADER_MASK ? value.replaceAll("•", "") : value, enabled: true })} /></td>
+              <td><HeaderInput className={`inline-input mono ${headerMode && h.value === HEADER_MASK ? "secret-mask" : ""} ${headerMode && h.name.trim() && !VISIBLE_HEADERS.includes(h.name.trim().toLowerCase()) ? "secret-input" : ""}`} aria-label={blank ? (headerMode ? t("settingsTable.newHeaderValue") : t("settingsTable.newContextValue")) : t(headerMode ? "settingsTable.headerValue" : "settingsTable.contextValue", { index: index + 1 })} value={h.value} placeholder={blank ? t("settingsTable.value") : undefined} data-tip={headerMode ? (h.value === HEADER_MASK ? t("settingsTable.savedSecret") : undefined) : t("settingsTable.contextValueHelp")} spellCheck={false} suggestions={headerMode ? headerValues.get(h.name.toLowerCase()) ?? [] : []} onBlur={() => save(displayed)} onChange={(value) => change(index, { value: headerMode && h.value === HEADER_MASK ? value.replaceAll("•", "") : value, enabled: true })} /></td>
               <td>{!blank && <button type="button" className="icon-btn sm" aria-label={t(headerMode ? "settingsTable.deleteHeader" : "settingsTable.deleteContext", { index: index + 1 })} onClick={() => { const next = displayed.filter((_, i) => i !== index); version.current += 1; setRows(next); save(next); }}><Icon name="trash" /></button>}</td>
             </tr>;
           })}

@@ -1,14 +1,24 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { getName } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import odxIcon from "../src-tauri/icons/icon.png";
+import icon from "../src-tauri/icons/icon.png";
+import devIcon from "../src-tauri/icons/icon-dev.png";
 
 const appWindow = getCurrentWindow();
 
+/** The app's name from Tauri: "Odx", or "Odx Dev" for a development build, which runs beside a release app
+ * and must look different (name and icon). */
+function useAppName() {
+  const [name, setName] = useState("Odx");
+  useEffect(() => { void getName().then(setName, () => undefined); }, []);
+  return name;
+}
+
 const resizeDirections = ["North", "South", "East", "West", "NorthEast", "NorthWest", "SouthEast", "SouthWest"] as const;
 
-/** Rounded corners and the border only make sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
+/** The border only makes sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
 function useFilledWindow() {
   useEffect(() => {
     let active = true;
@@ -29,13 +39,13 @@ function useFilledWindow() {
 }
 
 let revealed = false;
-/** The window starts hidden so a transparent, unpainted WebView never shows as a black box; reveal it once after the first paint. */
+/** The window starts hidden so an unpainted WebView never shows as an empty box; reveal it once after the first paint. */
 function useRevealWindow() {
   useEffect(() => {
     if (revealed) return;
     revealed = true;
-    // KWin on Wayland ignores setFocus from apps; window_present asks KWin itself.
-    void appWindow.show().then(() => appWindow.setFocus()).then(() => invoke("window_present")).catch(() => undefined);
+    // window_present shows, maximizes a window restored maximized, and asks KWin on Wayland for focus, which it refuses apps.
+    void invoke("window_present").catch(() => appWindow.show()).catch(() => undefined);
   }, []);
 }
 
@@ -83,6 +93,7 @@ function WindowResizeHandles() {
 
 /** `title`: what this window shows, after the ODX mark (table windows). */
 export function WindowTitleBar({ children, title }: { children?: ReactNode; title?: string }) {
+  const name = useAppName();
   const { t } = useTranslation();
   useFilledWindow();
   useRevealWindow();
@@ -100,9 +111,9 @@ export function WindowTitleBar({ children, title }: { children?: ReactNode; titl
     }}
     onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button")) void appWindow.toggleMaximize(); }}
   >
-    <div className="window-title" aria-label="ODX">
-      <img className="window-mark" src={odxIcon} alt="" />
-      <span>ODX</span>
+    <div className="window-title" aria-label={name.toUpperCase()}>
+      <img className="window-mark" src={name === "Odx" ? icon : devIcon} alt="" />
+      <span>{name.toUpperCase()}</span>
       {title && <span className="window-subtitle">{title}</span>}
     </div>
     <div className="titlebar-tools">{children}</div>
