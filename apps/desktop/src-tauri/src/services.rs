@@ -269,13 +269,19 @@ mod tests {
     /// Desktop never starts HTTP, including after creating or unlocking the vault.
     #[test]
     fn api_stays_stopped_across_vault_lifecycle() {
-        tauri::async_runtime::block_on(async {
-            let dir = std::env::temp_dir().join(format!(
-                "odx-services-{}-{:?}",
-                std::process::id(),
-                std::time::SystemTime::now()
-            ));
-            std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "odx-services-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The global Tauri runtime outlives the test process's Rust cleanup. Own this runtime so
+        // unlock's blocking SQLCipher pruning finishes before native libraries exit or files are removed.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
             let core = Core::new(dir.join("vault.sqlite3")).unwrap();
             let services = Services::default();
             for action in ["absent", "create", "lock", "unlock"] {
@@ -292,7 +298,8 @@ mod tests {
             }
             core.lock().await;
             drop(core);
-            std::fs::remove_dir_all(&dir).unwrap();
         });
+        drop(runtime);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
