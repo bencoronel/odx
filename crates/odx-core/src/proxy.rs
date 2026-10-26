@@ -320,35 +320,64 @@ impl VaultData {
 }
 
 impl Environment {
-    /// Environment credentials, masked headers and effective proxy credentials to redact from errors and activity.
-    /// Values under MIN_REDACTED characters are left alone: they would redact unrelated text.
+    /// Values to redact from errors and activity, longest first.
     pub(crate) fn redaction_secrets(&self) -> Vec<&str> {
+        self.redactions()
+            .into_iter()
+            .map(|(value, _)| value)
+            .collect()
+    }
+    /// The flag restricts proxy usernames to whole words; credentials always match literally.
+    fn redactions(&self) -> Vec<(&str, bool)> {
         let proxy = match &self.proxy {
-            EnvironmentProxy::Custom(p) => vec![p.username.as_str(), p.password.as_str()],
+            EnvironmentProxy::Custom(p) => vec![p.password.as_str()],
             _ => vec![],
         };
-        let mut secrets: Vec<&str> = self
+        let mut secrets: Vec<(&str, bool)> = self
             .headers
             .iter()
             .filter(|h| crate::headers::is_sensitive(&h.name))
             .map(|h| h.value.as_str())
             .chain(std::iter::once(self.secret.as_str()))
             .chain(proxy)
-            .filter(|v| v.chars().count() >= MIN_REDACTED)
+            .filter(|v| !v.is_empty())
+            .map(|v| (v, false))
             .collect();
-        secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        if let EnvironmentProxy::Custom(p) = &self.proxy {
+            let username = p.username.as_str();
+            if username.chars().count() >= MIN_REDACTED_USERNAME {
+                secrets.push((username, username.chars().count() < WHOLE_WORD_BELOW));
+            }
+        }
+        secrets.sort_by_key(|(value, whole_word)| (std::cmp::Reverse(value.len()), *whole_word));
         secrets
     }
-    /// Replace every secret with [redacted]. Short ones only as whole words, so a password
-    /// "admin" leaves base.user_admin intact.
+    /// Replace credentials at any length, including inside other text. Scan the original text once so
+    /// short secrets cannot modify an inserted [redacted] marker or hide another match's boundary.
     pub(crate) fn redact(&self, text: &str) -> String {
-        let mut clean = text.to_owned();
-        for secret in self.redaction_secrets() {
-            clean = if secret.chars().count() < WHOLE_WORD_BELOW {
-                replace_word(&clean, secret)
+        let secrets = self.redactions();
+        let word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let mut clean = String::with_capacity(text.len());
+        let mut consumed = 0;
+        for (start, c) in text.char_indices() {
+            if start < consumed {
+                continue;
+            }
+            let found = secrets.iter().find(|(secret, whole_word)| {
+                text[start..].starts_with(secret)
+                    && (!whole_word
+                        || (!text[..start].chars().next_back().is_some_and(word_char)
+                            && !text[start + secret.len()..]
+                                .chars()
+                                .next()
+                                .is_some_and(word_char)))
+            });
+            if let Some((secret, _)) = found {
+                clean.push_str("[redacted]");
+                consumed = start + secret.len();
             } else {
-                clean.replace(secret, "[redacted]")
-            };
+                clean.push(c);
+            }
         }
         clean
     }
@@ -358,26 +387,8 @@ impl Environment {
 }
 
 /// Minimum proxy username length for literal redaction.
-const MIN_REDACTED: usize = 4;
+const MIN_REDACTED_USERNAME: usize = 4;
 const WHOLE_WORD_BELOW: usize = 8;
-
-fn replace_word(text: &str, word: &str) -> String {
-    let word_char = |c: char| c.is_alphanumeric() || c == '_';
-    let (mut out, mut last) = (String::with_capacity(text.len()), 0);
-    for (start, _) in text.match_indices(word) {
-        let end = start + word.len();
-        if text[..start].chars().next_back().is_some_and(word_char)
-            || text[end..].chars().next().is_some_and(word_char)
-        {
-            continue;
-        }
-        out.push_str(&text[last..start]);
-        out.push_str("[redacted]");
-        last = end;
-    }
-    out.push_str(&text[last..]);
-    out
-}
 
 impl Core {
     pub async fn proxies(&self) -> Result<ProxiesView> {
@@ -636,25 +647,75 @@ mod tests {
         assert!(long.redaction_secrets().contains(&"proxyuser"));
     }
     #[test]
-    fn short_secrets_redact_whole_words_only_and_tiny_ones_nothing() {
+    fn short_credentials_are_redacted_literally_from_every_source() {
+        for secret in ["a", "abc", "admin", "abc123", "éñ", "fixture-long-secret"] {
+            for source in ["environment", "header", "proxy"] {
+                let mut env = crate::config::Environment::default();
+                match source {
+                    "environment" => env.secret = Secret::new(secret).unwrap(),
+                    "header" => {
+                        env.headers.push(crate::headers::HeaderEntry {
+                            name: "X-Api-Key".into(),
+                            value: secret.into(),
+                            enabled: true,
+                        });
+                    }
+                    "proxy" => {
+                        env.proxy = EnvironmentProxy::Custom(ProxySettings {
+                            url: "http://proxy.test:3128".into(),
+                            username: Secret::new("").unwrap(),
+                            password: Secret::new(secret).unwrap(),
+                        });
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    env.redact(&format!("{secret} / prefix_{secret}_suffix")),
+                    "[redacted] / prefix_[redacted]_suffix",
+                    "{source}: {secret}"
+                );
+            }
+        }
+        assert_eq!(
+            crate::config::Environment::default().redact("unchanged"),
+            "unchanged"
+        );
+    }
+    #[test]
+    fn only_proxy_usernames_use_word_boundaries_and_credentials_take_precedence() {
         let env = crate::config::Environment {
-            secret: Secret::new("admin").unwrap(),
-            headers: vec![crate::headers::HeaderEntry {
-                name: "Authorization".into(),
-                value: "1".into(),
-                enabled: true,
-            }],
+            proxy: EnvironmentProxy::Custom(ProxySettings {
+                url: "http://proxy.test:3128".into(),
+                username: Secret::new("admin").unwrap(),
+                password: Secret::new("fixture-pass").unwrap(),
+            }),
             ..Default::default()
         };
         assert_eq!(
             env.redact(r#"{"login": "admin", "xmlid": "base.user_admin", "ids": [1]}"#),
             r#"{"login": "[redacted]", "xmlid": "base.user_admin", "ids": [1]}"#
         );
-        let long = crate::config::Environment {
-            secret: Secret::new("fixture-long-secret").unwrap(),
+        let same_password = crate::config::Environment {
+            secret: Secret::new("admin").unwrap(),
+            ..env
+        };
+        assert_eq!(
+            same_password.redact("base.user_admin"),
+            "base.user_[redacted]"
+        );
+    }
+    #[test]
+    fn replacements_do_not_redact_inserted_markers_and_longest_secrets_match_first() {
+        let env = crate::config::Environment {
+            secret: Secret::new("a").unwrap(),
+            headers: vec![crate::headers::HeaderEntry {
+                name: "X-Api-Key".into(),
+                value: "abc".into(),
+                enabled: true,
+            }],
             ..Default::default()
         };
-        assert_eq!(long.redact("xfixture-long-secretx"), "x[redacted]x");
+        assert_eq!(env.redact("abc a"), "[redacted] [redacted]");
     }
     #[test]
     fn urls_are_normalized_and_restricted() {

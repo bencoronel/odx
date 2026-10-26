@@ -29,6 +29,48 @@ fn write() -> serde_json::Value {
 }
 
 #[tokio::test]
+async fn short_sensitive_headers_are_redacted_in_client_errors_and_audit_details() {
+    let tmp = tempfile::tempdir().unwrap();
+    let core = support::unlocked_core(&tmp).await;
+    let sim = support::simulator().await;
+    let env = core.save_environment(draft(&sim.url, "A")).await.unwrap();
+    let issued = core
+        .create_client("reader", vec![env.id.clone()], vec![Capability::OdooRead])
+        .await
+        .unwrap();
+    let client = core.authenticate_client(&issued.token).await.unwrap();
+    for secret in ["abc", "abc123"] {
+        core.set_headers(Some(&env.id), vec![header("X-Api-Key", secret)])
+            .await
+            .unwrap();
+        sim.counts
+            .fail_next_execute(&format!("header=prefix_{secret}_suffix"));
+        let error = core
+            .run_tool(
+                &client,
+                "search_count",
+                json!({"env":"A", "model":"res.partner"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "header=prefix_[redacted]_suffix");
+        let page = core.activity(None, Default::default()).await.unwrap();
+        let details = core
+            .activity_details(page.events[0].request_id.clone().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            details
+                .error
+                .unwrap()
+                .text
+                .contains("prefix_[redacted]_suffix")
+        );
+    }
+}
+
+#[tokio::test]
 async fn headers_reach_every_upstream_path_and_remain_private_and_encrypted() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
