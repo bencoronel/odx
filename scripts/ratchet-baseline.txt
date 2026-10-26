@@ -1,9 +1,12 @@
 # rule	path	count — may only shrink; regenerate with `node scripts/ratchet.mjs --update`.
+rust-allow	crates/odx-core/src/approval/lifecycle.rs	1
 rust-allow	crates/odx-core/src/odoo/jsonrpc.rs	1
-rust-allow	crates/odx-core/src/tools/catalog.rs	4
-rust-allow	crates/odx-core/src/tools/composite.rs	2
+rust-allow	crates/odx-core/src/tools/catalog.rs	3
+rust-allow	crates/odx-core/src/tools/composite/mod.rs	1
+rust-allow	crates/odx-core/src/tools/composite/view.rs	1
 rust-unwrap	apps/desktop/src-tauri/src/main.rs	2
+rust-unwrap	crates/odx-core/src/approval/lifecycle.rs	1
 rust-unwrap	crates/odx-core/src/audit.rs	1
 rust-unwrap	crates/odx-core/src/limits.rs	1
 rust-unwrap	crates/odx-core/src/security.rs	2
-rust-unwrap	crates/odx-core/src/tools/catalog.rs	2
+rust-unwrap	crates/odx-core/src/tools/catalog.rs	1

@@ -20,12 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Tauri v2 Debian/Ubuntu prerequisites (v2.tauri.app/start/prerequisites).
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: ./.github/actions/tauri-linux-deps
 
       # rustup is preinstalled; rust-toolchain.toml selects the pinned toolchain.
       - name: Install Rust toolchain
@@ -46,11 +41,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci --prefix apps/desktop
-      - run: npm run typecheck --prefix apps/desktop
+      # tsc -b and vite build: the production bundle must build, not only type-check.
+      - run: npm run build --prefix apps/desktop
       - run: npm test --prefix apps/desktop
 
   ratchet:
@@ -59,7 +55,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version-file: .nvmrc
       - run: node --test scripts/
       - run: node scripts/ratchet.mjs
 
