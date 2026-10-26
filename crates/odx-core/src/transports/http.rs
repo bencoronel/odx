@@ -4,7 +4,6 @@ use crate::{
     error::OdxError,
     execution::Core,
     output::{self, Format, Outcome, ToolError},
-    tools::catalog::TOOLS,
 };
 use axum::{
     Router,
@@ -124,7 +123,12 @@ async fn call(
         [value] => value
             .to_str()
             .ok()
-            .and_then(|v| v.strip_prefix("Bearer "))
+            // The auth scheme is case-insensitive (RFC 9110).
+            .and_then(|v| {
+                v.get(..7)
+                    .filter(|s| s.eq_ignore_ascii_case("bearer "))
+                    .map(|_| &v[7..])
+            })
             .unwrap_or_default(),
         _ => "",
     };
@@ -151,7 +155,7 @@ async fn call(
     if !json {
         return reject(ToolError::invalid("Content-Type must be application/json"));
     }
-    if !TOOLS.contains(&tool.as_str()) {
+    if crate::tools::catalog::tool(&tool).is_none() {
         return failure(
             &ToolError::invalid(format!("unknown tool: {tool}")),
             StatusCode::NOT_FOUND,
@@ -165,7 +169,8 @@ async fn call(
     match api.core.run_tool(&identity, &tool, arguments).await {
         Ok(mut out) => {
             out.format = Format::Json; // The API always returns JSON.
-            match output::fit(out) {
+            // Only the envelope is sent: count it once, not as MCP text plus structured content.
+            match output::fit_with(out, |rendered| rendered.text.len()) {
                 Ok((out, _)) => (StatusCode::OK, axum::Json(out.envelope())).into_response(),
                 Err(err) => reject(err),
             }

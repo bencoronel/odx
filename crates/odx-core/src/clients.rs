@@ -1,8 +1,13 @@
 //! API/MCP clients with high-entropy tokens and environment grants. Persist only SHA-256 hashes in the encrypted vault; return plaintext once on creation or replacement.
 use crate::error::{OdxError, Result};
+use crate::{
+    approval::revoke_client,
+    execution::{Core, Inner},
+};
 use chrono::{DateTime, Utc};
 use libsodium_rs::{crypto_hash::sha256, crypto_verify, ensure_init, random};
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -140,12 +145,6 @@ pub struct ClientIdentity {
     pub environment_ids: Vec<String>,
     pub capabilities: Vec<Capability>,
 }
-impl ClientIdentity {
-    pub fn allows(&self, environment_id: &str, capability: Capability) -> bool {
-        self.capabilities.contains(&capability)
-            && self.environment_ids.iter().any(|id| id == environment_id)
-    }
-}
 
 /// Generate a token and hash without storing the plaintext token.
 pub(crate) fn issue_token() -> Result<(String, String)> {
@@ -158,7 +157,6 @@ pub(crate) fn issue_token() -> Result<(String, String)> {
     Ok((token, hash))
 }
 
-/// Find the active grant by comparing all hashes in constant time.
 /// Identity for a grant; `all_environments` expands to the current environments.
 pub(crate) fn identity(grant: &ClientGrant, data: &crate::config::VaultData) -> ClientIdentity {
     ClientIdentity {
@@ -172,6 +170,7 @@ pub(crate) fn identity(grant: &ClientGrant, data: &crate::config::VaultData) -> 
         capabilities: grant.capabilities.clone(),
     }
 }
+/// Find the active grant by comparing all hashes in constant time.
 pub(crate) fn find_grant<'a>(grants: &'a [ClientGrant], token: &str) -> Option<&'a ClientGrant> {
     if !token.starts_with(TOKEN_PREFIX) || token.len() != TOKEN_PREFIX.len() + TOKEN_BYTES * 2 {
         return None;
@@ -255,6 +254,344 @@ pub(crate) fn new_grant(
         revoked: false,
         created_at: now,
         token_issued_at: now,
+    }
+}
+
+// Clients on the core: listing, usage, connections and the token lifecycle.
+
+/// In-memory last use and open MCP connections.
+#[derive(Default)]
+pub(crate) struct Usage {
+    last_used: HashMap<String, chrono::DateTime<Utc>>,
+    /// Vault session whose history initialized `last_used`.
+    seeded_session: Option<u64>,
+    connections: HashMap<u64, OpenConnection>,
+    next_connection: u64,
+}
+
+struct OpenConnection {
+    client_id: String,
+    since: chrono::DateTime<Utc>,
+    agent: AgentProcess,
+    calls: u64,
+    close: Arc<tokio::sync::Notify>,
+}
+
+/// Process that launched a connector, such as a `claude` session.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AgentProcess {
+    pub pid: Option<u32>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+}
+
+/// Open MCP connection shown in the app.
+#[derive(Debug, Clone, Serialize)]
+pub struct McpConnectionInfo {
+    pub id: u64,
+    pub client_id: String,
+    pub client_label: Option<String>,
+    pub since: chrono::DateTime<Utc>,
+    #[serde(flatten)]
+    pub agent: AgentProcess,
+    /// Tool calls made on this connection.
+    pub calls: u64,
+}
+
+/// Count the connection as open while this guard exists.
+pub struct ConnectionGuard {
+    core: Arc<Core>,
+    id: u64,
+    close: Arc<tokio::sync::Notify>,
+}
+
+impl ConnectionGuard {
+    pub fn called(&self) {
+        if let Ok(mut usage) = self.core.usage.lock()
+            && let Some(connection) = usage.connections.get_mut(&self.id)
+        {
+            connection.calls += 1;
+        }
+    }
+    /// Resolve when the app asks to close this connection.
+    pub async fn closed(&self) {
+        self.close.notified().await
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut usage) = self.core.usage.lock() {
+            usage.connections.remove(&self.id);
+        }
+    }
+}
+
+impl Core {
+    /// After client changes, revoke and record its unsent requests.
+    async fn client_changed(&self, mut s: tokio::sync::MutexGuard<'_, Inner>, id: &str) {
+        let revoked = revoke_client(&mut s.pending, id);
+        let ended = s.end(revoked, "revoked");
+        drop(s);
+        self.record(ended).await;
+    }
+    pub async fn clients(&self) -> Result<Vec<ClientView>> {
+        let (mut views, audit, session) = {
+            let s = self.inner.lock().await;
+            let v = s.vault()?;
+            let views: Vec<ClientView> = v
+                .data()
+                .clients
+                .iter()
+                .filter(|c| !c.revoked)
+                .map(ClientView::from)
+                .collect();
+            (views, s.audit.clone(), s.session)
+        };
+        // Initialize last use from history once per session, then track it in memory.
+        let seeded = self
+            .usage
+            .lock()
+            .map(|u| u.seeded_session == Some(session))
+            .unwrap_or(true);
+        if !seeded && let Some(audit) = audit {
+            let history = tokio::task::spawn_blocking(move || audit.last_used())
+                .await
+                .ok()
+                .and_then(|r| r.ok());
+            if let (Some(events), Ok(mut usage)) = (history, self.usage.lock()) {
+                for (id, at) in events {
+                    let last = usage.last_used.entry(id).or_insert(at);
+                    if at > *last {
+                        *last = at;
+                    }
+                }
+                usage.seeded_session = Some(session);
+            }
+        }
+        if let Ok(usage) = self.usage.lock() {
+            for view in &mut views {
+                view.last_used_at = usage.last_used.get(&view.id).copied();
+            }
+        }
+        Ok(views)
+    }
+    pub(crate) fn mark_used(&self, client_id: &str) {
+        if let Ok(mut usage) = self.usage.lock() {
+            usage.last_used.insert(client_id.into(), Utc::now());
+        }
+    }
+    /// Register an authenticated MCP connection until its guard drops.
+    pub fn register_connection(
+        self: &Arc<Self>,
+        client_id: &str,
+        agent: AgentProcess,
+    ) -> ConnectionGuard {
+        let mut usage = self.usage.lock().expect("usage");
+        usage.next_connection += 1;
+        let id = usage.next_connection;
+        let close = Arc::new(tokio::sync::Notify::new());
+        usage.connections.insert(
+            id,
+            OpenConnection {
+                client_id: client_id.into(),
+                since: Utc::now(),
+                agent,
+                calls: 0,
+                close: close.clone(),
+            },
+        );
+        ConnectionGuard {
+            core: self.clone(),
+            id,
+            close,
+        }
+    }
+    /// Close an open MCP connection; its connector exits and its unsent requests are cancelled.
+    pub fn close_connection(&self, id: u64) -> bool {
+        let usage = self.usage.lock().expect("usage");
+        let Some(connection) = usage.connections.get(&id) else {
+            return false;
+        };
+        // notify_one keeps the wakeup if the connection is not waiting yet.
+        connection.close.notify_one();
+        true
+    }
+    pub async fn mcp_connections(&self) -> Vec<McpConnectionInfo> {
+        let labels: HashMap<String, String> = {
+            let s = self.inner.lock().await;
+            s.vault
+                .as_ref()
+                .map(|v| {
+                    v.data()
+                        .clients
+                        .iter()
+                        .map(|c| (c.id.clone(), c.label.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let usage = self.usage.lock().expect("usage");
+        let mut list: Vec<McpConnectionInfo> = usage
+            .connections
+            .iter()
+            .map(|(id, c)| McpConnectionInfo {
+                id: *id,
+                client_label: labels.get(&c.client_id).cloned(),
+                client_id: c.client_id.clone(),
+                since: c.since,
+                agent: c.agent.clone(),
+                calls: c.calls,
+            })
+            .collect();
+        list.sort_by_key(|c| c.id);
+        list
+    }
+    /// Create a client; expose plaintext only in the returned value.
+    pub async fn create_client(
+        &self,
+        label: &str,
+        scope: impl Into<ClientScope>,
+        capabilities: Vec<Capability>,
+    ) -> Result<IssuedToken> {
+        let scope = scope.into();
+        let mut s = self.inner.lock().await;
+        let v = s.vault_mut()?;
+        let data = v.data();
+        validate_grant(label, &scope, &capabilities, |id| {
+            data.environments.iter().any(|e| e.id == id)
+        })?;
+        if data
+            .clients
+            .iter()
+            .any(|c| !c.revoked && c.label.eq_ignore_ascii_case(label.trim()))
+        {
+            return Err(OdxError::validation(
+                "validation.client.name_exists",
+                "a client with this name already exists",
+            ));
+        }
+        let (token, hash) = issue_token()?;
+        let grant = new_grant(label, scope, capabilities, hash);
+        let client = ClientView::from(&grant);
+        v.update(|data| {
+            data.clients.push(grant);
+            Ok(())
+        })?;
+        Ok(IssuedToken { client, token })
+    }
+    /// Update label, scope and capabilities without changing the token; the local MCP label is fixed. Revoke requests made under the old grant.
+    pub async fn update_client(
+        &self,
+        id: &str,
+        label: &str,
+        scope: impl Into<ClientScope>,
+        capabilities: Vec<Capability>,
+    ) -> Result<ClientView> {
+        if id == STDIO_CLIENT_ID && label != STDIO_CLIENT_LABEL {
+            return Err(OdxError::validation(
+                "validation.client.local_profile_name_fixed",
+                "the local MCP profile name cannot change",
+            ));
+        }
+        let scope = scope.into();
+        let mut s = self.inner.lock().await;
+        let v = s.vault_mut()?;
+        let data = v.data();
+        validate_grant(label, &scope, &capabilities, |env| {
+            data.environments.iter().any(|e| e.id == env)
+        })?;
+        if data
+            .clients
+            .iter()
+            .any(|c| c.id != id && !c.revoked && c.label.eq_ignore_ascii_case(label.trim()))
+        {
+            return Err(OdxError::validation(
+                "validation.client.name_exists",
+                "a client with this name already exists",
+            ));
+        }
+        let updated = new_grant(label, scope, capabilities, String::new());
+        let view = v.update(|data| {
+            let grant = data
+                .clients
+                .iter_mut()
+                .find(|c| c.id == id && !c.revoked)
+                .ok_or(OdxError::ClientNotFound)?;
+            grant.label = updated.label;
+            grant.all_environments = updated.all_environments;
+            grant.environment_ids = updated.environment_ids;
+            grant.capabilities = updated.capabilities;
+            Ok(ClientView::from(&*grant))
+        })?;
+        self.client_changed(s, id).await;
+        let _ = self.grant_changes.send(id.to_string());
+        Ok(view)
+    }
+    /// Replace the token, invalidate the old one and revoke pending requests.
+    pub async fn replace_client_token(&self, id: &str) -> Result<IssuedToken> {
+        if id == STDIO_CLIENT_ID {
+            return Err(OdxError::validation(
+                "validation.client.local_profile_no_token",
+                "the MCP stdio profile does not use a token",
+            ));
+        }
+        let mut s = self.inner.lock().await;
+        let v = s.vault_mut()?;
+        let (token, hash) = issue_token()?;
+        let client = v.update(|data| {
+            let grant = data
+                .clients
+                .iter_mut()
+                .find(|c| c.id == id && !c.revoked)
+                .ok_or(OdxError::ClientNotFound)?;
+            grant.token_hash = hash;
+            grant.revision += 1;
+            grant.token_issued_at = Utc::now();
+            Ok(ClientView::from(&*grant))
+        })?;
+        self.client_changed(s, id).await;
+        Ok(IssuedToken { client, token })
+    }
+    /// Delete the client permanently, invalidate its token and revoke pending requests. Retain its ID without a label in activity.
+    pub async fn revoke_client(&self, id: &str) -> Result<()> {
+        if id == STDIO_CLIENT_ID {
+            return Err(OdxError::validation(
+                "validation.client.local_profile_shared",
+                "the MCP stdio profile is shared; edit its scope and capabilities or lock the app",
+            ));
+        }
+        let mut s = self.inner.lock().await;
+        let v = s.vault_mut()?;
+        // Deleting the client invalidates its token and removes it from the list. Also purge legacy revoked grants.
+        v.update(|data| {
+            if !data.clients.iter().any(|c| c.id == id && !c.revoked) {
+                return Err(OdxError::ClientNotFound);
+            }
+            data.clients.retain(|c| c.id != id && !c.revoked);
+            Ok(())
+        })?;
+        self.client_changed(s, id).await;
+        Ok(())
+    }
+    /// Shared stdio profile authenticated by socket UID, never HTTP token.
+    pub(crate) async fn stdio_identity(&self) -> Result<ClientIdentity> {
+        let s = self.inner.lock().await;
+        let vault = s.vault()?;
+        let grant = vault
+            .data()
+            .clients
+            .iter()
+            .find(|g| g.id == STDIO_CLIENT_ID && !g.revoked)
+            .ok_or(OdxError::Unauthorized)?;
+        Ok(identity(grant, vault.data()))
+    }
+    /// Authenticate a client token; reject all clients while locked.
+    pub async fn authenticate_client(&self, token: &str) -> Result<ClientIdentity> {
+        let s = self.inner.lock().await;
+        let v = s.vault()?;
+        let grant = find_grant(&v.data().clients, token).ok_or(OdxError::Unauthorized)?;
+        Ok(identity(grant, v.data()))
     }
 }
 

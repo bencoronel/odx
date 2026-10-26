@@ -1,3 +1,7 @@
+mod lifecycle;
+pub(crate) use lifecycle::{ApprovalEnd, revoke_all, revoke_client, revoke_environment};
+pub use lifecycle::{ApprovalNotice, PendingApproval};
+
 use crate::{
     audit::AuditDetails,
     config::Environment,
@@ -42,7 +46,6 @@ pub enum State {
     Sent,
     Rejected,
     Expired,
-    Cancelled,
     Revoked,
 }
 #[derive(Debug, Clone)]
@@ -59,6 +62,7 @@ pub struct Approval {
     pub authorization: crate::policy::Authorization,
 }
 impl Approval {
+    #[cfg(test)]
     pub fn new(
         env: &Environment,
         model: String,

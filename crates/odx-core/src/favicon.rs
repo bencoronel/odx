@@ -39,7 +39,7 @@ impl Core {
     ) -> Result<T> {
         let (env, session) = {
             let state = self.inner.lock().await;
-            let data = state.vault.as_ref().ok_or(OdxError::Locked)?.data();
+            let data = state.vault()?.data();
             let mut env = data.connection_environment(id)?;
             env.headers
                 .retain(|h| !crate::headers::is_sensitive(&h.name));

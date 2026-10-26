@@ -353,7 +353,7 @@ impl McpConnection {
             .to_string();
         let out = self.out.clone();
         // Check identity existence; the core enforces the current grant.
-        if !TOOLS.contains(&name.as_str()) {
+        if crate::tools::catalog::tool(&name).is_none() {
             tokio::spawn(async move {
                 let _ = out
                     .send(error(
@@ -468,16 +468,10 @@ fn call_error(
 
 /// Grant-filtered tools; call supports reads and writes.
 fn tool_names(capabilities: &[Capability]) -> Vec<&'static str> {
-    let read = capabilities.contains(&Capability::OdooRead);
-    let write = capabilities.contains(&Capability::OdooWriteRequest);
     TOOLS
-        .into_iter()
-        .filter(|name| match *name {
-            "envs" => true,
-            "call" => read || write,
-            "create" | "write" | "unlink" => write,
-            _ => read,
-        })
+        .iter()
+        .filter(|tool| tool.access.allowed(capabilities))
+        .map(|tool| tool.name)
         .collect()
 }
 

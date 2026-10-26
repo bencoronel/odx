@@ -1,3 +1,6 @@
+//! Odoo simulators for the tests: JSON-RPC here, XML-RPC and JSON-2 in their own files, sharing the call
+//! counters and the business logic of `legacy`. Each test binary uses part of it.
+#![allow(dead_code)]
 use axum::{
     Json, Router,
     extract::State,
@@ -17,76 +20,19 @@ use tokio::{sync::Notify, task::JoinHandle};
 
 #[path = "composite.rs"]
 mod composite;
+#[path = "counts.rs"]
+mod counts;
+#[path = "json2.rs"]
+mod json2;
 #[path = "proxy.rs"]
 pub mod proxy;
+#[path = "xmlrpc.rs"]
+mod xmlrpc;
 
-#[derive(Clone, Default)]
-pub struct Counts {
-    held_databases: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    open_held: Arc<Notify>,
-    in_flight: Arc<std::sync::Mutex<InFlight>>,
-    response_bytes: Arc<AtomicUsize>,
-    headers: Arc<std::sync::Mutex<Vec<HeaderMap>>>,
-    writes: Arc<AtomicUsize>,
-    logins: Arc<AtomicUsize>,
-    queries: Arc<AtomicUsize>,
-    request_bytes: Arc<AtomicUsize>,
-    lose_response: Arc<AtomicBool>,
-    pause_next_write: Arc<AtomicBool>,
-    write_started: Arc<Notify>,
-    release_write: Arc<Notify>,
-    pause_next_login: Arc<AtomicBool>,
-    fail_next_login: Arc<AtomicBool>,
-    login_started: Arc<Notify>,
-    release_login: Arc<Notify>,
-    fail_next_execute: Arc<std::sync::Mutex<Option<String>>>,
-}
-#[allow(dead_code)]
-impl Counts {
-    pub fn headers(&self) -> Vec<HeaderMap> {
-        self.headers.lock().unwrap().clone()
-    }
-    pub fn writes(&self) -> usize {
-        self.writes.load(Ordering::SeqCst)
-    }
-    pub fn logins(&self) -> usize {
-        self.logins.load(Ordering::SeqCst)
-    }
-    pub fn queries(&self) -> usize {
-        self.queries.load(Ordering::SeqCst)
-    }
-    pub fn request_bytes(&self) -> usize {
-        self.request_bytes.load(Ordering::SeqCst)
-    }
-    pub fn lose_next_response(&self) {
-        self.lose_response.store(true, Ordering::SeqCst);
-    }
-    pub fn pause_next_write(&self) {
-        self.pause_next_write.store(true, Ordering::SeqCst);
-    }
-    pub async fn wait_for_write(&self) {
-        self.write_started.notified().await;
-    }
-    pub fn release_write(&self) {
-        self.release_write.notify_one();
-    }
-    pub fn pause_next_login(&self) {
-        self.pause_next_login.store(true, Ordering::SeqCst);
-    }
-    pub fn fail_next_login(&self) {
-        self.fail_next_login.store(true, Ordering::SeqCst);
-    }
-    pub async fn wait_for_login(&self) {
-        self.login_started.notified().await;
-    }
-    pub fn release_login(&self) {
-        self.release_login.notify_one();
-    }
-    /// Fail the next execute_kw with this logical Odoo error.
-    pub fn fail_next_execute(&self, message: &str) {
-        *self.fail_next_execute.lock().unwrap() = Some(message.into());
-    }
-}
+pub use counts::Counts;
+use json2::json2_endpoint;
+use xmlrpc::xmlrpc_endpoint;
+
 /// Odoo-shaped JSON-RPC server exception.
 fn odoo_error(id: &Value, name: &str, message: &str) -> Response {
     Json(json!({"jsonrpc":"2.0","id":id,"error":{"code":200,"message":"Odoo Server Error","data":{"name":name,"message":message}}})).into_response()
@@ -98,83 +44,30 @@ const MODELS: [(i64, &str, &str); 4] = [
     (3, "res.users", "Users"),
     (4, "sale.order", "Sales Order"),
 ];
-/// Current and peak execute_kw calls per database.
-#[derive(Default)]
-struct InFlight {
-    now: std::collections::HashMap<String, usize>,
-    max: std::collections::HashMap<String, usize>,
-    total: usize,
-    max_total: usize,
+
+/// A core with a new, unlocked vault in `tmp`; keep `tmp` alive as long as the core.
+pub async fn unlocked_core(tmp: &tempfile::TempDir) -> std::sync::Arc<odx_core::Core> {
+    let core = odx_core::Core::new(tmp.path().join("vault.sqlite3")).unwrap();
+    core.create("fictional master password").await.unwrap();
+    core
 }
-struct InFlightGuard {
-    counts: Counts,
-    db: String,
-}
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        let mut f = self.counts.in_flight.lock().unwrap();
-        *f.now.get_mut(&self.db).unwrap() -= 1;
-        f.total -= 1;
-    }
-}
-#[allow(dead_code)]
-impl Counts {
-    /// Hold this database's execute_kw calls until release_databases.
-    pub fn hold_database(&self, db: &str) {
-        self.held_databases.lock().unwrap().insert(db.into());
-    }
-    pub fn release_databases(&self) {
-        self.held_databases.lock().unwrap().clear();
-        self.open_held.notify_waiters();
-    }
-    pub fn in_flight(&self, db: &str) -> usize {
-        let f = self.in_flight.lock().unwrap();
-        f.now.get(db).copied().unwrap_or(0)
-    }
-    pub fn in_flight_total(&self) -> usize {
-        self.in_flight.lock().unwrap().total
-    }
-    pub fn max_in_flight(&self, db: &str) -> usize {
-        let f = self.in_flight.lock().unwrap();
-        f.max.get(db).copied().unwrap_or(0)
-    }
-    pub fn max_in_flight_total(&self) -> usize {
-        self.in_flight.lock().unwrap().max_total
-    }
-    /// Bytes in simulator JSON-RPC result responses.
-    pub fn response_bytes(&self) -> usize {
-        self.response_bytes.load(Ordering::SeqCst)
-    }
-    async fn enter(&self, db: &str) -> InFlightGuard {
-        {
-            let mut f = self.in_flight.lock().unwrap();
-            let now = f.now.entry(db.into()).or_default();
-            *now += 1;
-            let now = *now;
-            let max = f.max.entry(db.into()).or_default();
-            *max = (*max).max(now);
-            f.total += 1;
-            f.max_total = f.max_total.max(f.total);
-        }
-        let guard = InFlightGuard {
-            counts: self.clone(),
-            db: db.into(),
-        };
-        loop {
-            // Register before checking to receive later notify_waiters calls.
-            let opened = self.open_held.notified();
-            if !self.held_databases.lock().unwrap().contains(db) {
-                return guard;
-            }
-            opened.await;
-        }
+
+/// The usual test environment: JSON-RPC, database base-a, user fixture-user, no context.
+pub fn draft(name: &str, url: &str) -> odx_core::EnvironmentDraft {
+    odx_core::EnvironmentDraft {
+        name: name.into(),
+        url: url.into(),
+        database: "base-a".into(),
+        login: "fixture-user".into(),
+        protocol: odx_core::Protocol::LegacyJsonrpc,
+        context: json!({}),
+        secret: "fixture-secret".into(),
     }
 }
-#[allow(dead_code)]
+
 pub struct Simulator {
     pub url: String,
     // Shared by all test binaries, including those that do not read counters.
-    #[allow(dead_code)]
     pub counts: Counts,
     _task: JoinHandle<()>,
 }
@@ -404,6 +297,11 @@ async fn jsonrpc(
                 counts.writes.fetch_add(1, Ordering::SeqCst);
                 json!(true)
             }
+            // Like account.move.action_post: commits and returns None.
+            "action_post" => {
+                counts.writes.fetch_add(1, Ordering::SeqCst);
+                Value::Null
+            }
             _ => json!([]),
         }
     } else {
@@ -416,7 +314,6 @@ async fn jsonrpc(
     );
     Json(response).into_response()
 }
-#[allow(dead_code)]
 pub async fn simulator() -> Simulator {
     let counts = Counts::default();
     let app = Router::new()
@@ -435,7 +332,6 @@ pub async fn simulator() -> Simulator {
 // Versioned XML-RPC (16–19) and JSON-2 (19) simulators reuse JSON-RPC business logic. Envelope sources: odoo/addons/base/controllers/rpc.py (16–18), addons/rpc/controllers/{xmlrpc,json2}.py and odoo/http.py (19).
 
 /// Simulator for one Odoo major version and its available protocols.
-#[allow(dead_code)]
 pub struct ProtocolSimulator {
     pub url: String,
     pub counts: Counts,
@@ -456,13 +352,11 @@ struct ProtocolState {
     json2_status: Option<u16>,
 }
 
-#[allow(dead_code)]
 pub async fn protocol_simulator(major: u8) -> ProtocolSimulator {
     protocol_simulator_with_status(major, None, None).await
 }
 
 /// Model missing/blocked endpoints separately from invalid credentials.
-#[allow(dead_code)]
 pub async fn protocol_simulator_with_status(
     major: u8,
     jsonrpc_status: Option<u16>,
@@ -472,7 +366,6 @@ pub async fn protocol_simulator_with_status(
 }
 
 /// `version_status` answers `GET /web/version` with that status and a login redirect, as some Odoo 16 servers do.
-#[allow(dead_code)]
 pub async fn protocol_simulator_with_version_status(
     major: u8,
     jsonrpc_status: Option<u16>,
@@ -572,494 +465,7 @@ async fn legacy(
     }
 }
 
-// XML-RPC
-
-struct Node {
-    name: String,
-    children: Vec<Node>,
-    text: String,
-}
-
-fn parse_xml(input: &str) -> Option<Node> {
-    use quick_xml::events::Event;
-    let mut reader = quick_xml::Reader::from_str(input);
-    reader.config_mut().expand_empty_elements = true;
-    let mut stack = vec![Node {
-        name: String::new(),
-        children: vec![],
-        text: String::new(),
-    }];
-    loop {
-        match reader.read_event().ok()? {
-            Event::Start(e) => stack.push(Node {
-                name: e.name().as_ref().to_owned(),
-                children: vec![],
-                text: String::new(),
-            }),
-            Event::End(_) => {
-                let node = stack.pop()?;
-                stack.last_mut()?.children.push(node);
-            }
-            Event::Text(t) => stack.last_mut()?.text.push_str(&t.xml10_content()),
-            Event::GeneralRef(r) => {
-                let c = match r.resolve_char_ref().ok()? {
-                    Some(c) => c.to_string(),
-                    None => quick_xml::escape::resolve_predefined_entity(&r)?.to_owned(),
-                };
-                stack.last_mut()?.text.push_str(&c);
-            }
-            Event::DocType(_) => return None,
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    stack.pop()?.children.pop()
-}
-
-/// Like Python xmlrpc.client.loads, accept all types including nil.
-fn xml_value(node: &Node) -> Option<Value> {
-    let Some(typed) = node.children.first() else {
-        return Some(Value::String(node.text.clone()));
-    };
-    let t = typed.text.trim();
-    Some(match typed.name.as_str() {
-        "int" | "i4" | "i8" => json!(t.parse::<i64>().ok()?),
-        "boolean" => json!(t == "1"),
-        "string" => json!(typed.text),
-        "double" => json!(t.parse::<f64>().ok()?),
-        "nil" => Value::Null,
-        "dateTime.iso8601" | "base64" => json!(t),
-        "array" => Value::Array(
-            typed
-                .children
-                .first()?
-                .children
-                .iter()
-                .map(xml_value)
-                .collect::<Option<_>>()?,
-        ),
-        "struct" => {
-            let mut map = serde_json::Map::new();
-            for m in &typed.children {
-                map.insert(
-                    m.children.first()?.text.clone(),
-                    xml_value(m.children.get(1)?)?,
-                );
-            }
-            Value::Object(map)
-        }
-        _ => return None,
-    })
-}
-
-/// Like OdooMarshaller with allow_none=False, reject None and integers outside 32 bits.
-fn xml_encode(v: &Value, out: &mut String) -> Result<(), &'static str> {
-    match v {
-        Value::Null => return Err("TypeError: cannot marshal None unless allow_none is enabled"),
-        Value::Bool(b) => out.push_str(&format!(
-            "<value><boolean>{}</boolean></value>",
-            u8::from(*b)
-        )),
-        Value::Number(n) => match n.as_i64() {
-            Some(i) if i32::try_from(i).is_ok() => {
-                out.push_str(&format!("<value><int>{i}</int></value>"))
-            }
-            Some(_) => return Err("OverflowError: int exceeds XML-RPC limits"),
-            None if n.is_f64() => out.push_str(&format!(
-                "<value><double>{}</double></value>",
-                n.as_f64().unwrap()
-            )),
-            None => return Err("OverflowError: int exceeds XML-RPC limits"),
-        },
-        Value::String(s) => {
-            // Odoo removes control characters before escaping.
-            let clean: String = s
-                .chars()
-                .filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
-                .collect();
-            out.push_str("<value><string>");
-            out.push_str(&quick_xml::escape::escape(clean.as_str()));
-            out.push_str("</string></value>");
-        }
-        Value::Array(items) => {
-            out.push_str("<value><array><data>\n");
-            for item in items {
-                xml_encode(item, out)?;
-                out.push('\n');
-            }
-            out.push_str("</data></array></value>");
-        }
-        Value::Object(map) => {
-            out.push_str("<value><struct>\n");
-            for (k, item) in map {
-                out.push_str(&format!(
-                    "<member>\n<name>{}</name>\n",
-                    quick_xml::escape::escape(k.as_str())
-                ));
-                xml_encode(item, out)?;
-                out.push_str("\n</member>\n");
-            }
-            out.push_str("</struct></value>");
-        }
-    }
-    Ok(())
-}
-
-fn xml_response(s: &ProtocolState, body: String) -> Response {
-    s.bytes.fetch_add(body.len(), Ordering::SeqCst);
-    // Odoo faults also use HTTP 200 and text/xml.
-    (
-        [(axum::http::header::CONTENT_TYPE, "text/xml; charset=utf-8")],
-        body,
-    )
-        .into_response()
-}
-
-fn xml_fault(s: &ProtocolState, code: i64, message: &str) -> Response {
-    let mut fault = String::new();
-    xml_encode(
-        &json!({"faultCode": code, "faultString": message}),
-        &mut fault,
-    )
-    .unwrap();
-    xml_response(
-        s,
-        format!(
-            "<?xml version=\"1.0\"?>\n<methodResponse>\n<fault>\n{fault}\n</fault>\n</methodResponse>\n"
-        ),
-    )
-}
-
-async fn xmlrpc_endpoint(
-    State(s): State<ProtocolState>,
-    axum::extract::Path(service): axum::extract::Path<String>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    s.requests.lock().unwrap().push(body.clone());
-    let Some(call) = parse_xml(&body).filter(|n| n.name == "methodCall") else {
-        return xml_fault(
-            &s,
-            1,
-            "Traceback (most recent call last):\nxml.parsers.expat.ExpatError: syntax error",
-        );
-    };
-    let method = call
-        .children
-        .iter()
-        .find(|n| n.name == "methodName")
-        .map(|n| n.text.clone())
-        .unwrap_or_default();
-    let params: Option<Vec<Value>> = call
-        .children
-        .iter()
-        .find(|n| n.name == "params")
-        .map(|p| {
-            p.children
-                .iter()
-                .filter_map(|param| param.children.first().map(xml_value))
-                .collect()
-        })
-        .unwrap_or(Some(vec![]));
-    let Some(params) = params else {
-        return xml_fault(
-            &s,
-            1,
-            "Traceback (most recent call last):\nValueError: bad value",
-        );
-    };
-    let result = if service == "common" && method == "version" {
-        Ok(version_info(s.major))
-    } else {
-        let (status, result) = legacy(&s.counts, headers, &service, &method, json!(params)).await;
-        if !status.is_success() {
-            return status.into_response();
-        }
-        match result {
-            // common.login returns False for invalid credentials.
-            Ok(Value::Null) if method == "login" => Ok(json!(false)),
-            // get_external_id returns integer keys; Python's Marshaller, inherited by OdooMarshaller, requires strings for dump_struct.
-            Ok(_) if params.get(4) == Some(&json!("get_external_id")) => {
-                return xml_fault(
-                    &s,
-                    1,
-                    "Traceback (most recent call last):\n  File \"/usr/lib/python3/xmlrpc/client.py\", line 1\nTypeError: dictionary key must be string\n",
-                );
-            }
-            other => other,
-        }
-    };
-    match result {
-        Ok(value) => {
-            let mut out = String::new();
-            match xml_encode(&value, &mut out) {
-                Ok(()) => xml_response(
-                    &s,
-                    format!(
-                        "<?xml version=\"1.0\"?>\n<methodResponse>\n<params>\n<param>\n{out}\n</param>\n</params>\n</methodResponse>\n"
-                    ),
-                ),
-                Err(e) => xml_fault(
-                    &s,
-                    1,
-                    &format!(
-                        "Traceback (most recent call last):\n  File \"/odoo/rpc.py\", line 1\n{e}\n"
-                    ),
-                ),
-            }
-        }
-        Err(data) => {
-            let name = data["name"].as_str().unwrap_or("builtins.Exception");
-            let message = data["message"].as_str().unwrap_or("error");
-            // xmlrpc_handle_exception_int: AccessError 4, UserError 2, others 1 with traceback.
-            if name.ends_with("AccessError") {
-                xml_fault(&s, 4, message)
-            } else if name.ends_with("UserError") || name.ends_with("ValidationError") {
-                xml_fault(&s, 2, message)
-            } else {
-                let short = name.rsplit('.').next().unwrap_or(name);
-                xml_fault(
-                    &s,
-                    1,
-                    &format!(
-                        "Traceback (most recent call last):\n  File \"/odoo/service/model.py\", line 1\n{short}: {message}\n"
-                    ),
-                )
-            }
-        }
-    }
-}
-
-// JSON-2
-
-/// Odoo 19 signatures from odoo/orm/models.py: ids support and allowed parameter names.
-const JSON2_SIGNATURES: [(&str, bool, &[&str]); 13] = [
-    (
-        "search_read",
-        false,
-        &["domain", "fields", "offset", "limit", "order", "load"],
-    ),
-    ("read", true, &["fields", "load"]),
-    ("search", false, &["domain", "offset", "limit", "order"]),
-    ("search_count", false, &["domain", "limit"]),
-    ("fields_get", false, &["allfields", "attributes"]),
-    (
-        "name_search",
-        false,
-        &["name", "domain", "operator", "limit"],
-    ),
-    ("create", false, &["vals_list"]),
-    ("write", true, &["vals"]),
-    ("unlink", true, &[]),
-    // Composite methods from tests/support/composite.rs.
-    (
-        "read_group",
-        false,
-        &[
-            "domain", "fields", "groupby", "offset", "limit", "orderby", "lazy",
-        ],
-    ),
-    ("get_views", false, &["views", "options"]),
-    (
-        "check_access_rights",
-        false,
-        &["operation", "raise_exception"],
-    ),
-    ("get_external_id", true, &[]),
-];
-
-fn json2_error(s: &ProtocolState, status: StatusCode, name: &str, message: &str) -> Response {
-    let body = json!({"name": name, "message": message, "arguments": [message, status.as_u16()],
-                      "context": {}, "debug": format!("Traceback (most recent call last):\n{name}: {message}\n")})
-        .to_string();
-    s.bytes.fetch_add(body.len(), Ordering::SeqCst);
-    (
-        status,
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "application/json; charset=utf-8",
-        )],
-        body,
-    )
-        .into_response()
-}
-
-async fn json2_endpoint(
-    State(s): State<ProtocolState>,
-    axum::extract::Path((model, method)): axum::extract::Path<(String, String)>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    s.requests.lock().unwrap().push(body.clone());
-    if let Some(status) = s.json2_status {
-        return StatusCode::from_u16(status).unwrap().into_response();
-    }
-    let bearer = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let key = bearer
-        .get(..7)
-        .filter(|p| p.eq_ignore_ascii_case("bearer "))
-        .map(|_| &bearer[7..]);
-    if key != Some("fixture-secret") {
-        return json2_error(
-            &s,
-            StatusCode::UNAUTHORIZED,
-            "werkzeug.exceptions.Unauthorized",
-            "Invalid apikey",
-        );
-    }
-    let Some(db) = headers
-        .get("x-odoo-database")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-    else {
-        // Multiple databases without dbfilter require a database header.
-        return (StatusCode::NOT_FOUND, "<html>404</html>").into_response();
-    };
-    let Ok(Value::Object(mut params)) = serde_json::from_str::<Value>(&body) else {
-        return json2_error(
-            &s,
-            StatusCode::BAD_REQUEST,
-            "werkzeug.exceptions.BadRequest",
-            "could not parse the body as json",
-        );
-    };
-    let ids = params.remove("ids").unwrap_or(json!([]));
-    let context = params.remove("context").unwrap_or(json!({}));
-    let uid = if db == "base-a" { 11 } else { 22 };
-    if model == "res.users" && method == "context_get" {
-        let body = json!({"lang": "en_US", "tz": false, "uid": uid}).to_string();
-        s.bytes.fetch_add(body.len(), Ordering::SeqCst);
-        return (
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            body,
-        )
-            .into_response();
-    }
-    if model == "missing.model" {
-        return json2_error(
-            &s,
-            StatusCode::NOT_FOUND,
-            "werkzeug.exceptions.NotFound",
-            &format!("the model '{model}' does not exist"),
-        );
-    }
-    let Some((_, record, names)) = JSON2_SIGNATURES
-        .iter()
-        .find(|(m, _, _)| *m == method)
-        .copied()
-    else {
-        // Simulator business methods receive IDs and remaining arguments by name.
-        if method == "action_confirm" {
-            let mut kwargs = params;
-            kwargs.insert("context".into(), context);
-            let (status, result) = legacy(
-                &s.counts,
-                headers,
-                "object",
-                "execute_kw",
-                json!([db, uid, "fixture-secret", model, method, [ids], kwargs]),
-            )
-            .await;
-            return json2_result(&s, &method, status, result);
-        }
-        return json2_error(
-            &s,
-            StatusCode::NOT_FOUND,
-            "werkzeug.exceptions.NotFound",
-            &format!("The method '{method}' does not exist on the model '{model}'"),
-        );
-    };
-    if !record && ids.as_array().is_some_and(|a| !a.is_empty()) {
-        return json2_error(
-            &s,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "werkzeug.exceptions.UnprocessableEntity",
-            &format!("cannot call {model}.{method} with ids"),
-        );
-    }
-    if let Some(bad) = params.keys().find(|k| !names.contains(&k.as_str())) {
-        return json2_error(
-            &s,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "werkzeug.exceptions.UnprocessableEntity",
-            &format!("got an unexpected keyword argument '{bad}'"),
-        );
-    }
-    // Reuse fixture data by matching JSON-RPC positional shape.
-    let take = |params: &mut serde_json::Map<String, Value>, k: &str| {
-        params.remove(k).unwrap_or(Value::Null)
-    };
-    let args = match method.as_str() {
-        "read" | "unlink" | "get_external_id" => json!([ids]),
-        "write" => json!([ids, take(&mut params, "vals")]),
-        "name_search" => json!([
-            take(&mut params, "name"),
-            take(&mut params, "domain"),
-            take(&mut params, "operator"),
-            take(&mut params, "limit")
-        ]),
-        "create" => json!([take(&mut params, "vals_list")]),
-        _ => json!([]),
-    };
-    params.insert("context".into(), context);
-    let (status, result) = legacy(
-        &s.counts,
-        headers,
-        "object",
-        "execute_kw",
-        json!([db, uid, "fixture-secret", model, method, args, params]),
-    )
-    .await;
-    json2_result(&s, &method, status, result)
-}
-
-fn json2_result(
-    s: &ProtocolState,
-    method: &str,
-    status: StatusCode,
-    result: Result<Value, Value>,
-) -> Response {
-    if !status.is_success() {
-        return status.into_response();
-    }
-    match result {
-        Ok(value) => {
-            // JSON-2 serializes create recordsets as ID lists.
-            let value = match value {
-                Value::Number(n) if method == "create" => json!([n]),
-                v => v,
-            };
-            let body = value.to_string();
-            s.bytes.fetch_add(body.len(), Ordering::SeqCst);
-            (
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "application/json; charset=utf-8",
-                )],
-                body,
-            )
-                .into_response()
-        }
-        Err(data) => {
-            let name = data["name"].as_str().unwrap_or("builtins.Exception");
-            let message = data["message"].as_str().unwrap_or("error");
-            let status = if name.ends_with("AccessError") {
-                StatusCode::FORBIDDEN
-            } else if name.ends_with("UserError") || name.ends_with("ValidationError") {
-                StatusCode::UNPROCESSABLE_ENTITY
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            json2_error(s, status, name, message)
-        }
-    }
-}
-
 /// HTTPS server with the test certificate; count TLS connections receiving decrypted bytes.
-#[allow(dead_code)]
 pub async fn untrusted_tls_server() -> (u16, Arc<AtomicUsize>) {
     use tokio_rustls::rustls::{
         ServerConfig,

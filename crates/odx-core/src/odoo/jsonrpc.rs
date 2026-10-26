@@ -549,19 +549,6 @@ impl OdooClient {
         self.auth.lock().await.clear();
         self.detected.lock().await.clear();
     }
-    /// Call `execute_kw`, with response byte counts.
-    pub async fn execute_kw_measured(
-        &self,
-        env: &Environment,
-        uid: i64,
-        model: &str,
-        method: &str,
-        args: Value,
-        kwargs: Value,
-    ) -> Result<(Value, usize)> {
-        self.execute_kw_limited(env, uid, model, method, args, kwargs, MAX_RESPONSE)
-            .await
-    }
     /// Bound response bytes across all three protocols; overflow returns ResponseTooLarge without partial data.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_kw_limited(
@@ -624,14 +611,24 @@ fn unresolved_protocol() -> OdxError {
 /// Classify sent writes: redacted Odoo errors are known failures; preserve pre-send errors. Other network, HTTP or unreadable responses are uncertain because Odoo may have applied the write.
 pub(crate) fn sent_error(error: OdxError) -> OdxError {
     match error {
+        // XML-RPC: Odoo commits before marshalling the result, so these faults come after the write ran.
+        OdxError::Remote(m)
+            if m.contains("cannot marshal") || m.contains("exceeds XML-RPC limits") =>
+        {
+            OdxError::Uncertain
+        }
         OdxError::Remote(_)
         | OdxError::Invalid(_)
         | OdxError::Validation { .. }
         | OdxError::Json(_) => error,
         // JSON-2 rejects invalid keys with HTTP 401 before execution.
         OdxError::AuthenticationRejected => error,
-        // Proxy connection failure or HTTP 407 means the request never reached Odoo.
-        OdxError::Network { kind: "proxy", .. } => error,
+        // Proxy connection failure or HTTP 407 means the request never reached Odoo; so do
+        // failures that happen before a connection exists.
+        OdxError::Network {
+            kind: "proxy" | "dns" | "refused" | "unreachable" | "tls",
+            ..
+        } => error,
         _ => OdxError::Uncertain,
     }
 }
@@ -715,7 +712,10 @@ fn network_error(e: &reqwest::Error, env: &Environment) -> OdxError {
     }
     let lower = detail.to_lowercase();
     let in_proxy = lower.contains("tunnel error") || lower.contains("socks error");
-    let tls = lower.contains("certificate") || lower.contains("tls") || lower.contains("handshake");
+    // Only a failed connection is a TLS setup error: "peer closed connection without sending TLS
+    // close_notify" arrives after the request was sent, and may follow a write Odoo applied.
+    let tls = e.is_connect()
+        && (lower.contains("certificate") || lower.contains("tls") || lower.contains("handshake"));
     let kind = if env.proxied() && e.is_connect() && (in_proxy || !tls) {
         "proxy"
     } else if e.is_timeout() || lower.contains("timed out") {
@@ -742,12 +742,41 @@ fn network_error(e: &reqwest::Error, env: &Environment) -> OdxError {
     }
 }
 pub(super) fn scrub(s: &str, env: &Environment) -> String {
-    let mut clean = s.to_owned();
-    // Redact environment credentials, masked headers and proxy credentials.
-    for secret in env.redaction_secrets() {
-        clean = clean.replace(secret, "[redacted]");
+    env.redact(s).chars().take(512).collect()
+}
+
+#[cfg(test)]
+mod sent_error_tests {
+    use super::*;
+    #[test]
+    fn only_errors_after_sending_are_uncertain() {
+        let network = |kind| OdxError::Network {
+            kind,
+            message: String::new(),
+        };
+        for kind in ["proxy", "dns", "refused", "unreachable", "tls"] {
+            assert!(
+                matches!(sent_error(network(kind)), OdxError::Network { .. }),
+                "{kind}"
+            );
+        }
+        for kind in ["timeout", "reset", "network"] {
+            assert!(
+                matches!(sent_error(network(kind)), OdxError::Uncertain),
+                "{kind}"
+            );
+        }
+        assert!(matches!(
+            sent_error(OdxError::Remote(
+                "TypeError: cannot marshal None unless allow_none is enabled".into()
+            )),
+            OdxError::Uncertain
+        ));
+        assert!(matches!(
+            sent_error(OdxError::Remote("ValidationError".into())),
+            OdxError::Remote(_)
+        ));
     }
-    clean.chars().take(512).collect()
 }
 
 #[cfg(test)]

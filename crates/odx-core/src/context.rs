@@ -69,13 +69,9 @@ fn dictionaries(entries: Vec<ContextEntry>) -> Result<(Value, Map<String, Value>
 impl Core {
     pub async fn context_settings(&self, environment_id: Option<&str>) -> Result<ContextSettings> {
         let s = self.inner.lock().await;
-        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+        let data = s.vault()?.data();
         if let Some(id) = environment_id {
-            let env = data
-                .environments
-                .iter()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
+            let env = data.environment(id)?;
             Ok(ContextSettings {
                 entries: entries(&env.context, &env.disabled_context),
                 inherited: data.global_context.clone(),
@@ -94,13 +90,9 @@ impl Core {
     ) -> Result<()> {
         let (active, disabled) = dictionaries(entries)?;
         let mut s = self.inner.lock().await;
-        let ids = s.vault.as_mut().ok_or(OdxError::Locked)?.update(|data| {
+        let ids = s.vault_mut()?.update(|data| {
             Ok(if let Some(id) = environment_id {
-                let env = data
-                    .environments
-                    .iter_mut()
-                    .find(|e| e.id == id)
-                    .ok_or(OdxError::EnvironmentNotFound)?;
+                let env = data.environment_mut(id)?;
                 env.context = active;
                 env.disabled_context = disabled;
                 env.revision += 1;

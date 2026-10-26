@@ -1,13 +1,12 @@
 //! Settings: core validation, encrypted persistence and live application. Fixed limits are not settings.
 mod flow;
 mod support;
-use odx_core::{Core, EnvironmentDraft, Protocol, Settings, WriteMode, error::OdxError};
+use odx_core::{Core, Settings, WriteMode, error::OdxError};
 use serde_json::json;
 
 async fn core() -> (std::sync::Arc<Core>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     (core, tmp)
 }
 
@@ -100,15 +99,7 @@ async fn approval_expiry_setting_applies_to_new_requests_only() {
     let (core, _tmp) = core().await;
     let sim = support::simulator().await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "A".into(),
-            url: sim.url.clone(),
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("A", &sim.url))
         .await
         .unwrap();
     core.set_mode(&env.id, WriteMode::Approval).await.unwrap();

@@ -105,18 +105,13 @@ pub const MAX_RULE_RECORDS: u64 = 1000;
 impl RuleDraft {
     /// Validate without broadening rules: reject unrepresentable conditions rather than ignoring fields.
     pub fn into_rule(self, now: DateTime<Utc>) -> Result<Rule> {
-        let model_ok = crate::tools::catalog::is_identifier(&self.model, true)
-            && !self.model.contains("..")
-            && !self.model.ends_with('.');
-        if !model_ok {
+        if !crate::tools::args::valid_model(&self.model) {
             return Err(OdxError::validation(
                 "validation.rule.model_invalid",
                 "invalid model",
             ));
         }
-        if !crate::tools::catalog::is_identifier(&self.method, false)
-            || self.method.starts_with('_')
-        {
+        if !crate::tools::args::valid_method(&self.method) {
             return Err(OdxError::validation(
                 "validation.rule.method_invalid",
                 "invalid method",
@@ -152,7 +147,7 @@ impl RuleDraft {
                 }
                 if fields
                     .iter()
-                    .any(|f| !crate::tools::catalog::is_identifier(f, false))
+                    .any(|f| !crate::tools::args::is_identifier(f, false))
                 {
                     return Err(OdxError::validation(
                         "validation.rule.field_invalid",
@@ -305,21 +300,14 @@ pub fn matching_rule<'r>(
 
 /// Positional or named parameter; None if missing or supplied both ways.
 fn parameter<'a>(call: &EffectiveCall<'a>, index: usize, name: &str) -> Option<&'a Value> {
-    match (call.args.get(index), call.kwargs.get(name)) {
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        _ => None,
-    }
+    crate::tools::mutations::parameter(call.args, call.kwargs, index, name).ok()
 }
 
-/// Explicit IDs: nonempty unique positive integers.
+/// Explicit IDs: nonempty unique positive integers, as call validation requires.
 fn explicit_ids(value: &Value) -> Option<usize> {
-    let ids = value.as_array()?;
-    let mut seen = std::collections::HashSet::new();
-    let valid = !ids.is_empty()
-        && ids
-            .iter()
-            .all(|id| id.as_u64().is_some_and(|id| id > 0) && seen.insert(id.as_u64()));
-    valid.then_some(ids.len())
+    let ids = crate::tools::mutations::integer_ids(value).ok()?;
+    crate::tools::mutations::validate_ids(&ids).ok()?;
+    Some(ids.len())
 }
 
 /// Count create values or the first positional/named ids list for other methods. Does not bound internal effects of custom methods.
@@ -379,7 +367,7 @@ impl crate::execution::Core {
     /// Stored rules for one or all environments with current validity.
     pub async fn rules(&self, environment_id: Option<&str>) -> Result<Vec<RuleView>> {
         let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let v = s.vault()?;
         let now = v.now();
         Ok(v.data()
             .rules
@@ -394,7 +382,7 @@ impl crate::execution::Core {
     /// Validate creates/updates; editing increments revision and prevents dispatch under older authorizations.
     pub async fn save_rule(&self, draft: RuleDraft) -> Result<RuleView> {
         let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        let v = s.vault_mut()?;
         let now = v.now();
         if !v
             .data()
@@ -454,7 +442,7 @@ impl crate::execution::Core {
     /// Delete the rule and block its unsent authorizations.
     pub async fn delete_rule(&self, id: &str) -> Result<()> {
         let mut s = self.inner.lock().await;
-        s.vault.as_mut().ok_or(OdxError::Locked)?.update(|data| {
+        s.vault_mut()?.update(|data| {
             let before = data.rules.len();
             data.rules.retain(|r| r.id != id);
             if before == data.rules.len() {

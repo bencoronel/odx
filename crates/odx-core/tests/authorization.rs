@@ -16,6 +16,19 @@ fn draft(name: &str) -> EnvironmentDraft {
     }
 }
 
+/// What an authenticated client may do: the capability in a granted environment.
+fn allows(
+    identity: &odx_core::ClientIdentity,
+    environment_id: &str,
+    capability: Capability,
+) -> bool {
+    identity.capabilities.contains(&capability)
+        && identity
+            .environment_ids
+            .iter()
+            .any(|id| id == environment_id)
+}
+
 #[tokio::test]
 async fn client_tokens_are_shown_once_replaceable_revocable_and_bound_to_environments() {
     let tmp = tempfile::tempdir().unwrap();
@@ -78,13 +91,13 @@ async fn client_tokens_are_shown_once_replaceable_revocable_and_bound_to_environ
     assert!(!raw.windows(token.len()).any(|w| w == token.as_bytes()));
 
     let identity = core.authenticate_client(&token).await.unwrap();
-    assert!(identity.allows(&a.id, Capability::OdooRead));
+    assert!(allows(&identity, &a.id, Capability::OdooRead));
     assert!(
-        !identity.allows(&b.id, Capability::OdooRead),
+        !allows(&identity, &b.id, Capability::OdooRead),
         "deny ungranted environments"
     );
     assert!(
-        !identity.allows(&a.id, Capability::OdooWriteRequest),
+        !allows(&identity, &a.id, Capability::OdooWriteRequest),
         "deny ungranted capabilities"
     );
     assert!(core.authenticate_client("odx_no-valido").await.is_err());
@@ -115,7 +128,7 @@ async fn client_tokens_are_shown_once_replaceable_revocable_and_bound_to_environ
     let a2 = core.save_environment(draft("A")).await.unwrap();
     let identity = core.authenticate_client(&replaced.token).await.unwrap();
     assert!(identity.environment_ids.is_empty());
-    assert!(!identity.allows(&a2.id, Capability::OdooRead));
+    assert!(!allows(&identity, &a2.id, Capability::OdooRead));
 
     // Revocation is final and cannot be replaced.
     core.revoke_client(&issued.client.id).await.unwrap();
@@ -135,8 +148,7 @@ async fn client_tokens_are_shown_once_replaceable_revocable_and_bound_to_environ
 #[tokio::test]
 async fn local_stdio_profile_is_permanent_and_preserves_edited_permissions_on_unlock() {
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let clients = core.clients().await.unwrap();
     assert_eq!(clients.len(), 1);
     let local = &clients[0];
@@ -183,8 +195,7 @@ async fn local_stdio_profile_is_permanent_and_preserves_edited_permissions_on_un
 async fn all_environments_scope_includes_environments_created_later() {
     use odx_core::ClientScope;
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let a = core.save_environment(draft("A")).await.unwrap();
     let all = core
         .create_client("all", ClientScope::All, vec![Capability::OdooRead])
@@ -236,8 +247,7 @@ async fn all_environments_scope_includes_environments_created_later() {
 async fn editing_a_client_changes_scope_and_capabilities_without_new_token() {
     use odx_core::ClientScope;
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let a = core.save_environment(draft("A")).await.unwrap();
     core.save_environment(draft("B")).await.unwrap();
     let issued = core

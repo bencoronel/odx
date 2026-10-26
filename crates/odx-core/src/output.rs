@@ -1,4 +1,5 @@
 //! Shared result envelope, compact formatting and final size limits.
+use crate::error::OdxError;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -165,10 +166,17 @@ pub fn render(output: &ToolOutput) -> Rendered {
 }
 
 /// Fit the final limit by dropping whole rows and marking truncation. Return output_too_large if no rows can be dropped.
-pub fn fit(mut output: ToolOutput) -> Result<(ToolOutput, Rendered), ToolError> {
+pub fn fit(output: ToolOutput) -> Result<(ToolOutput, Rendered), ToolError> {
+    fit_with(output, Rendered::size)
+}
+/// `fit` with the transport's own measure of what it sends.
+pub fn fit_with(
+    mut output: ToolOutput,
+    size: impl Fn(&Rendered) -> usize,
+) -> Result<(ToolOutput, Rendered), ToolError> {
     loop {
         let rendered = render(&output);
-        if rendered.size() <= MAX_OUTPUT {
+        if size(&rendered) <= MAX_OUTPUT {
             return Ok((output, rendered));
         }
         let Value::Array(rows) = &mut output.data else {
@@ -176,7 +184,7 @@ pub fn fit(mut output: ToolOutput) -> Result<(ToolOutput, Rendered), ToolError> 
                 "output_too_large",
                 format!(
                     "result uses {} bytes, exceeding the {MAX_OUTPUT} limit",
-                    rendered.size()
+                    size(&rendered)
                 ),
                 Outcome::Failed,
             ));
@@ -189,7 +197,7 @@ pub fn fit(mut output: ToolOutput) -> Result<(ToolOutput, Rendered), ToolError> 
             ));
         }
         // Drop rows proportionally to overflow, with a minimum of one.
-        let keep = (rows.len() * MAX_OUTPUT / rendered.size()).clamp(1, rows.len() - 1);
+        let keep = (rows.len() * MAX_OUTPUT / size(&rendered)).clamp(1, rows.len() - 1);
         rows.truncate(keep);
         let returned = rows.len();
         output.meta.insert("truncated".into(), json!(true));
@@ -283,19 +291,160 @@ fn compact(output: &ToolOutput) -> String {
     }
     if let Some(Value::Array(warnings)) = output.meta.get("warnings") {
         for w in warnings {
+            // One line per warning: Odoo access errors span several lines and would read as table rows.
+            let message = w["message"].as_str().unwrap_or("");
             text.push_str(&format!(
                 "\n# warning {}: {}",
                 w["code"].as_str().unwrap_or(""),
-                w["message"].as_str().unwrap_or("")
+                message
+                    .replace('\\', "\\\\")
+                    .replace('\n', "\\n")
+                    .replace('\t', "\\t")
             ));
         }
     }
     text
 }
 
+fn from_error(error: OdxError) -> ToolError {
+    match error {
+        OdxError::Locked => ToolError::new("locked", "Odx vault is locked", Outcome::NotSent),
+        OdxError::Unauthorized | OdxError::ClientNotFound => ToolError::new(
+            "unauthenticated",
+            "invalid, replaced or revoked client token",
+            Outcome::NotSent,
+        ),
+        OdxError::Invalid(_) => ToolError::invalid("invalid input"),
+        error @ OdxError::Validation { .. } => {
+            let code = error.code();
+            let params = error.ui_params();
+            ToolError::invalid(error.to_string()).with_ui_error(code, params)
+        }
+        OdxError::EnvironmentNotFound => ToolError::new(
+            "environment_unavailable",
+            "environment unavailable to this client",
+            Outcome::NotSent,
+        ),
+        OdxError::Denied => ToolError::new(
+            "forbidden",
+            "denied by environment policy",
+            Outcome::NotSent,
+        ),
+        OdxError::ApprovalUnavailable => ToolError::new(
+            "approval_revoked",
+            "request no longer valid: revoked, expired or environment changed",
+            Outcome::NotSent,
+        ),
+        OdxError::Uncertain => ToolError::new(
+            "uncertain_result",
+            "Odoo may have applied the write; no retry was attempted. Check its state before repeating",
+            Outcome::Uncertain,
+        ),
+        OdxError::Persistence | OdxError::Io(_) | OdxError::Json(_) => ToolError::new(
+            "audit_unavailable",
+            "could not record audit; nothing was sent to Odoo",
+            Outcome::NotSent,
+        ),
+        OdxError::Capacity => ToolError::new(
+            "capacity_exceeded",
+            "capacity limit reached; retry later",
+            Outcome::NotSent,
+        ),
+        OdxError::Remote(m) => ToolError::new("upstream_error", m, Outcome::Failed),
+        OdxError::AuthenticationRejected => ToolError::new(
+            "upstream_auth",
+            "Odoo rejected the environment credential",
+            Outcome::Failed,
+        ),
+        OdxError::Network {
+            kind: "timeout",
+            message,
+        } => ToolError::new("upstream_timeout", message, Outcome::Failed),
+        OdxError::Network {
+            kind: "proxy",
+            message,
+        } => ToolError::new(
+            "upstream_network",
+            format!("outbound proxy failure: {message}"),
+            Outcome::Failed,
+        ),
+        OdxError::Network { message, .. } => {
+            ToolError::new("upstream_network", message, Outcome::Failed)
+        }
+        error @ OdxError::HttpStatus { .. } => {
+            let (code, params) = (error.code(), error.ui_params());
+            ToolError::new("upstream_error", error.to_string(), Outcome::Failed)
+                .with_ui_error(code, params)
+        }
+        OdxError::Upstream(m) => ToolError::new("upstream_network", m, Outcome::Failed),
+        e @ OdxError::ResponseTooLarge { .. } => {
+            ToolError::new("output_too_large", e.to_string(), Outcome::Failed)
+        }
+        OdxError::UnlockFailed => ToolError::new(
+            "service_unavailable",
+            "service unavailable",
+            Outcome::NotSent,
+        ),
+    }
+}
+impl From<OdxError> for ToolError {
+    fn from(error: OdxError) -> Self {
+        from_error(error)
+    }
+}
+
+pub(crate) fn not_found(message: impl Into<String>) -> ToolError {
+    ToolError::new("not_found", message, Outcome::Failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_error_keeps_external_envelope_and_filters_desktop_parameters() {
+        let error = OdxError::validation_with_params(
+            "validation.rule.limit_reached",
+            json!({ "limit": 128, "secret": "do-not-send" }),
+            "legacy validation text",
+        );
+        let tool = from_error(error);
+        assert_eq!(tool.code, "invalid_arguments");
+        assert_eq!(tool.message, "legacy validation text");
+        assert_eq!(tool.ui_code, Some("validation.rule.limit_reached"));
+        assert_eq!(tool.ui_params, json!({ "limit": 128 }));
+        assert_eq!(
+            tool.envelope("request")["error"]["code"],
+            "invalid_arguments"
+        );
+        assert!(tool.envelope("request").get("ui_code").is_none());
+        assert!(!tool.envelope("request").to_string().contains("do-not-send"));
+
+        let legacy = from_error(OdxError::Invalid("api_key=must-not-leak".into()));
+        assert_eq!(legacy.message, "invalid input");
+        assert!(
+            !legacy
+                .envelope("request")
+                .to_string()
+                .contains("must-not-leak")
+        );
+    }
+
+    #[test]
+    fn a_multi_line_warning_stays_on_its_footer_line() {
+        let mut out = rows(1, 1);
+        out.warn("soft", "Access denied\n\nAllowed groups:\n\t- Sales");
+        let text = compact(&out);
+        let footer = text
+            .lines()
+            .find(|l| l.starts_with("# warning soft"))
+            .unwrap();
+        assert!(
+            footer.ends_with(r"Access denied\n\nAllowed groups:\n\t- Sales"),
+            "{text}"
+        );
+        assert!(!text.lines().any(|l| l.starts_with("Allowed")), "{text}");
+    }
 
     fn rows(n: usize, width: usize) -> ToolOutput {
         let data = (0..n)

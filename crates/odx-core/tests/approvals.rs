@@ -16,8 +16,7 @@ struct Fixture {
 async fn fixture(context: Value) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
         .save_environment(EnvironmentDraft {
             name: "A".into(),

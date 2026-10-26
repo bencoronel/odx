@@ -27,8 +27,7 @@ async fn fixture_with_sim(
     secret: &str,
 ) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
         .save_environment(EnvironmentDraft {
             name: "A".into(),
@@ -107,8 +106,7 @@ async fn every_protocol_and_detection_send_default_or_configured_user_agent() {
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     for protocol in PROTOCOLS.into_iter().chain([Protocol::Auto]) {
         let tmp = tempfile::tempdir().unwrap();
-        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-        core.create("fictional master password").await.unwrap();
+        let core = support::unlocked_core(&tmp).await;
         let mut draft = EnvironmentDraft {
             name: "A".into(),
             url: format!("{url}/default"),
@@ -552,6 +550,22 @@ async fn same_tool_results_on_every_protocol() {
 }
 
 #[tokio::test]
+async fn xmlrpc_write_returning_none_is_uncertain_not_failed() {
+    // Odoo commits before XML-RPC fails to marshal None: the write may have applied.
+    let f = fixture(19, Protocol::Xmlrpc, "fixture-secret").await;
+    f.core.set_mode(&f.env, WriteMode::Permanent).await.unwrap();
+    let error = f
+        .run(
+            "call",
+            json!({"model":"account.move","method":"action_post","args":[[7]]}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "uncertain_result", "{}", error.message);
+    assert_eq!(f.sim.counts.writes(), 1);
+}
+
+#[tokio::test]
 async fn xmlrpc_cannot_return_none_but_json_protocols_can() {
     // Odoo XML-RPC allow_none=False faults on None or integers outside 32 bits.
     for protocol in PROTOCOLS {
@@ -825,8 +839,7 @@ async fn untrusted_tls_certificates_are_rejected_before_sending() {
     let (port, decrypted) = support::untrusted_tls_server().await;
     for protocol in PROTOCOLS {
         let tmp = tempfile::tempdir().unwrap();
-        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-        core.create("fictional master password").await.unwrap();
+        let core = support::unlocked_core(&tmp).await;
         let env = core
             .save_environment(EnvironmentDraft {
                 name: "A".into(),

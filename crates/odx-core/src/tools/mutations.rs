@@ -22,6 +22,36 @@ pub fn validate_create(values: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Positional `index` or named `name`; an error when missing or given both ways.
+pub(crate) fn parameter<'a>(
+    args: &'a [Value],
+    kwargs: &'a serde_json::Map<String, Value>,
+    index: usize,
+    name: &str,
+) -> Result<&'a Value> {
+    match (args.get(index), kwargs.get(name)) {
+        (Some(_), Some(_)) => Err(OdxError::validation(
+            "validation.console.parameter_duplicated",
+            format!("duplicate parameter: {name}"),
+        )),
+        (Some(value), None) | (None, Some(value)) => Ok(value),
+        (None, None) => Err(OdxError::validation(
+            "validation.console.parameter_required",
+            format!("missing {name}"),
+        )),
+    }
+}
+
+/// An ID list as integers; validate_ids checks the values.
+pub(crate) fn integer_ids(value: &Value) -> Result<Vec<i64>> {
+    serde_json::from_value(value.clone()).map_err(|_| {
+        OdxError::validation(
+            "validation.console.ids_must_be_integers",
+            "ids must be an integer list",
+        )
+    })
+}
+
 /// Values of a write that targets existing records: write(ids, vals) and web_save with IDs.
 fn written_values<'a>(
     method: &str,
@@ -36,59 +66,74 @@ fn written_values<'a>(
     args.get(1).or_else(|| kwargs.get("vals"))?.as_object()
 }
 
-/// Keys Odoo turns into destructive x2many commands if the field is one2many/many2many:
-/// false/null becomes Command.clear() and a flat id list Command.set(). Only field types can tell
-/// them apart from `{"active": false}`, so the caller resolves these names with fields_get.
-/// shortcut: top-level keys only; shorthand inside nested 0/1 commands targets comodel fields and is not checked.
+/// Values Odoo turns into destructive x2many commands if the field is one2many/many2many:
+/// false/null becomes Command.clear() and a list whose first item is not a list Command.set(),
+/// as in Odoo's _X2Many.write ([5.0] and ["5"] included).
+fn shorthand(v: &Value) -> bool {
+    v.is_null()
+        || *v == Value::Bool(false)
+        || v.as_array()
+            .is_some_and(|a| a.first().is_some_and(|f| !f.is_array()))
+}
+
+/// Keys with shorthand values. Only field types can tell them apart from `{"active": false}`,
+/// so the caller resolves these names with fields_get.
 pub fn shorthand_keys(
     method: &str,
     args: &[Value],
     kwargs: &serde_json::Map<String, Value>,
 ) -> Vec<String> {
-    let flat_ids = |v: &Value| {
-        v.as_array()
-            .is_some_and(|a| !a.is_empty() && a.iter().all(Value::is_i64))
-    };
     written_values(method, args, kwargs)
         .into_iter()
         .flatten()
-        .filter(|(_, v)| v.is_null() || *v == &Value::Bool(false) || flat_ids(v))
+        .filter(|(_, v)| shorthand(v))
         .map(|(k, _)| k.clone())
         .collect()
 }
 
+/// (x2many field, comodel key) pairs with shorthand values inside update commands ([1, id, {..}]).
+/// A record being created ([0, 0, {..}]) has no links to remove. The caller resolves the comodel field types.
+pub fn nested_shorthand_keys(
+    method: &str,
+    args: &[Value],
+    kwargs: &serde_json::Map<String, Value>,
+) -> Vec<(String, String)> {
+    let mut keys = Vec::new();
+    for (field, value) in written_values(method, args, kwargs).into_iter().flatten() {
+        for command in value.as_array().into_iter().flatten() {
+            let Some([code, _, Value::Object(values)]) = command.as_array().map(Vec::as_slice)
+            else {
+                continue;
+            };
+            if matches!(command_code(code), Some(Some(1))) {
+                keys.extend(
+                    values
+                        .iter()
+                        .filter(|(_, v)| shorthand(v))
+                        .map(|(k, _)| (field.clone(), k.clone())),
+                );
+            }
+        }
+    }
+    keys
+}
+
 /// `x2many`: names from shorthand_keys that fields_get reported as one2many/many2many.
+/// `nested`: pairs from nested_shorthand_keys whose comodel field is one2many/many2many.
 pub fn call_effect(
     method: &str,
     args: &[Value],
     kwargs: &serde_json::Map<String, Value>,
     x2many: &[String],
+    nested: usize,
 ) -> Result<crate::policy::Effect> {
-    let shorthand = written_values(method, args, kwargs).map_or(0, |values| {
-        x2many.iter().filter(|k| values.contains_key(*k)).count()
-    });
+    let shorthand = nested
+        + written_values(method, args, kwargs).map_or(0, |values| {
+            x2many.iter().filter(|k| values.contains_key(*k)).count()
+        });
     use crate::policy::Effect;
-    let parameter = |index: usize, name: &str| -> Result<&Value> {
-        match (args.get(index), kwargs.get(name)) {
-            (Some(_), Some(_)) => Err(OdxError::validation(
-                "validation.console.parameter_duplicated",
-                format!("duplicate parameter: {name}"),
-            )),
-            (Some(value), None) | (None, Some(value)) => Ok(value),
-            (None, None) => Err(OdxError::validation(
-                "validation.console.parameter_required",
-                format!("missing {name}"),
-            )),
-        }
-    };
-    let ids = || -> Result<Vec<i64>> {
-        serde_json::from_value(parameter(0, "ids")?.clone()).map_err(|_| {
-            OdxError::validation(
-                "validation.console.ids_must_be_integers",
-                "ids must be an integer list",
-            )
-        })
-    };
+    let parameter = |index: usize, name: &str| parameter(args, kwargs, index, name);
+    let ids = || integer_ids(parameter(0, "ids")?);
     match method {
         "unlink" | "write" => {
             let ids = ids()?;
@@ -275,6 +320,7 @@ mod tests {
                 args.as_array().unwrap(),
                 kwargs.as_object().unwrap(),
                 &[],
+                0,
             )
         };
         assert_eq!(
@@ -322,6 +368,30 @@ mod tests {
     }
 
     #[test]
+    fn shorthand_follows_odoo_first_item_rule_at_top_level_and_in_nested_commands() {
+        use serde_json::json;
+        let kwargs = |vals: Value| json!({"vals": vals}).as_object().unwrap().clone();
+        let vals = kwargs(json!({
+            "order_line": [5.0], "tag_ids": ["5"], "child_ids": false, "name": "x", "lines": [[0, 0, {}]],
+        }));
+        let mut keys = shorthand_keys("write", &[json!([1])], &vals);
+        keys.sort();
+        assert_eq!(keys, ["child_ids", "order_line", "tag_ids"]);
+        let vals = kwargs(
+            json!({"sale_order_ids": [[1, 5, {"order_line": false, "note": "x"}], [0, 0, {"tag_ids": [2]}], [4, 6, 0]]}),
+        );
+        assert_eq!(
+            nested_shorthand_keys("write", &[json!([1])], &vals),
+            // New children ([0, 0, ..]) have no links to clear.
+            [("sale_order_ids".to_string(), "order_line".to_string())]
+        );
+        assert_eq!(
+            call_effect("write", &[json!([1])], &vals, &[], 1).unwrap(),
+            crate::policy::Effect::Delete
+        );
+    }
+
+    #[test]
     fn decimal_command_codes_never_hide_deletions() {
         use serde_json::json;
         // Python equates 2.0 with 2.
@@ -349,6 +419,7 @@ mod tests {
                 args.as_array().unwrap(),
                 kwargs.as_object().unwrap(),
                 &[],
+                0,
             )
         };
         let spec = json!({"name":{}});

@@ -18,6 +18,7 @@ fn call(
         context: Map::new(),
         confirmed,
         client_id: None,
+        client_revision: None,
     }
 }
 
@@ -25,8 +26,7 @@ fn call(
 async fn shell_requires_confirmation_and_respects_read_only() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
         .save_environment(EnvironmentDraft {
             name: "Prod".into(),
@@ -253,18 +253,9 @@ async fn shell_history_is_encrypted_capped_and_survives_unlock() {
 async fn shell_never_generates_or_shows_api_keys() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "Prod".into(),
-            url: sim.url.clone(),
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("Prod", &sim.url))
         .await
         .unwrap();
     for (model, method) in [
@@ -289,5 +280,138 @@ async fn shell_never_generates_or_shows_api_keys() {
             .filter(|e| e.outcome == "denied")
             .count(),
         2
+    );
+}
+
+#[tokio::test]
+async fn a_shell_write_rejected_before_sending_is_failed_not_uncertain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sim = support::protocol_simulator(19).await;
+    let core = support::unlocked_core(&tmp).await;
+    let env = core
+        .save_environment(EnvironmentDraft {
+            name: "Prod".into(),
+            url: sim.url.clone(),
+            database: "base-a".into(),
+            login: "fixture-user".into(),
+            protocol: Protocol::Xmlrpc,
+            context: json!({}),
+            secret: "fixture-secret".into(),
+        })
+        .await
+        .unwrap();
+    core.set_mode(&env.id, WriteMode::Permanent).await.unwrap();
+    // XML-RPC cannot carry control characters: the call fails while encoding, before it is sent.
+    let error = core
+        .shell_call(call(
+            &env.id,
+            "res.partner",
+            "write",
+            json!([[1], {"name": "\u{1}x"}]),
+            true,
+        ))
+        .await
+        .unwrap_err();
+    assert_ne!(error.code, "uncertain_result");
+    assert_eq!(sim.counts.writes(), 0);
+    let events = core
+        .activity(None, ActivityFilter::default())
+        .await
+        .unwrap()
+        .events;
+    assert!(
+        events
+            .iter()
+            .any(|e| e.operation == "write:res.partner" && e.outcome == "failed")
+    );
+}
+
+#[tokio::test]
+async fn a_confirmed_write_whose_response_is_lost_is_uncertain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sim = support::simulator().await;
+    let core = support::unlocked_core(&tmp).await;
+    let env = core
+        .save_environment(support::draft("Prod", &sim.url))
+        .await
+        .unwrap();
+    core.set_mode(&env.id, WriteMode::Permanent).await.unwrap();
+    // Log in first so the lost response is the call itself.
+    core.shell_call(call(
+        &env.id,
+        "res.partner",
+        "search_count",
+        json!([[]]),
+        false,
+    ))
+    .await
+    .unwrap();
+    sim.counts.lose_next_response();
+    let write = core
+        .shell_call(call(
+            &env.id,
+            "res.partner",
+            "write",
+            json!([[1], {"name": "x"}]),
+            true,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(write.code, "uncertain_result");
+    let events = core
+        .activity(None, ActivityFilter::default())
+        .await
+        .unwrap()
+        .events;
+    let outcome = |op: &str| {
+        events
+            .iter()
+            .find(|e| e.operation == op)
+            .unwrap()
+            .outcome
+            .clone()
+    };
+    assert_eq!(outcome("write:res.partner"), "uncertain");
+    assert_eq!(outcome("search_count:res.partner"), "succeeded");
+}
+
+#[tokio::test]
+async fn web_urls_open_saved_environments_and_valid_records_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let core = support::unlocked_core(&tmp).await;
+    let env = core
+        .save_environment(support::draft("Prod", "https://odoo.test/"))
+        .await
+        .unwrap();
+    assert_eq!(
+        core.web_url(&env.id, None).await.unwrap(),
+        "https://odoo.test"
+    );
+    assert_eq!(
+        core.web_url(&env.id, Some(("res.partner", 7)))
+            .await
+            .unwrap(),
+        "https://odoo.test/web#id=7&model=res.partner&view_type=form"
+    );
+    for (model, id) in [
+        ("", 7),
+        ("Res.Partner", 7),
+        ("res.partner&x=1", 7),
+        (".res", 7),
+        ("res/../x", 7),
+        ("res.partner", 0),
+    ] {
+        assert_eq!(
+            core.web_url(&env.id, Some((model, id)))
+                .await
+                .unwrap_err()
+                .code(),
+            "app.invalid_input",
+            "{model} {id}"
+        );
+    }
+    assert_eq!(
+        core.web_url("missing", None).await.unwrap_err().code(),
+        "app.environment_not_found"
     );
 }

@@ -25,24 +25,24 @@ impl Vault {
     pub(crate) fn exists(path: &Path) -> bool {
         path.exists()
     }
-    /// Move the vault files into `reset-<unix seconds>/` beside them, still encrypted, so a new vault can be created.
+    /// Move the vault files into `reset-<unix nanoseconds>/` beside them, still encrypted, so a new vault can be created.
     /// Synchronous I/O; call outside Tokio worker threads.
     pub fn reset(path: impl AsRef<Path>) -> Result<()> {
         let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());
         let path = path.as_ref();
         let parent = path.parent().ok_or(OdxError::Persistence)?;
-        let secs = std::time::SystemTime::now()
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| OdxError::Persistence)?
-            .as_secs();
-        let aside = parent.join(format!("reset-{secs}"));
+            .as_nanos();
+        // Nanoseconds: two resets in the same second must not collide on the folder name.
+        let aside = parent.join(format!("reset-{nanos}"));
         fs::create_dir(&aside)?;
         // Keep original names so the SQLite journal/WAL still pair with their database if restored by hand.
         // A WAL left by an unclean exit would otherwise be replayed into the new vault, which has another key.
         // Move the live database last: a failure before it leaves the current vault usable.
         let sidecar = |suffix: &str| PathBuf::from(format!("{}-{suffix}", path.display()));
         for file in [
-            path.with_file_name("activity"),
             sidecar("journal"),
             sidecar("wal"),
             sidecar("shm"),

@@ -19,12 +19,15 @@ pub struct ActivityFilter {
     pub writes_only: bool,
     #[serde(default)]
     pub errors_only: bool,
+    /// Only requests at or after this moment.
+    #[serde(default)]
+    pub since: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// List row; its details are read with `activity_details` when opened.
 pub struct ActivityEvent {
     pub request_id: Option<String>,
-    pub details: Option<AuditDetails>,
     pub at: DateTime<Utc>,
     pub environment_id: String,
     /// `None` if the environment was deleted.
@@ -47,8 +50,6 @@ pub struct ActivityCursor {
 pub struct ActivityPage {
     pub events: Vec<ActivityEvent>,
     pub next_cursor: Option<ActivityCursor>,
-    /// False if any history segment was incomplete.
-    pub complete: bool,
 }
 
 /// Treat `method:model` as a write unless the exact method is a known read.
@@ -64,7 +65,7 @@ impl Core {
     ) -> Result<ActivityPage> {
         let (audit, envs, clients) = {
             let s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+            let v = s.vault()?;
             let audit = s.audit.clone().ok_or(OdxError::Locked)?;
             let envs: std::collections::HashMap<String, String> = v
                 .data()
@@ -80,7 +81,7 @@ impl Core {
                 .collect();
             (audit, envs, clients)
         };
-        let (events, next_cursor, complete) = tokio::task::spawn_blocking({
+        let (events, next_cursor) = tokio::task::spawn_blocking({
             let envs = envs.clone();
             let clients = clients.clone();
             move || audit.page(cursor.as_ref(), &filter, &envs, &clients)
@@ -91,7 +92,6 @@ impl Core {
             .into_iter()
             .map(|e| ActivityEvent {
                 request_id: e.request_id,
-                details: e.details,
                 environment_name: envs.get(&e.environment_id).cloned(),
                 client_label: e.client_id.as_ref().and_then(|c| clients.get(c).cloned()),
                 write: is_write(&e.operation),
@@ -105,8 +105,21 @@ impl Core {
         Ok(ActivityPage {
             next_cursor,
             events,
-            complete,
         })
+    }
+}
+
+impl Core {
+    /// Arguments, response and error of one request; None for legacy rows recorded without them.
+    pub async fn activity_details(&self, request_id: String) -> Result<Option<AuditDetails>> {
+        let audit = {
+            let s = self.inner.lock().await;
+            s.vault()?;
+            s.audit.clone().ok_or(OdxError::Locked)?
+        };
+        tokio::task::spawn_blocking(move || audit.details(&request_id))
+            .await
+            .map_err(|_| OdxError::Persistence)?
     }
 }
 

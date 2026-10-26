@@ -58,7 +58,7 @@ fn hits_in(
     context: Value,
 ) -> bool {
     let named: Map<String, Value> = kwargs.as_object().unwrap().clone();
-    let effect = call_effect(method, args.as_array().unwrap(), &named, &[]).unwrap();
+    let effect = call_effect(method, args.as_array().unwrap(), &named, &[], 0).unwrap();
     if !context.is_null() {
         kwargs["context"] = context;
     }
@@ -404,8 +404,7 @@ struct Fixture {
 async fn fixture(mode: WriteMode) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
         .save_environment(EnvironmentDraft {
             name: "A".into(),
@@ -442,13 +441,17 @@ fn write(values: Value) -> Value {
     json!({"env":"A","model":"res.partner","ids":[1],"values":values})
 }
 async fn last_authorization(core: &Core) -> Option<Authorization> {
-    core.activity(None, ActivityFilter::default())
+    let event = core
+        .activity(None, ActivityFilter::default())
         .await
         .unwrap()
         .events
         .into_iter()
-        .find(|e| e.outcome == "succeeded" && e.write)
-        .and_then(|e| e.details?.authorization)
+        .find(|e| e.outcome == "succeeded" && e.write)?;
+    core.activity_details(event.request_id?)
+        .await
+        .unwrap()?
+        .authorization
 }
 
 #[tokio::test]

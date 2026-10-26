@@ -15,8 +15,7 @@ struct Fixture {
 async fn fixture() -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let mut ids = vec![];
     for name in ["A", "B"] {
         let env = core
@@ -1058,7 +1057,15 @@ async fn x2many_shorthand_clear_or_set_needs_approval_even_in_free_write_mode() 
     assert_eq!(f.sim.counts.writes(), 1);
     assert!(f.core.approvals().await.unwrap().is_empty());
     // Odoo reads false as Command.clear() and [3] as Command.set([3]) on a many2many.
-    for values in [json!({"tag_ids": false}), json!({"tag_ids": [3]})] {
+    // Odoo only checks that the first item is not a list: [3.0] and ["3"] are Command.set too.
+    // Shorthand inside an update command clears the comodel's x2many as well.
+    for values in [
+        json!({"tag_ids": false}),
+        json!({"tag_ids": [3]}),
+        json!({"tag_ids": [3.0]}),
+        json!({"tag_ids": ["3"]}),
+        json!({"tag_ids": [[1, 5, {"tag_ids": false}]]}),
+    ] {
         let core = f.core.clone();
         let w = writer.clone();
         let pending = tokio::spawn(async move {
@@ -1081,6 +1088,16 @@ async fn x2many_shorthand_clear_or_set_needs_approval_even_in_free_write_mode() 
         );
     }
     assert_eq!(f.sim.counts.writes(), 1);
+    // A new child's x2many shorthand removes nothing: an ordinary write, on any number of records.
+    f.core
+        .run_tool(
+            &writer,
+            "write",
+            json!({"env":"A","model":"res.partner","ids":[1,2],"values":{"tag_ids":[[0, 0, {"tag_ids": [3]}]]}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.sim.counts.writes(), 2);
     // Shorthand on several records is refused like an explicit relational delete.
     let error = f
         .core
@@ -1092,4 +1109,27 @@ async fn x2many_shorthand_clear_or_set_needs_approval_even_in_free_write_mode() 
         .await
         .unwrap_err();
     assert_eq!(error.code, "invalid_arguments");
+}
+
+#[tokio::test]
+async fn relational_deletes_in_the_call_context_are_refused() {
+    let f = fixture().await;
+    let (writer, _) = client(&f, &[&f.a], &[Capability::OdooWriteRequest]).await;
+    f.core.set_mode(&f.a, WriteMode::Permanent).await.unwrap();
+    // Odoo's default_get would apply this DELETE to the partner being created.
+    for (tool, arguments) in [
+        (
+            "create",
+            json!({"env":"A","model":"res.partner","values":{"name":"x"},"context":{"default_child_ids":[[2, 42]]}}),
+        ),
+        (
+            "call",
+            json!({"env":"A","model":"res.partner","method":"name_create","args":["x"],"kwargs":{"context":{"default_child_ids":[[5, 0, 0]]}}}),
+        ),
+    ] {
+        let error = f.core.run_tool(&writer, tool, arguments).await.unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{tool}");
+    }
+    assert_eq!(f.sim.counts.writes(), 0);
+    assert!(f.core.approvals().await.unwrap().is_empty());
 }

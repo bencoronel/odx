@@ -1,6 +1,7 @@
-pub mod catalog;
-pub mod composite;
-pub mod files;
+pub(crate) mod args;
+pub(crate) mod catalog;
+pub(crate) mod composite;
+pub(crate) mod files;
 pub mod mutations;
-pub mod query;
-pub mod terminal;
+pub(crate) mod query;
+pub(crate) mod terminal;

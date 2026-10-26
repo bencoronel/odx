@@ -22,10 +22,10 @@ fn encrypted_database_preserves_events_and_enforces_event_limit() {
     let path = dir.path().join("vault.sqlite3");
     let vault = Vault::create(&path, "fixture master password").unwrap();
     let audit = AuditLog::for_vault(&vault);
-    assert!(audit.append(&event("x".repeat(16 * 1024))).is_err());
+    assert!(audit.append(&event("x".repeat(80 * 1024))).is_err());
     audit.append(&event("search_read".into())).unwrap();
     let none = HashMap::new();
-    let (events, next, _) = audit.page(None, &Default::default(), &none, &none).unwrap();
+    let (events, next) = audit.page(None, &Default::default(), &none, &none).unwrap();
     assert_eq!(events.len(), 1);
     assert!(next.is_none());
     drop(audit);
@@ -35,7 +35,7 @@ fn encrypted_database_preserves_events_and_enforces_event_limit() {
     assert!(!bytes.windows(11).any(|w| w == b"search_read"));
     assert!(Vault::unlock(&path, "wrong password").is_err());
     let vault = Vault::unlock(&path, "fixture master password").unwrap();
-    let (events, _, _) = AuditLog::for_vault(&vault)
+    let (events, _) = AuditLog::for_vault(&vault)
         .page(None, &Default::default(), &none, &none)
         .unwrap();
     assert_eq!(events.len(), 1);

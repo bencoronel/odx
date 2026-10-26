@@ -1,7 +1,7 @@
 //! MCP stdio (connector→socket→app) and HTTP share the core.
 mod support;
 use odx_core::{
-    Capability, Core, EnvironmentDraft, Protocol,
+    Capability, Core,
     transports::{connector, http, socket},
 };
 use serde_json::{Value, json};
@@ -21,23 +21,14 @@ struct App {
 async fn app() -> App {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let mut ids = vec![];
     for name in ["A", "B"] {
         ids.push(
-            core.save_environment(EnvironmentDraft {
-                name: name.into(),
-                url: sim.url.clone(),
-                database: "base-a".into(),
-                login: "fixture-user".into(),
-                protocol: Protocol::LegacyJsonrpc,
-                context: json!({}),
-                secret: "fixture-secret".into(),
-            })
-            .await
-            .unwrap()
-            .id,
+            core.save_environment(support::draft(name, &sim.url))
+                .await
+                .unwrap()
+                .id,
         );
     }
     let reader = core
@@ -226,6 +217,10 @@ async fn mcp_over_connector_is_stateless_scoped_and_strict() {
     let open = app.core.mcp_connections().await;
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].client_label.as_deref(), Some("MCP local"));
+    assert!(open[0].calls > 0, "tool calls counted");
+    // The connector runs in this test process, so the agent is its parent.
+    #[cfg(target_os = "linux")]
+    assert_eq!(open[0].agent.pid, Some(std::os::unix::process::parent_id()));
     let reader = app
         .core
         .clients()
@@ -249,6 +244,47 @@ async fn mcp_over_connector_is_stateless_scoped_and_strict() {
         app.core.mcp_connections().await.is_empty(),
         "connection removed after EOF"
     );
+}
+
+#[tokio::test]
+async fn the_app_can_close_one_connection() {
+    let app = app().await;
+    let (_stdin, _out, task) = connect(&app).await;
+    let (_stdin2, _out2, task2) = connect(&app).await;
+    for _ in 0..200 {
+        if app.core.mcp_connections().await.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let open = app.core.mcp_connections().await;
+    assert!(app.core.close_connection(open[0].id));
+    assert!(!app.core.close_connection(u64::MAX), "unknown id");
+    // Only one connector exits, with the reason shown to its agent.
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            r = task => (0, r),
+            r = task2 => (1, r),
+        }
+    })
+    .await
+    .expect("a connector exits");
+    assert!(
+        ended
+            .1
+            .unwrap()
+            .unwrap_err()
+            .contains("closed the connection")
+    );
+    for _ in 0..50 {
+        if app.core.mcp_connections().await.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let left = app.core.mcp_connections().await;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].id, open[1].id);
 }
 
 #[tokio::test]
@@ -457,6 +493,15 @@ async fn http_api_checks_host_origin_bearer_and_matches_mcp() {
     assert_eq!(r.status(), 200);
     let api: Value = r.json().await.unwrap();
     assert_eq!(api["data"], json!([1, 2]));
+    // The scheme is case-insensitive.
+    let r = client
+        .post(format!("{base}/search"))
+        .header("Authorization", format!("bearer {}", app.reader_token))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
 
     // MCP parity for the same operation and grant.
     let (mut stdin, mut out, _task) = connect(&app).await;

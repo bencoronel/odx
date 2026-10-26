@@ -2,8 +2,8 @@
 use crate::{
     clients::{Capability, ClientIdentity},
     execution::{Core, Upstream},
-    output::{Outcome, ToolError, ToolOutput},
-    tools::catalog::{Args, allowed, common, is_identifier, kw, model},
+    output::{Outcome, ToolError, ToolOutput, not_found},
+    tools::args::{Args, common, is_identifier, kw, model, record_id},
 };
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
@@ -121,11 +121,17 @@ pub(crate) fn safe_name(hint: &str) -> String {
             }
         })
         .collect();
-    clean
-        .trim_start_matches(['.', '-'])
-        .chars()
-        .take(64)
-        .collect()
+    let clean = clean.trim_start_matches(['.', '-']);
+    if clean.len() <= 64 {
+        return clean.to_owned();
+    }
+    // Shorten the stem, not the extension: invoice_…_final.pdf stays a .pdf (all ASCII here).
+    let ext = clean
+        .rfind('.')
+        .map(|dot| &clean[dot..])
+        .filter(|ext| ext.len() <= 10)
+        .unwrap_or("");
+    format!("{}{ext}", &clean[..64 - ext.len()])
 }
 
 fn ensure_dir(dir: &Path) -> io::Result<()> {
@@ -423,7 +429,7 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(arguments, &allowed(&["model", "id", "field"]))?;
+        let mut args = Args::for_tool("download", arguments)?;
         let (format, trunc) = common(&mut args)?;
         let env_name = args.str("env")?;
         let mut context = args.object("context")?;
@@ -544,18 +550,6 @@ impl Core {
     }
 }
 
-pub(crate) fn not_found(message: impl Into<String>) -> ToolError {
-    ToolError::new("not_found", message, Outcome::Failed)
-}
-
-/// Required positive interoperable record id.
-pub(crate) fn record_id(args: &mut Args) -> Result<i64, ToolError> {
-    if !args.has("id") {
-        return Err(ToolError::invalid("missing id"));
-    }
-    args.int("id", 0, 1, 9_007_199_254_740_991)
-}
-
 /// Decode Odoo base64 with encoded and decoded size limits.
 pub(crate) fn decode(encoded: &str) -> Result<Vec<u8>, ToolError> {
     if encoded.len() > MAX_DOWNLOAD_ENCODED {
@@ -624,6 +618,8 @@ mod tests {
         assert_eq!(safe_name(".hidden"), "hidden");
         assert_eq!(safe_name("invoice ñ 1.pdf"), "invoice___1.pdf");
         assert_eq!(safe_name(&"a".repeat(200)).len(), 64);
+        let long = safe_name(&format!("Factura_{}_definitiva.pdf", "x".repeat(80)));
+        assert!(long.len() == 64 && long.ends_with(".pdf"), "{long}");
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("outputs");
         let s = store(

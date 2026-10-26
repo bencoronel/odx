@@ -183,12 +183,7 @@ pub(crate) fn request_headers(headers: &[HeaderEntry]) -> Result<HeaderMap> {
 }
 impl VaultData {
     pub(crate) fn connection_environment(&self, id: &str) -> Result<Environment> {
-        let mut env = self
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
-            .ok_or(OdxError::EnvironmentNotFound)?;
+        let mut env = self.environment(id)?.clone();
         env.headers = merge(&self.global_headers, &env.headers);
         env.proxy = self.effective_proxy(&env);
         if env.protocol == crate::config::Protocol::Auto
@@ -204,17 +199,10 @@ impl VaultData {
 impl Core {
     pub async fn header_settings(&self, environment_id: Option<&str>) -> Result<HeaderSettings> {
         let s = self.inner.lock().await;
-        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+        let data = s.vault()?.data();
         Ok(match environment_id {
             Some(id) => HeaderSettings {
-                headers: masked(
-                    &data
-                        .environments
-                        .iter()
-                        .find(|e| e.id == id)
-                        .ok_or(OdxError::EnvironmentNotFound)?
-                        .headers,
-                ),
+                headers: masked(&data.environment(id)?.headers),
                 inherited: masked(&merge(&data.global_headers, &[])),
             },
             None => HeaderSettings {
@@ -229,28 +217,16 @@ impl Core {
         mut headers: Vec<HeaderEntry>,
     ) -> Result<()> {
         let mut s = self.inner.lock().await;
-        let vault = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        let vault = s.vault_mut()?;
         let stored = match environment_id {
-            Some(id) => {
-                &vault
-                    .data()
-                    .environments
-                    .iter()
-                    .find(|e| e.id == id)
-                    .ok_or(OdxError::EnvironmentNotFound)?
-                    .headers
-            }
+            Some(id) => &vault.data().environment(id)?.headers,
             None => &vault.data().global_headers,
         };
         unmask(&mut headers, stored)?;
         validate(&headers)?;
         let ids = vault.update(|data| {
             Ok(if let Some(id) = environment_id {
-                let env = data
-                    .environments
-                    .iter_mut()
-                    .find(|e| e.id == id)
-                    .ok_or(OdxError::EnvironmentNotFound)?;
+                let env = data.environment_mut(id)?;
                 env.headers = headers;
                 env.revision += 1;
                 env.detected_protocol = None;

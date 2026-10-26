@@ -188,9 +188,14 @@ impl Database {
             )
         };
         drop(connection);
-        self.set_journal("WAL")?;
+        // The new password is in force from here: a failed WAL restore must not report the change as failed,
+        // or the user keeps the old password and is locked out.
+        let restored = self.set_journal("WAL");
         if rekeyed != rusqlite::ffi::SQLITE_OK {
             return Err(OdxError::Persistence);
+        }
+        if let Err(error) = restored {
+            eprintln!("odx: password changed, but WAL could not be restored: {error}");
         }
         Ok(())
     }

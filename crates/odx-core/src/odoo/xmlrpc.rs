@@ -47,7 +47,15 @@ pub(crate) async fn call(
     }
     let bytes = read_limited(response, env, max_response).await?;
     let size = bytes.len();
-    match decode_response(&bytes)? {
+    // Like parse_json: large responses are decoded off the async workers.
+    let decoded = if size <= 1024 * 1024 {
+        decode_response(&bytes)
+    } else {
+        tokio::task::spawn_blocking(move || decode_response(&bytes))
+            .await
+            .map_err(|_| OdxError::Upstream("XML-RPC decoding was interrupted".into()))?
+    };
+    match decoded? {
         Ok(value) => Ok((value, size)),
         Err(fault) => Err(OdxError::Remote(scrub(&fault_message(&fault), env))),
     }

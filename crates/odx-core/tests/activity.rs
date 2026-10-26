@@ -1,24 +1,15 @@
 mod flow;
 mod support;
-use odx_core::{ActivityFilter, Capability, Core, EnvironmentDraft, Protocol, WriteMode};
+use odx_core::{ActivityFilter, Capability, EnvironmentDraft, Protocol, WriteMode};
 use serde_json::json;
 
 #[tokio::test]
 async fn activity_spans_sessions_names_clients_and_filters_without_secrets() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "A".into(),
-            url: sim.url.clone(),
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("A", &sim.url))
         .await
         .unwrap();
     let issued = core
@@ -67,7 +58,6 @@ async fn activity_spans_sessions_names_clients_and_filters_without_secrets() {
         .activity(None, ActivityFilter::default())
         .await
         .unwrap();
-    assert!(page.complete);
     assert_eq!(
         page.events.len(),
         3,
@@ -173,18 +163,9 @@ async fn activity_spans_sessions_names_clients_and_filters_without_secrets() {
 async fn concurrent_calls_and_approval_transitions_keep_one_row_per_request() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "A".into(),
-            url: sim.url.clone(),
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("A", &sim.url))
         .await
         .unwrap();
     let client = flow::client(&core).await;
@@ -279,8 +260,7 @@ async fn concurrent_calls_and_approval_transitions_keep_one_row_per_request() {
 async fn environment_filter_and_text_search_return_only_matching_rows() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let mut ids = Vec::new();
     for (name, database) in [("Alfa", "base-a"), ("Beta", "base-b")] {
         let env = core
@@ -322,7 +302,7 @@ async fn environment_filter_and_text_search_return_only_matching_rows() {
         )
     };
     let operations = |page: odx_core::ActivityPage| {
-        assert!(page.complete && page.next_cursor.is_none());
+        assert!(page.next_cursor.is_none());
         let mut ops: Vec<_> = page.events.into_iter().map(|e| e.operation).collect();
         ops.sort();
         ops

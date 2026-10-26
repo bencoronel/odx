@@ -1,31 +1,21 @@
 mod support;
 use odx_core::{
-    ActivityFilter, Capability, ClientScope, Core, DesktopRequest, EnvironmentDraft, Protocol,
-    ShellCall, WriteMode,
+    ActivityFilter, Capability, ClientScope, Core, DesktopRequest, ShellCall, WriteMode,
 };
 use serde_json::{Map, json};
 
 async fn env(core: &Core, name: &str, url: &str) -> String {
-    core.save_environment(EnvironmentDraft {
-        name: name.into(),
-        url: url.into(),
-        database: "base-a".into(),
-        login: "fixture-user".into(),
-        protocol: Protocol::LegacyJsonrpc,
-        context: json!({}),
-        secret: "fixture-secret".into(),
-    })
-    .await
-    .unwrap()
-    .id
+    core.save_environment(support::draft(name, url))
+        .await
+        .unwrap()
+        .id
 }
 
 #[tokio::test]
 async fn agents_see_terminals_of_their_environments_and_run_commands_through_the_app() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let prod = env(&core, "Prod", &sim.url).await;
     let other = env(&core, "Other", &sim.url).await;
     let issued = core
@@ -42,6 +32,8 @@ async fn agents_see_terminals_of_their_environments_and_run_commands_through_the
             { "id": "t1", "name": "", "defaultName": true, "envId": prod, "envName": "Prod", "session": { "entries": [
                 { "id": 1, "kind": "input", "prompt": "ben>", "text": "count res.partner", "command": true },
                 { "id": 2, "kind": "text", "text": "5" },
+                { "id": 3, "kind": "input", "prompt": "ben>", "text": "count res.users", "command": true },
+                { "id": 4, "kind": "text", "text": "3" },
             ] } },
             { "id": "t2", "name": "", "defaultName": true, "envId": other, "envName": "Other", "session": { "entries": [] } },
         ] })
@@ -57,16 +49,43 @@ async fn agents_see_terminals_of_their_environments_and_run_commands_through_the
         .unwrap();
     assert_eq!(
         listed.data,
-        json!([{ "terminal": "t1", "name": "Prod", "env": "Prod", "active": true, "commands": 1, "last_command": "count res.partner" }])
+        json!([{ "terminal": "t1", "name": "Prod", "env": "Prod", "active": true, "commands": 2, "last_command": "count res.users" }])
     );
     let read = core
         .run_tool(&agent, "terminal_read", json!({"terminal": "t1"}))
         .await
         .unwrap();
+    // Newest first, so a reply cut to the size limit keeps the latest command.
     assert_eq!(
         read.data,
-        json!([{ "command": "count res.partner", "output": [{ "kind": "text", "text": "5" }] }])
+        json!([
+            { "command": "count res.users", "output": [{ "kind": "text", "text": "3" }] },
+            { "command": "count res.partner", "output": [{ "kind": "text", "text": "5" }] },
+        ])
     );
+    // Terminal tables are Odoo records: a client without odoo:read cannot list or read them.
+    let issued = core
+        .create_client(
+            "Writer",
+            ClientScope::Only(vec![prod.clone()]),
+            vec![Capability::OdooWriteRequest],
+        )
+        .await
+        .unwrap();
+    let writer = core.authenticate_client(&issued.token).await.unwrap();
+    for (tool, arguments) in [
+        ("terminals", json!({})),
+        ("terminal_read", json!({"terminal": "t1"})),
+    ] {
+        assert_eq!(
+            core.run_tool(&writer, tool, arguments)
+                .await
+                .unwrap_err()
+                .code,
+            "forbidden",
+            "{tool}"
+        );
+    }
     let hidden = core
         .run_tool(&agent, "terminal_read", json!({"terminal": "t2"}))
         .await
@@ -154,8 +173,15 @@ async fn agents_see_terminals_of_their_environments_and_run_commands_through_the
         context: Map::new(),
         confirmed: true,
         client_id: Some(agent.client_id.clone()),
+        client_revision: Some(agent.revision),
     };
     core.shell_call(call(&prod, "search_count")).await.unwrap();
+    // A request made under a token that has since been replaced is refused.
+    let stale = ShellCall {
+        client_revision: Some(agent.revision + 1),
+        ..call(&prod, "search_count")
+    };
+    assert!(core.shell_call(stale).await.is_err());
     assert_eq!(
         core.shell_call(call(&other, "search_count"))
             .await

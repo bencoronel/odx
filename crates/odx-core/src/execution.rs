@@ -1,16 +1,14 @@
 use crate::{
-    approval::{Approval, Decision, State},
-    audit::{AuditDetails, AuditEvent, AuditLog, AuditRequest},
-    clients::{self, Capability, ClientIdentity, ClientView, IssuedToken},
-    config::{Bound, Environment, EnvironmentDraft, Settings, WriteMode},
+    approval::{Approval, ApprovalEnd, ApprovalNotice, revoke_all},
+    audit::{AuditLog, AuditRequest},
+    clients::Usage,
+    config::{Bound, Environment, Settings},
     error::{OdxError, Result},
     limits::Limits,
     odoo::jsonrpc::OdooClient,
-    policy::{self, Effect},
     vault::Vault,
 };
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -19,84 +17,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::{Mutex, oneshot};
-use uuid::Uuid;
-/// Shared limits key for unsaved drafts; per-call random ids would grow the slot map forever.
-pub(crate) const DRAFT_SLOTS: &str = "\0draft";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EnvironmentView {
-    pub id: String,
-    pub name: String,
-    pub url: String,
-    pub database: String,
-    pub login: String,
-    pub protocol: crate::config::Protocol,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detected_protocol: Option<crate::config::Protocol>,
-    pub context: Value,
-    pub write_mode: WriteMode,
-    pub write_until: Option<chrono::DateTime<Utc>>,
-    pub has_secret: bool,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-impl EnvironmentView {
-    /// View with the effective mode at the vault expiry clock's `now`.
-    pub(crate) fn new(e: &Environment, now: chrono::DateTime<Utc>) -> Self {
-        Self {
-            id: e.id.clone(),
-            name: e.name.clone(),
-            url: e.url.clone(),
-            database: e.database.clone(),
-            login: e.login.clone(),
-            protocol: e.protocol,
-            detected_protocol: e.detected_protocol,
-            context: e.context.clone(),
-            write_mode: e.effective_write_mode(now),
-            write_until: e.write_until,
-            has_secret: !e.secret.is_empty(),
-            tags: e.tags.clone(),
-        }
-    }
-}
-/// Environment connectivity without business data or secrets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthReport {
-    pub environment_id: String,
-    /// `ok`, `unreachable` or `auth_failed`.
-    pub status: String,
-    pub server_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<crate::config::Protocol>,
-    pub latency_ms: u64,
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_params: Option<Value>,
-    /// HTTP error status, if Odoo responded.
-    pub http_status: Option<u16>,
-    /// Network failure kind: timeout, dns, tls, refused, unreachable, reset or network.
-    pub network_error: Option<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingApproval {
-    pub id: String,
-    /// Originating API/MCP client; absent for local administration.
-    #[serde(default)]
-    pub client_id: Option<String>,
-    #[serde(default)]
-    pub client_label: Option<String>,
-    pub environment_id: String,
-    pub environment_name: String,
-    pub model: String,
-    pub method: String,
-    pub args: Value,
-    pub kwargs: Value,
-    pub context: Value,
-    pub created_at: chrono::DateTime<Utc>,
-    pub expires_at: chrono::DateTime<Utc>,
-}
 #[derive(Debug, Clone, Serialize)]
 pub struct SettingsView {
     pub settings: Settings,
@@ -146,103 +67,13 @@ impl Upstream {
         );
     }
 }
-/// Final outcome delivered to an approval's waiting client.
-#[derive(Debug)]
-pub(crate) enum ApprovalEnd {
-    Executed(Value, Upstream),
-    /// Optional human reason, relayed to the agent.
-    Rejected(Option<String>),
-    Revoked,
-    Expired,
-    Cancelled,
-    Failed(OdxError),
-}
-/// Unsent request awaiting outcome persistence.
-pub(crate) struct Ended {
-    audit: Option<Arc<AuditLog>>,
-    approval: Approval,
-    outcome: &'static str,
-}
 impl Inner {
-    /// Remove unsent terminal requests and notify waiters: `revoked`, `expired` or `cancelled`.
-    pub(crate) fn end(&mut self, ids: Vec<String>, outcome: &'static str) -> Vec<Ended> {
-        ids.into_iter()
-            .filter_map(|id| {
-                let approval = self.pending.remove(&id)?;
-                if let Some(tx) = self.waiters.remove(&id) {
-                    let _ = tx.send(match outcome {
-                        "expired" => ApprovalEnd::Expired,
-                        "cancelled" => ApprovalEnd::Cancelled,
-                        _ => ApprovalEnd::Revoked,
-                    });
-                }
-                Some(Ended {
-                    audit: self.audit.clone(),
-                    approval,
-                    outcome,
-                })
-            })
-            .collect()
+    /// The unlocked vault; `Locked` otherwise.
+    pub(crate) fn vault(&self) -> Result<&Vault> {
+        self.vault.as_ref().ok_or(OdxError::Locked)
     }
-}
-/// Revoke unsent requests matching `filter`; return those awaiting a decision.
-fn revoke_where(
-    pending: &mut HashMap<String, Approval>,
-    filter: impl Fn(&Approval) -> bool,
-) -> Vec<String> {
-    pending
-        .iter_mut()
-        .filter(|(_, approval)| filter(approval))
-        .filter_map(|(id, approval)| approval.revoke().then(|| id.clone()))
-        .collect()
-}
-pub(crate) fn revoke_environment(
-    pending: &mut HashMap<String, Approval>,
-    environment_id: &str,
-) -> Vec<String> {
-    revoke_where(pending, |a| a.call.environment_id == environment_id)
-}
-fn revoke_client(pending: &mut HashMap<String, Approval>, client_id: &str) -> Vec<String> {
-    revoke_where(pending, |a| a.client_id.as_deref() == Some(client_id))
-}
-/// Revalidate authorization immediately before dispatch.
-fn authorization_current(
-    v: &Vault,
-    env: &Environment,
-    call: &crate::approval::ApprovalCall,
-    authorization: &policy::Authorization,
-) -> bool {
-    let now = v.now();
-    match authorization {
-        // Human approval remains valid while the environment permits writes.
-        policy::Authorization::Individual => policy::authorize(env, Effect::Write, now).is_ok(),
-        policy::Authorization::Free => {
-            matches!(policy::authorize(env, Effect::Write, now), Ok(false))
-        }
-        policy::Authorization::Rule {
-            rule_id,
-            rule_revision,
-        } => {
-            let (Some(args), Some(kwargs)) = (call.args.as_array(), call.kwargs.as_object()) else {
-                return false;
-            };
-            matches!(policy::authorize(env, Effect::Write, now), Ok(true))
-                && v.data().rules.iter().any(|rule| {
-                    rule.id == *rule_id
-                        && rule.revision == *rule_revision
-                        && rule.matches(
-                            &policy::EffectiveCall {
-                                environment_id: &env.id,
-                                model: &call.model,
-                                method: &call.method,
-                                args,
-                                kwargs,
-                            },
-                            &Effect::Write,
-                            now,
-                        )
-                })
-        }
+    pub(crate) fn vault_mut(&mut self) -> Result<&mut Vault> {
+        self.vault.as_mut().ok_or(OdxError::Locked)
     }
 }
 /// Locking or another unlock during the KDF invalidates this vault installation.
@@ -251,49 +82,6 @@ fn superseded(s: &Inner, session: u64) -> Result<()> {
         return Err(OdxError::Locked);
     }
     Ok(())
-}
-fn revoke_all(pending: &mut HashMap<String, Approval>) -> Vec<String> {
-    revoke_where(pending, |_| true)
-}
-/// New client request notice for desktop notifications.
-#[derive(Debug, Clone, Serialize)]
-pub struct ApprovalNotice {
-    pub approval_id: String,
-    pub client_label: Option<String>,
-    pub environment_name: String,
-    pub model: String,
-    pub method: String,
-}
-
-/// In-memory last use and open MCP connections.
-#[derive(Default)]
-pub(crate) struct Usage {
-    last_used: HashMap<String, chrono::DateTime<Utc>>,
-    /// Vault session whose history initialized `last_used`.
-    seeded_session: Option<u64>,
-    connections: HashMap<u64, (String, chrono::DateTime<Utc>)>,
-    next_connection: u64,
-}
-
-/// Open MCP connection shown in the app.
-#[derive(Debug, Clone, Serialize)]
-pub struct McpConnectionInfo {
-    pub client_id: String,
-    pub client_label: Option<String>,
-    pub since: chrono::DateTime<Utc>,
-}
-
-/// Count the connection as open while this guard exists.
-pub struct ConnectionGuard {
-    core: Arc<Core>,
-    id: u64,
-}
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        if let Ok(mut usage) = self.core.usage.lock() {
-            usage.connections.remove(&self.id);
-        }
-    }
 }
 
 pub struct Core {
@@ -419,6 +207,10 @@ impl Core {
         let settings = vault.data().settings;
         s.vault = Some(vault);
         self.apply_settings(settings, s.audit.as_deref());
+        // Vault::unlock pruned with the 30-day ceiling; apply the user's own retention too.
+        if let Some(audit) = s.audit.clone() {
+            tokio::task::spawn_blocking(move || audit.prune_now());
+        }
         drop(s);
         self.sweep_outputs_in_background(settings);
         Ok(())
@@ -426,14 +218,14 @@ impl Core {
     /// Settings with defaults and allowed ranges.
     pub async fn settings(&self) -> Result<SettingsView> {
         let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let v = s.vault()?;
         Ok(SettingsView::new(v.data().settings))
     }
     /// Validate, encrypt and apply without restart. Preserve pending approval deadlines; reduce concurrency as calls finish and prune excess history/output immediately.
     pub async fn save_settings(&self, settings: Settings) -> Result<SettingsView> {
         settings.validate()?;
         let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        let v = s.vault_mut()?;
         v.update(|data| {
             data.settings = settings;
             Ok(())
@@ -472,13 +264,17 @@ impl Core {
         self.record(ended).await;
     }
     /// Drain admitted operations, including sent calls, up to `within` without cancelling them. Return false on timeout.
+    /// Shorten how long a call waits for a slot (10 s), so tests of the deadline do not wait in real time.
+    pub fn set_queue_wait(&self, wait: std::time::Duration) {
+        self.limits.set_queue_wait(wait);
+    }
     pub async fn drain(&self, within: std::time::Duration) -> bool {
         self.limits.wait_idle(within).await
     }
     pub async fn change_password(&self, current: &str, new: &str) -> Result<()> {
         let database = {
             let s = self.inner.lock().await;
-            s.vault.as_ref().ok_or(OdxError::Locked)?.database.clone()
+            s.vault()?.database.clone()
         };
         // Rekey rewrites the database; the connection mutex serializes access.
         let (current, new) = (
@@ -489,908 +285,76 @@ impl Core {
             .await
             .map_err(|_| OdxError::Persistence)?
     }
-    pub async fn environments(&self) -> Result<Vec<EnvironmentView>> {
-        let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let now = v.now();
-        Ok(v.data()
-            .environments
-            .iter()
-            .map(|e| EnvironmentView::new(e, now))
-            .collect())
-    }
-    pub async fn save_environment(&self, draft: EnvironmentDraft) -> Result<EnvironmentView> {
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        draft.validate()?;
-        if v.data().environments.iter().any(|e| e.name == draft.name) {
-            return Err(OdxError::validation(
-                "validation.environment.name_exists",
-                "an environment with this name already exists",
-            ));
-        }
-        let env = draft.into_environment()?;
-        let view = EnvironmentView::new(&env, v.now());
-        v.update(|data| {
-            data.environments.push(env);
-            Ok(())
-        })?;
-        Ok(view)
-    }
-    pub async fn update_environment(
+}
+
+/// One audited Odoo call, as reads, approved writes and the Terminal make it.
+pub(crate) struct AuditedCall<'a, A> {
+    pub(crate) actor: Option<&'a str>,
+    pub(crate) env: &'a Environment,
+    /// The environment revision and vault session the call was prepared for.
+    pub(crate) revision: u64,
+    pub(crate) session: u64,
+    pub(crate) operation: &'a str,
+    pub(crate) model: &'a str,
+    pub(crate) method: &'a str,
+    /// Positional arguments for the logged-in uid.
+    pub(crate) args: A,
+    pub(crate) kwargs: Value,
+    /// Errors after sending may mean the write applied ("uncertain"), and its real outcome is kept even if
+    /// logging it then fails. A read fails when its outcome cannot be logged.
+    pub(crate) write: bool,
+    /// An earlier event opened this request (an approval): failures before sending close it as "not_sent".
+    pub(crate) recorded: bool,
+    pub(crate) max_response: usize,
+}
+
+impl Core {
+    /// Take a slot, record "attempted", check the environment is unchanged (else "not_sent"), log in (counted
+    /// in `up`), run `before_send` (else "not_sent"; it returns the environment to send with), execute, and close
+    /// the record with the outcome. The slot is released after the outcome is logged, so drain() waits for it.
+    pub(crate) async fn audited_call<A, F, Fut>(
         &self,
-        id: &str,
-        mut draft: EnvironmentDraft,
-    ) -> Result<EnvironmentView> {
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let old = v
-            .data()
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
-            .ok_or(OdxError::EnvironmentNotFound)?;
-        let keep_secret = draft.secret.is_empty();
-        if keep_secret {
-            draft.secret = old.secret.as_str().to_owned();
-        }
-        draft.validate()?;
-        if v.data()
-            .environments
-            .iter()
-            .any(|e| e.id != id && e.name == draft.name)
-        {
-            return Err(OdxError::validation(
-                "validation.environment.name_exists",
-                "an environment with this name already exists",
-            ));
-        }
-        let mut updated = draft.into_environment()?;
-        // Context, headers and proxy have their own editors; connection updates preserve them.
-        updated.context = old.context.clone();
-        updated.disabled_context = old.disabled_context.clone();
-        updated.headers = old.headers.clone();
-        updated.proxy = old.proxy.clone();
-        updated.tags = old.tags.clone();
-        updated.id = old.id.clone();
-        updated.revision = old.revision + 1;
-        updated.write_mode = old.write_mode;
-        updated.write_until = old.write_until;
-        let view = EnvironmentView::new(&updated, v.now());
-        // Do not transfer rules to a different server, database or user.
-        let retarget = (&old.url, &old.database, &old.login)
-            != (&updated.url, &updated.database, &updated.login);
-        // Never send the old key to a different server, database or user.
-        if retarget && keep_secret {
-            return Err(OdxError::validation(
-                "validation.environment.secret_required",
-                "a new connection target requires its API key",
-            ));
-        }
-        v.update(|data| {
-            let env = data
-                .environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            *env = updated;
-            if retarget {
-                data.rules.retain(|r| r.environment_id != id);
-            }
-            Ok(())
-        })?;
-        self.environment_changed(s, &[id.to_owned()]).await;
-        Ok(view)
-    }
-    /// Tags only organize the list; they keep the revision and pending approvals.
-    pub async fn set_environment_tags(&self, id: &str, tags: &[String]) -> Result<EnvironmentView> {
-        let tags = crate::config::normalize_tags(tags)?;
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let now = v.now();
-        let mut view = None;
-        v.update(|data| {
-            let env = data
-                .environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            env.tags = tags;
-            view = Some(EnvironmentView::new(env, now));
-            Ok(())
-        })?;
-        view.ok_or(OdxError::EnvironmentNotFound)
-    }
-    pub async fn tag_colors(&self) -> Result<std::collections::BTreeMap<String, String>> {
-        let s = self.inner.lock().await;
-        Ok(s.vault
-            .as_ref()
-            .ok_or(OdxError::Locked)?
-            .data()
-            .tag_colors
-            .clone())
-    }
-    /// Color a tag for every environment that has it; `None` restores the default look. Colors of tags no environment uses are dropped.
-    pub async fn set_tag_color(&self, tag: &str, color: Option<&str>) -> Result<()> {
-        let tag = crate::config::normalize_tags(&[tag.to_owned()])?
-            .pop()
-            .ok_or_else(|| {
-                OdxError::validation("validation.environment.tag_required", "tag required")
-            })?
-            .to_lowercase();
-        if color.is_some_and(|c| !crate::config::TAG_COLORS.contains(&c)) {
-            return Err(OdxError::validation(
-                "validation.environment.tag_color_invalid",
-                "unknown tag color",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        v.update(|data| {
-            let used: std::collections::HashSet<String> = data
-                .environments
-                .iter()
-                .flat_map(|e| e.tags.iter().map(|t| t.to_lowercase()))
-                .collect();
-            data.tag_colors.retain(|t, _| used.contains(t));
-            match color {
-                Some(color) => data.tag_colors.insert(tag, color.to_owned()),
-                None => data.tag_colors.remove(&tag),
-            };
-            Ok(())
-        })
-    }
-    pub async fn clone_environment(&self, id: &str, new_name: &str) -> Result<EnvironmentView> {
-        if new_name.trim().is_empty() {
-            return Err(OdxError::validation(
-                "validation.environment.name_required",
-                "nonempty name required",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        if v.data().environments.iter().any(|e| e.name == new_name) {
-            return Err(OdxError::validation(
-                "validation.environment.name_exists",
-                "an environment with this name already exists",
-            ));
-        }
-        let mut clone = v
-            .data()
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .cloned()
-            .ok_or(OdxError::EnvironmentNotFound)?;
-        clone.id = Uuid::new_v4().to_string();
-        clone.name = new_name.into();
-        clone.write_mode = WriteMode::ReadOnly;
-        clone.write_until = None;
-        clone.revision = 1;
-        let view = EnvironmentView::new(&clone, v.now());
-        v.update(|data| {
-            data.environments.push(clone);
-            Ok(())
-        })?;
-        Ok(view)
-    }
-    pub async fn delete_environment(&self, id: &str, confirmed: bool) -> Result<()> {
-        if !confirmed {
-            return Err(OdxError::validation(
-                "validation.environment.delete_confirmation",
-                "confirm environment deletion",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        v.update(|data| {
-            let before = data.environments.len();
-            data.environments.retain(|e| e.id != id);
-            if before == data.environments.len() {
-                return Err(OdxError::EnvironmentNotFound);
-            }
-            // Recreating an environment name inherits neither grants nor rules.
-            data.rules.retain(|r| r.environment_id != id);
-            for grant in &mut data.clients {
-                // Keep the token revision unchanged to preserve other connections.
-                grant.environment_ids.retain(|e| e != id);
-            }
-            Ok(())
-        })?;
-        self.environment_changed(s, &[id.to_owned()]).await;
-        Ok(())
-    }
-    pub async fn set_mode(&self, id: &str, mode: WriteMode) -> Result<()> {
-        if mode == WriteMode::Temporary {
-            return Err(OdxError::validation(
-                "validation.environment.temporary_deadline_required",
-                "temporary writes require a future deadline",
-            ));
-        }
-        self.configure_mode(id, mode, None).await
-    }
-    pub async fn set_temporary_write(&self, id: &str, minutes: u32) -> Result<()> {
-        if minutes == 0 {
-            return Err(OdxError::validation(
-                "validation.environment.duration_positive",
-                "duration must be positive",
-            ));
-        }
-        self.configure_mode(id, WriteMode::Temporary, Some(minutes))
-            .await
-    }
-    /// Measure temporary access with the nondecreasing expiry clock.
-    async fn configure_mode(&self, id: &str, mode: WriteMode, minutes: Option<u32>) -> Result<()> {
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let until = match minutes {
-            Some(minutes) => Some(
-                v.now()
-                    .checked_add_signed(chrono::Duration::minutes(i64::from(minutes)))
-                    .ok_or_else(|| {
-                        OdxError::validation(
-                            "validation.environment.duration_out_of_range",
-                            "duration out of range",
-                        )
-                    })?,
-            ),
-            None => None,
-        };
-        v.update(|data| {
-            let env = data
-                .environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?;
-            env.write_mode = mode;
-            env.write_until = until;
-            env.revision += 1;
-            Ok(())
-        })?;
-        self.environment_changed(s, &[id.to_owned()]).await;
-        Ok(())
-    }
-    /// After environment changes, revoke and record unsent requests and invalidate cached authentication.
-    pub(crate) async fn environment_changed(
-        &self,
-        mut s: tokio::sync::MutexGuard<'_, Inner>,
-        ids: &[String],
-    ) {
-        let revoked = ids
-            .iter()
-            .flat_map(|id| revoke_environment(&mut s.pending, id))
-            .collect();
-        let ended = s.end(revoked, "revoked");
-        drop(s);
-        self.record(ended).await;
-        for id in ids {
-            self.odoo.invalidate_environment(id).await;
-        }
-    }
-    /// After client changes, revoke and record its unsent requests.
-    async fn client_changed(&self, mut s: tokio::sync::MutexGuard<'_, Inner>, id: &str) {
-        let revoked = revoke_client(&mut s.pending, id);
-        let ended = s.end(revoked, "revoked");
-        drop(s);
-        self.record(ended).await;
-    }
-    /// Record unsent outcomes. Audit failure marks audit unhealthy without reopening terminal requests.
-    pub(crate) async fn record(&self, ended: Vec<Ended>) {
-        for Ended {
-            audit,
-            approval,
-            outcome,
-        } in ended
-        {
-            let Some(log) = audit else { continue };
-            let request = AuditRequest {
-                log,
-                id: approval.id,
-                details: approval.details,
-                started: std::time::Instant::now(),
-            };
-            let operation = format!("{}:{}", approval.call.method, approval.call.model);
+        mut audit: AuditRequest,
+        call: AuditedCall<'_, A>,
+        up: &mut Upstream,
+        before_send: F,
+    ) -> Result<(Value, usize)>
+    where
+        A: FnOnce(i64) -> Value,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Environment>>,
+    {
+        let (env, operation, actor) = (call.env, call.operation, call.actor);
+        let not_sent = |mut audit: AuditRequest, error: OdxError| async move {
+            audit.finish_odx_error(env, &error);
             let _ = self
-                .log_outcome_as(
-                    request,
-                    approval.client_id.as_deref(),
-                    &approval.call.environment_id,
-                    &operation,
-                    outcome,
-                )
-                .await;
-        }
-    }
-    pub async fn clients(&self) -> Result<Vec<ClientView>> {
-        let (mut views, audit, session) = {
-            let s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-            let views: Vec<ClientView> = v
-                .data()
-                .clients
-                .iter()
-                .filter(|c| !c.revoked)
-                .map(ClientView::from)
-                .collect();
-            (views, s.audit.clone(), s.session)
-        };
-        // Initialize last use from history once per session, then track it in memory.
-        let seeded = self
-            .usage
-            .lock()
-            .map(|u| u.seeded_session == Some(session))
-            .unwrap_or(true);
-        if !seeded && let Some(audit) = audit {
-            let history = tokio::task::spawn_blocking(move || audit.last_used())
-                .await
-                .ok()
-                .and_then(|r| r.ok());
-            if let (Some(events), Ok(mut usage)) = (history, self.usage.lock()) {
-                for (id, at) in events {
-                    let last = usage.last_used.entry(id).or_insert(at);
-                    if at > *last {
-                        *last = at;
-                    }
-                }
-                usage.seeded_session = Some(session);
-            }
-        }
-        if let Ok(usage) = self.usage.lock() {
-            for view in &mut views {
-                view.last_used_at = usage.last_used.get(&view.id).copied();
-            }
-        }
-        Ok(views)
-    }
-    pub(crate) fn mark_used(&self, client_id: &str) {
-        if let Ok(mut usage) = self.usage.lock() {
-            usage.last_used.insert(client_id.into(), Utc::now());
-        }
-    }
-    /// Register an authenticated MCP connection until its guard drops.
-    pub fn register_connection(self: &Arc<Self>, client_id: &str) -> ConnectionGuard {
-        let mut usage = self.usage.lock().expect("usage");
-        usage.next_connection += 1;
-        let id = usage.next_connection;
-        usage.connections.insert(id, (client_id.into(), Utc::now()));
-        ConnectionGuard {
-            core: self.clone(),
-            id,
-        }
-    }
-    pub async fn mcp_connections(&self) -> Vec<McpConnectionInfo> {
-        let labels: HashMap<String, String> = {
-            let s = self.inner.lock().await;
-            s.vault
-                .as_ref()
-                .map(|v| {
-                    v.data()
-                        .clients
-                        .iter()
-                        .map(|c| (c.id.clone(), c.label.clone()))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let usage = self.usage.lock().expect("usage");
-        let mut list: Vec<McpConnectionInfo> = usage
-            .connections
-            .values()
-            .map(|(client_id, since)| McpConnectionInfo {
-                client_label: labels.get(client_id).cloned(),
-                client_id: client_id.clone(),
-                since: *since,
-            })
-            .collect();
-        list.sort_by_key(|c| c.since);
-        list
-    }
-    /// Create a client; expose plaintext only in the returned value.
-    pub async fn create_client(
-        &self,
-        label: &str,
-        scope: impl Into<clients::ClientScope>,
-        capabilities: Vec<Capability>,
-    ) -> Result<IssuedToken> {
-        let scope = scope.into();
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let data = v.data();
-        clients::validate_grant(label, &scope, &capabilities, |id| {
-            data.environments.iter().any(|e| e.id == id)
-        })?;
-        if data
-            .clients
-            .iter()
-            .any(|c| !c.revoked && c.label.eq_ignore_ascii_case(label.trim()))
-        {
-            return Err(OdxError::validation(
-                "validation.client.name_exists",
-                "a client with this name already exists",
-            ));
-        }
-        let (token, hash) = clients::issue_token()?;
-        let grant = clients::new_grant(label, scope, capabilities, hash);
-        let client = ClientView::from(&grant);
-        v.update(|data| {
-            data.clients.push(grant);
-            Ok(())
-        })?;
-        Ok(IssuedToken { client, token })
-    }
-    /// Update label, scope and capabilities without changing the token; the local MCP label is fixed. Revoke requests made under the old grant.
-    pub async fn update_client(
-        &self,
-        id: &str,
-        label: &str,
-        scope: impl Into<clients::ClientScope>,
-        capabilities: Vec<Capability>,
-    ) -> Result<ClientView> {
-        if id == clients::STDIO_CLIENT_ID && label != clients::STDIO_CLIENT_LABEL {
-            return Err(OdxError::validation(
-                "validation.client.local_profile_name_fixed",
-                "the local MCP profile name cannot change",
-            ));
-        }
-        let scope = scope.into();
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let data = v.data();
-        clients::validate_grant(label, &scope, &capabilities, |env| {
-            data.environments.iter().any(|e| e.id == env)
-        })?;
-        if data
-            .clients
-            .iter()
-            .any(|c| c.id != id && !c.revoked && c.label.eq_ignore_ascii_case(label.trim()))
-        {
-            return Err(OdxError::validation(
-                "validation.client.name_exists",
-                "a client with this name already exists",
-            ));
-        }
-        let updated = clients::new_grant(label, scope, capabilities, String::new());
-        let view = v.update(|data| {
-            let grant = data
-                .clients
-                .iter_mut()
-                .find(|c| c.id == id && !c.revoked)
-                .ok_or(OdxError::ClientNotFound)?;
-            grant.label = updated.label;
-            grant.all_environments = updated.all_environments;
-            grant.environment_ids = updated.environment_ids;
-            grant.capabilities = updated.capabilities;
-            Ok(ClientView::from(&*grant))
-        })?;
-        self.client_changed(s, id).await;
-        let _ = self.grant_changes.send(id.to_string());
-        Ok(view)
-    }
-    /// Replace the token, invalidate the old one and revoke pending requests.
-    pub async fn replace_client_token(&self, id: &str) -> Result<IssuedToken> {
-        if id == clients::STDIO_CLIENT_ID {
-            return Err(OdxError::validation(
-                "validation.client.local_profile_no_token",
-                "the MCP stdio profile does not use a token",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        let (token, hash) = clients::issue_token()?;
-        let client = v.update(|data| {
-            let grant = data
-                .clients
-                .iter_mut()
-                .find(|c| c.id == id && !c.revoked)
-                .ok_or(OdxError::ClientNotFound)?;
-            grant.token_hash = hash;
-            grant.revision += 1;
-            grant.token_issued_at = Utc::now();
-            Ok(ClientView::from(&*grant))
-        })?;
-        self.client_changed(s, id).await;
-        Ok(IssuedToken { client, token })
-    }
-    /// Delete the client permanently, invalidate its token and revoke pending requests. Retain its ID without a label in activity.
-    pub async fn revoke_client(&self, id: &str) -> Result<()> {
-        if id == clients::STDIO_CLIENT_ID {
-            return Err(OdxError::validation(
-                "validation.client.local_profile_shared",
-                "the MCP stdio profile is shared; edit its scope and capabilities or lock the app",
-            ));
-        }
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_mut().ok_or(OdxError::Locked)?;
-        // Deleting the client invalidates its token and removes it from the list. Also purge legacy revoked grants.
-        v.update(|data| {
-            if !data.clients.iter().any(|c| c.id == id && !c.revoked) {
-                return Err(OdxError::ClientNotFound);
-            }
-            data.clients.retain(|c| c.id != id && !c.revoked);
-            Ok(())
-        })?;
-        self.client_changed(s, id).await;
-        Ok(())
-    }
-    /// Shared stdio profile authenticated by socket UID, never HTTP token.
-    pub(crate) async fn stdio_identity(&self) -> Result<ClientIdentity> {
-        let s = self.inner.lock().await;
-        let vault = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let grant = vault
-            .data()
-            .clients
-            .iter()
-            .find(|g| g.id == clients::STDIO_CLIENT_ID && !g.revoked)
-            .ok_or(OdxError::Unauthorized)?;
-        Ok(clients::identity(grant, vault.data()))
-    }
-    /// Authenticate a client token; reject all clients while locked.
-    pub async fn authenticate_client(&self, token: &str) -> Result<ClientIdentity> {
-        let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let grant = clients::find_grant(&v.data().clients, token).ok_or(OdxError::Unauthorized)?;
-        Ok(clients::identity(grant, v.data()))
-    }
-    /// Check reachability (`common.version`) and credentials (revision-cached login), without accessing business data.
-    pub async fn check_environment(&self, id: &str) -> Result<HealthReport> {
-        let (env, session) = {
-            let s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-            let env = v.data().connection_environment(id)?;
-            (env, s.session)
-        };
-        let started = std::time::Instant::now();
-        let resolved = self.resolve_protocol(env.clone(), session).await;
-        let permits = self.limits.acquire(&env.id).await?;
-        self.assert_environment_current(&env.id, env.revision, session)
-            .await?;
-        let report = self.health(&env, resolved, started).await;
-        drop(permits);
-        Ok(report)
-    }
-    /// Check an unsaved draft like a new environment (global headers and proxy) without persisting anything.
-    pub async fn check_draft(&self, draft: EnvironmentDraft) -> Result<HealthReport> {
-        self.check_draft_with_proxy(draft, crate::proxy::EnvironmentProxyInput::Inherit)
-            .await
-    }
-    /// Check a draft through the proxy the new environment will use.
-    pub async fn check_draft_with_proxy(
-        &self,
-        draft: EnvironmentDraft,
-        proxy: crate::proxy::EnvironmentProxyInput,
-    ) -> Result<HealthReport> {
-        let mut env = draft.into_environment()?;
-        {
-            let s = self.inner.lock().await;
-            env.proxy = s
-                .vault
-                .as_ref()
-                .ok_or(OdxError::Locked)?
-                .data()
-                .chosen_proxy(proxy)?;
-        }
-        let env = self.draft_connection(env).await?;
-        let started = std::time::Instant::now();
-        let permits = self.limits.acquire(DRAFT_SLOTS).await?;
-        let resolved = match env.protocol {
-            crate::config::Protocol::Auto => self
-                .odoo
-                .detect_protocol(&env, || async { Ok(()) })
-                .await
-                .map(|protocol| Environment {
-                    protocol,
-                    ..env.clone()
-                }),
-            _ => Ok(env.clone()),
-        };
-        let report = self.health(&env, resolved, started).await;
-        drop(permits);
-        self.odoo.invalidate_environment(&env.id).await;
-        Ok(report)
-    }
-    /// Databases listed by an Odoo server, unauthenticated; servers with `list_db = False` refuse.
-    pub async fn list_databases(&self, url: &str) -> Result<Vec<String>> {
-        crate::config::validate_url(url)?;
-        let env = self
-            .draft_connection(Environment {
-                id: Uuid::new_v4().to_string(),
-                url: url.trim_end_matches('/').into(),
-                ..Default::default()
-            })
-            .await?;
-        let _permits = self.limits.acquire(DRAFT_SLOTS).await?;
-        self.odoo.list_databases(&env).await
-    }
-    /// Apply global headers and the inherited proxy to an environment that is not in the vault.
-    async fn draft_connection(&self, mut env: Environment) -> Result<Environment> {
-        let s = self.inner.lock().await;
-        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
-        env.headers = crate::headers::merge(&data.global_headers, &[]);
-        env.proxy = data.effective_proxy(&env);
-        Ok(env)
-    }
-    async fn health(
-        &self,
-        env: &Environment,
-        resolved: Result<Environment>,
-        started: std::time::Instant,
-    ) -> HealthReport {
-        let version = match &resolved {
-            Ok(env) => self.odoo.version(env).await,
-            Err(_) => Ok(None),
-        };
-        let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let protocol = resolved.as_ref().ok().map(|e| e.protocol);
-        let report = |status: &str, server_version, error: Option<OdxError>| HealthReport {
-            environment_id: env.id.clone(),
-            status: status.into(),
-            server_version,
-            protocol,
-            latency_ms,
-            http_status: match &error {
-                Some(OdxError::HttpStatus { status }) => Some(*status),
-                _ => None,
-            },
-            network_error: match &error {
-                Some(OdxError::Network { kind, .. }) => Some((*kind).into()),
-                _ => None,
-            },
-            error: error
-                .as_ref()
-                .and_then(OdxError::safe_detail)
-                .map(str::to_owned),
-            error_code: error.as_ref().map(|e| e.code().to_owned()),
-            error_params: error.as_ref().map(OdxError::ui_params),
-        };
-        match resolved {
-            Err(error @ OdxError::AuthenticationRejected) => {
-                report("auth_failed", None, Some(error))
-            }
-            Err(error) => report("unreachable", None, Some(error)),
-            Ok(env) => match version {
-                Err(error) => report("unreachable", None, Some(error)),
-                Ok(server_version) => match self.odoo.authenticate(&env).await {
-                    Ok(_) => report("ok", server_version, None),
-                    Err(error) => report("auth_failed", server_version, Some(error)),
-                },
-            },
-        }
-    }
-    /// Resolve transport before argument validation. Persist configuration only, without changing revision or permissions.
-    pub(crate) async fn resolve_protocol(
-        &self,
-        mut env: Environment,
-        session: u64,
-    ) -> Result<Environment> {
-        if env.protocol != crate::config::Protocol::Auto {
-            return Ok(env);
-        }
-        let _permit = self.limits.acquire(&env.id).await?;
-        let protocol = self
-            .odoo
-            .detect_protocol(&env, || {
-                self.assert_environment_current(&env.id, env.revision, session)
-            })
-            .await?;
-        self.assert_environment_current(&env.id, env.revision, session)
-            .await?;
-        let mut state = self.inner.lock().await;
-        if state.session != session {
-            return Err(OdxError::ApprovalUnavailable);
-        }
-        let vault = state.vault.as_mut().ok_or(OdxError::Locked)?;
-        let current = vault
-            .data()
-            .environments
-            .iter()
-            .find(|e| e.id == env.id)
-            .ok_or(OdxError::EnvironmentNotFound)?;
-        if current.revision != env.revision {
-            return Err(OdxError::ApprovalUnavailable);
-        }
-        if current.detected_protocol != Some(protocol) {
-            vault.update(|data| {
-                let stored = data
-                    .environments
-                    .iter_mut()
-                    .find(|e| e.id == env.id)
-                    .ok_or(OdxError::EnvironmentNotFound)?;
-                stored.detected_protocol = Some(protocol);
-                Ok(())
-            })?;
-        }
-        env.protocol = protocol;
-        env.detected_protocol = Some(protocol);
-        Ok(env)
-    }
-    pub async fn approvals(&self) -> Result<Vec<PendingApproval>> {
-        let mut guard = self.inner.lock().await;
-        let s = &mut *guard;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let now = v.now();
-        for approval in s.pending.values_mut() {
-            approval.expire_if_due(now);
-        }
-        Ok(s.pending
-            .values()
-            .filter(|p| p.state == crate::approval::State::Pending)
-            .filter_map(|p| {
-                let e = v
-                    .data()
-                    .environments
-                    .iter()
-                    .find(|e| e.id == p.call.environment_id)?;
-                Some(PendingApproval {
-                    id: p.id.clone(),
-                    client_id: p.client_id.clone(),
-                    client_label: p.client_id.as_ref().and_then(|c| {
-                        v.data()
-                            .clients
-                            .iter()
-                            .find(|g| &g.id == c)
-                            .map(|g| g.label.clone())
-                    }),
-                    environment_id: e.id.clone(),
-                    environment_name: e.name.clone(),
-                    model: p.call.model.clone(),
-                    method: p.call.method.clone(),
-                    args: p.call.args.clone(),
-                    kwargs: p.call.kwargs.clone(),
-                    context: p.call.kwargs.get("context").cloned().unwrap_or(json!({})),
-                    created_at: p.created_at,
-                    expires_at: p.call.expires_at,
-                })
-            })
-            .collect())
-    }
-    /// Cancellation by the human or a client abandoning its wait.
-    pub async fn cancel_approval(&self, id: &str) -> Result<()> {
-        self.withdraw(id, false).await.map(drop)
-    }
-    /// Remove an undecided request and notify its waiter as cancelled or expired. Reject already approved or sent requests.
-    pub(crate) async fn withdraw(&self, id: &str, expire: bool) -> Result<&'static str> {
-        let mut s = self.inner.lock().await;
-        let now = s.vault.as_ref().map_or_else(Utc::now, |v| v.now());
-        let p = s.pending.get_mut(id).ok_or(OdxError::ApprovalUnavailable)?;
-        p.expire_if_due(now);
-        let outcome = match p.state {
-            State::Pending if !expire => "cancelled",
-            State::Pending | State::Expired => "expired",
-            _ => return Err(OdxError::ApprovalUnavailable),
-        };
-        let ended = s.end(vec![id.to_owned()], outcome);
-        drop(s);
-        self.record(ended).await;
-        Ok(outcome)
-    }
-    /// Deliver the human decision and outcome to any waiting client.
-    pub async fn decide(&self, id: &str, approve: bool) -> Result<Value> {
-        self.decide_measured(id, approve, None)
-            .await
-            .map(|(value, _)| value)
-    }
-    /// Reject and tell the waiting client why; blank reasons are dropped, long ones cut to 500 characters.
-    pub async fn reject(&self, id: &str, reason: Option<String>) -> Result<Value> {
-        let reason = reason
-            .map(|r| r.trim().chars().take(500).collect::<String>())
-            .filter(|r| !r.is_empty());
-        self.decide_measured(id, false, reason)
-            .await
-            .map(|(value, _)| value)
-    }
-    /// Like `decide`, with upstream metrics; rejection has none. Waiters receive their metrics through the channel.
-    pub(crate) async fn decide_measured(
-        &self,
-        id: &str,
-        approve: bool,
-        reason: Option<String>,
-    ) -> Result<(Value, Upstream)> {
-        // Only the winning decision closes the request.
-        let (env, call, client, authorization) = self.claim(id, approve).await?;
-        let result = self
-            .dispatch(id, approve, env, call, client, authorization)
-            .await;
-        let mut s = self.inner.lock().await;
-        if let Some(tx) = s.waiters.remove(id) {
-            let end = match &result {
-                Ok(_) if !approve => ApprovalEnd::Rejected(reason),
-                Ok((value, up)) => ApprovalEnd::Executed(value.clone(), *up),
-                Err(error) => ApprovalEnd::Failed(error.duplicate()),
-            };
-            let _ = tx.send(end);
-        }
-        s.pending.remove(id);
-        result
-    }
-    async fn claim(
-        &self,
-        id: &str,
-        approve: bool,
-    ) -> Result<(
-        Environment,
-        crate::approval::ApprovalCall,
-        Option<String>,
-        policy::Authorization,
-    )> {
-        let mut s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let env_id = s
-            .pending
-            .get(id)
-            .ok_or(OdxError::ApprovalUnavailable)?
-            .call
-            .environment_id
-            .clone();
-        let env = v.data().connection_environment(&env_id)?;
-        let now = v.now();
-        let p = s.pending.get_mut(id).ok_or(OdxError::ApprovalUnavailable)?;
-        p.decide(
-            if approve {
-                Decision::Approve
-            } else {
-                Decision::Reject
-            },
-            now,
-        )?;
-        Ok((
-            env,
-            p.call.clone(),
-            p.client_id.clone(),
-            p.authorization.clone(),
-        ))
-    }
-    async fn dispatch(
-        &self,
-        id: &str,
-        approve: bool,
-        env: Environment,
-        call: crate::approval::ApprovalCall,
-        client: Option<String>,
-        authorization: policy::Authorization,
-    ) -> Result<(Value, Upstream)> {
-        // Measure `upstream_ms` after the decision: admission, audit, login and dispatch.
-        let mut up = Upstream::start();
-        let client = client.as_deref();
-        let operation = format!("{}:{}", call.method, call.model);
-        let mut details =
-            AuditDetails::call(&env, &call.model, &call.method, &call.args, &call.kwargs);
-        details.authorization = Some(authorization.clone());
-        let mut audit = self.audit_request(id, details).await?;
-        if !approve {
-            self.log_outcome_as(audit, client, &env.id, &operation, "rejected")
-                .await?;
-            return Ok((json!({"status":"rejected"}), up));
-        }
-        let session = self.inner.lock().await.session;
-        let env = self.resolve_protocol(env, session).await?;
-        // Errors before dispatch close the request as not sent.
-        let (target, op) = (&env, operation.as_str());
-        let not_sent = move |mut audit: AuditRequest, error: OdxError| async move {
-            audit.finish_odx_error(target, &error);
-            let _ = self
-                .log_outcome_as(audit, client, &target.id, op, "not_sent")
+                .log_outcome_as(audit, actor, &env.id, operation, "not_sent")
                 .await;
             Err(error)
         };
         let permits = match self.limits.acquire(&env.id).await {
             Ok(permits) => permits,
-            Err(error) => return not_sent(audit, error).await,
+            Err(error) if call.recorded => return not_sent(audit, error).await,
+            Err(error) => return Err(error),
         };
+        if let Err(error) = self
+            .log_open(audit.clone(), actor, &env.id, operation, "attempted")
+            .await
+        {
+            return if call.recorded {
+                not_sent(audit, error).await
+            } else {
+                Err(error)
+            };
+        }
         // The wait for a slot may outlast a lock or an edit; never log in with a stale secret.
         if let Err(error) = self
-            .assert_environment_current(&env.id, call.revision, session)
+            .assert_environment_current(&env.id, call.revision, call.session)
             .await
         {
             return not_sent(audit, error).await;
         }
-        if let Err(error) = self
-            .log_open(audit.clone(), client, &env.id, &operation, "attempted")
-            .await
-        {
-            return not_sent(audit, error).await;
-        }
-        let uid = match self.odoo.authenticate_measured(&env).await {
+        let uid = match self.odoo.authenticate_measured(env).await {
             Ok((uid, login)) => {
                 // Only the call that logged in counts login in its metrics.
                 if let Some(bytes) = login {
@@ -1400,204 +364,54 @@ impl Core {
                 uid
             }
             Err(error) => {
-                audit.finish_odx_error(&env, &error);
-                self.log_outcome_as(audit, client, &env.id, &operation, "failed")
+                audit.finish_odx_error(env, &error);
+                self.log_outcome_as(audit, actor, &env.id, operation, "failed")
                     .await?;
                 return Err(error);
             }
         };
-        // This in-memory sent transition shares the lock used by vault_lock and revision changes.
-        let checked: Result<_> = async {
-            let mut s = self.inner.lock().await;
-            if s.audit_failed {
-                return Err(OdxError::Persistence);
-            }
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-            let latest = v.data().connection_environment(&env.id)?;
-            // Revalidate against current mode, deadline and rule.
-            let authorized = authorization_current(v, &latest, &call, &authorization);
-            let now = v.now();
-            let pending = s.pending.get_mut(id).ok_or(OdxError::ApprovalUnavailable)?;
-            if pending.state != State::Approved
-                || latest.revision != call.revision
-                || call.expires_at <= now
-                || !authorized
-            {
-                return Err(OdxError::ApprovalUnavailable);
-            }
-            // Sent requests remain until the outcome is known, regardless of revocation or expiry.
-            pending.state = State::Sent;
-            Ok(latest)
-        }
-        .await;
-        let current = match checked {
-            Ok(current) => current,
-            // Close the audited attempt as not sent.
+        let send_with = match before_send().await {
+            Ok(env) => env,
             Err(error) => return not_sent(audit, error).await,
         };
         let result = self
             .odoo
-            .execute_kw_measured(
-                &current,
+            .execute_kw_limited(
+                &send_with,
                 uid,
-                &call.model,
-                &call.method,
-                call.args,
+                call.model,
+                call.method,
+                (call.args)(uid),
                 call.kwargs,
+                call.max_response,
             )
-            .await
-            .map_err(crate::odoo::jsonrpc::sent_error);
+            .await;
+        let result = if call.write {
+            result.map_err(crate::odoo::jsonrpc::sent_error)
+        } else {
+            result
+        };
         up.calls += 1;
         match &result {
-            Ok((value, _)) => audit.finish(&env, Ok(value)),
-            Err(error) => audit.finish_odx_error(&env, error),
+            Ok((value, _)) => audit.finish(env, Ok(value)),
+            Err(error) => audit.finish_odx_error(env, error),
         }
         let outcome = match &result {
             Ok(_) => "succeeded",
             Err(OdxError::Uncertain) => "uncertain",
             Err(_) => "failed",
         };
-        // Already sent: an audit failure must not turn the real outcome into "not sent". append() sets audit_failed, which blocks new operations.
-        let _ = self
-            .log_outcome_as(audit, client, &env.id, &operation, outcome)
+        let logged = self
+            .log_outcome_as(audit, actor, &env.id, operation, outcome)
             .await;
-        // Release after the outcome is logged so drain() waits for it.
+        // A sent write keeps its real outcome; append() set audit_failed, which blocks new operations.
+        if !call.write {
+            logged?;
+        }
         drop(permits);
         let (value, bytes) = result?;
         up.bytes += bytes;
-        Ok((value, up))
-    }
-    /// Record the attempt before dispatch; audit failure blocks new operations.
-    pub(crate) async fn log_as(
-        &self,
-        client: Option<&str>,
-        env: &str,
-        operation: &str,
-        outcome: &str,
-        details: AuditDetails,
-    ) -> Result<AuditRequest> {
-        self.log_request_as(
-            client,
-            env,
-            operation,
-            outcome,
-            &uuid::Uuid::new_v4().to_string(),
-            details,
-        )
-        .await
-    }
-    pub(crate) async fn log_request_as(
-        &self,
-        client: Option<&str>,
-        env: &str,
-        operation: &str,
-        outcome: &str,
-        request_id: &str,
-        details: AuditDetails,
-    ) -> Result<AuditRequest> {
-        let request = self.audit_request(request_id, details).await?;
-        self.log_open(request.clone(), client, env, operation, outcome)
-            .await?;
-        Ok(request)
-    }
-    async fn audit_request(&self, id: &str, details: AuditDetails) -> Result<AuditRequest> {
-        let s = self.inner.lock().await;
-        if s.audit_failed {
-            return Err(OdxError::Persistence);
-        }
-        Ok(AuditRequest {
-            log: s.audit.as_ref().cloned().ok_or(OdxError::Locked)?,
-            id: id.into(),
-            details,
-            started: std::time::Instant::now(),
-        })
-    }
-    /// Opening or advancing a request uses the bounded audit queue.
-    async fn log_open(
-        &self,
-        audit: AuditRequest,
-        client: Option<&str>,
-        env: &str,
-        operation: &str,
-        outcome: &str,
-    ) -> Result<()> {
-        self.append(audit, client, env, operation, outcome, true)
-            .await
-    }
-    /// Closing a recorded request is bounded by admission, not queue capacity.
-    pub(crate) async fn log_outcome_as(
-        &self,
-        audit: AuditRequest,
-        client: Option<&str>,
-        env: &str,
-        operation: &str,
-        outcome: &str,
-    ) -> Result<()> {
-        self.append(audit, client, env, operation, outcome, false)
-            .await
-    }
-    async fn append(
-        &self,
-        audit: AuditRequest,
-        client: Option<&str>,
-        env: &str,
-        operation: &str,
-        outcome: &str,
-        bounded: bool,
-    ) -> Result<()> {
-        let event = AuditEvent {
-            request_id: Some(audit.id),
-            details: Some(audit.details),
-            at: Utc::now(),
-            client_id: client.map(Into::into),
-            environment_id: env.into(),
-            operation: operation.into(),
-            outcome: outcome.into(),
-        };
-        // Run SQLCipher fsync outside worker threads.
-        let log = audit.log;
-        let appended = tokio::task::spawn_blocking(move || {
-            if bounded {
-                log.append(&event)
-            } else {
-                log.append_closing(&event)
-            }
-        })
-        .await;
-        match appended {
-            Ok(Ok(())) => Ok(()),
-            // A full queue records nothing but leaves audit healthy.
-            Ok(Err(OdxError::Capacity)) => Err(OdxError::Capacity),
-            _ => {
-                self.inner.lock().await.audit_failed = true;
-                Err(OdxError::Persistence)
-            }
-        }
-    }
-    pub(crate) async fn assert_environment_current(
-        &self,
-        id: &str,
-        revision: u64,
-        session: u64,
-    ) -> Result<()> {
-        let s = self.inner.lock().await;
-        if s.audit_failed {
-            return Err(OdxError::Persistence);
-        }
-        if s.session != session {
-            return Err(OdxError::Locked);
-        }
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-        let env = v
-            .data()
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .ok_or(OdxError::EnvironmentNotFound)?;
-        if env.revision != revision {
-            return Err(OdxError::ApprovalUnavailable);
-        }
-        Ok(())
+        Ok((value, bytes))
     }
 }
 
@@ -1609,6 +423,11 @@ mod mode_test_support;
 mod mode_tests {
     use super::*;
     use crate::Protocol;
+    use crate::{
+        clients::Capability,
+        config::{EnvironmentDraft, WriteMode},
+    };
+    use chrono::Utc;
 
     #[tokio::test]
     async fn temporary_expiry_blocks_a_write_waiting_for_capacity() {
@@ -1680,7 +499,9 @@ mod mode_tests {
 #[cfg(test)]
 mod client_revocation_tests {
     use super::*;
+    use crate::approval::revoke_client;
     use crate::{approval::State, config::Environment};
+    use chrono::Utc;
 
     #[test]
     fn revoking_a_client_only_revokes_its_own_pending_requests() {
@@ -1718,6 +539,11 @@ mod client_revocation_tests {
 mod approval_end_tests {
     use super::mode_test_support as support;
     use super::*;
+    use crate::{
+        clients::{Capability, ClientIdentity},
+        config::{EnvironmentDraft, WriteMode},
+    };
+
     use crate::{ActivityFilter, Protocol, approval::TTL};
     use std::time::Duration;
 
@@ -1929,6 +755,39 @@ mod approval_end_tests {
     }
 
     #[tokio::test]
+    async fn an_agent_read_whose_environment_changed_while_queued_is_closed_not_sent() {
+        let f = fixture(WriteMode::ReadOnly).await;
+        let mut held = Vec::new();
+        for _ in 0..4 {
+            held.push(f.core.limits.acquire(&f.env).await.unwrap());
+        }
+        let task = spawn_tool(&f.core, &f.client, "search_read", read());
+        while f.core.limits.queue_depth(&f.env).unwrap().environment < 1 {
+            tokio::task::yield_now().await;
+        }
+        f.core
+            .set_context(
+                Some(&f.env),
+                vec![crate::context::ContextEntry {
+                    name: "lang".into(),
+                    value: json!("es_ES"),
+                    enabled: true,
+                }],
+            )
+            .await
+            .unwrap();
+        drop(held);
+        assert!(task.await.unwrap().is_err());
+        let outcomes = outcomes(&f.core).await;
+        assert!(
+            outcomes
+                .iter()
+                .all(|(_, outcome)| outcome != "attempted" && outcome != "succeeded"),
+            "{outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_shell_command_whose_environment_changed_while_queued_leaves_no_attempt() {
         let f = fixture(WriteMode::ReadOnly).await;
         let mut held = Vec::new();
@@ -1947,6 +806,7 @@ mod approval_end_tests {
                     context: Default::default(),
                     confirmed: false,
                     client_id: None,
+                    client_revision: None,
                 })
                 .await
             })

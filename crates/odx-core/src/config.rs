@@ -235,6 +235,35 @@ pub(crate) struct VaultData {
     /// Saved expiry clock floor, restored on unlock.
     pub clock_floor: Option<chrono::DateTime<chrono::Utc>>,
 }
+impl VaultData {
+    /// The stored environment `id`; `EnvironmentNotFound` otherwise.
+    pub(crate) fn environment(&self, id: &str) -> Result<&Environment> {
+        self.environments
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or(OdxError::EnvironmentNotFound)
+    }
+    /// `name_exists` unless no environment but `except` uses `name`.
+    pub(crate) fn check_environment_name(&self, name: &str, except: Option<&str>) -> Result<()> {
+        if self
+            .environments
+            .iter()
+            .any(|e| e.name == name && Some(e.id.as_str()) != except)
+        {
+            return Err(OdxError::validation(
+                "validation.environment.name_exists",
+                "an environment with this name already exists",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn environment_mut(&mut self, id: &str) -> Result<&mut Environment> {
+        self.environments
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or(OdxError::EnvironmentNotFound)
+    }
+}
 
 /// Desktop-only settings: concurrency, upstream timeout, approval lifetime and retention. Defaults are also maximums; settings can only reduce them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -651,18 +680,6 @@ pub fn validate_json(input: &[u8]) -> Result<Value> {
     Ok(value)
 }
 
-pub fn positive_exact_id(value: &Value) -> Result<u64> {
-    value
-        .as_u64()
-        .filter(|id| *id > 0 && *id <= 9_007_199_254_740_991)
-        .ok_or_else(|| {
-            OdxError::validation(
-                "validation.json.id_invalid",
-                "ID must be an exact positive integer",
-            )
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,11 +755,5 @@ mod tests {
         }
         assert!(validate_json(&serde_json::to_vec(&too_deep).unwrap()).is_err());
         assert!(validate_json(&vec![b' '; 1_048_577]).is_err());
-        assert!(positive_exact_id(&serde_json::json!(0)).is_err());
-        assert!(positive_exact_id(&serde_json::json!(-1)).is_err());
-        assert_eq!(
-            positive_exact_id(&serde_json::json!(9007199254740991u64)).unwrap(),
-            9007199254740991
-        );
     }
 }

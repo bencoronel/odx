@@ -2,7 +2,7 @@
 mod support;
 use odx_core::{
     Capability::{OdooRead, OdooWriteRequest},
-    Core, EnvironmentDraft, Protocol, WriteMode,
+    Core, WriteMode,
     transports::mcp::McpConnection,
 };
 use serde_json::{Value, json};
@@ -47,18 +47,9 @@ async fn wait_approvals(core: &Arc<Core>, n: usize) {
 async fn listen_is_capped_apart_from_calls_and_notifies_only_changed_lists() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "A".into(),
-            url: sim.url.clone(),
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("A", &sim.url))
         .await
         .unwrap();
     core.set_mode(&env.id, WriteMode::Approval).await.unwrap();

@@ -1,6 +1,6 @@
 //! Ignore system proxy variables. Isolate this test in its own binary because it mutates process environment.
 mod support;
-use odx_core::{Core, EnvironmentDraft, Protocol, proxy::ProxyInput};
+use odx_core::{EnvironmentDraft, Protocol, proxy::ProxyInput};
 use serde_json::json;
 use support::proxy::{HIDDEN_HOST, http_proxy};
 
@@ -32,8 +32,7 @@ fn system_proxy_variables_are_ignored() {
         }
 
         let tmp = tempfile::tempdir().unwrap();
-        let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-        core.create("fictional master password").await.unwrap();
+        let core = support::unlocked_core(&tmp).await;
         let draft = |name: &str, url: String| EnvironmentDraft {
             name: name.into(),
             url,

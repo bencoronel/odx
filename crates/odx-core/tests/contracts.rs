@@ -74,12 +74,14 @@ async fn known_call_reads_are_bounded_and_preserve_native_results_on_all_protoco
             .activity(None, odx_core::ActivityFilter::default())
             .await
             .unwrap();
-        let requests: Vec<Value> = activity
-            .events
-            .iter()
-            .filter_map(|e| e.details.as_ref()?.request.as_ref())
-            .map(|p| serde_json::from_str(&p.text).unwrap())
-            .collect();
+        let mut requests: Vec<Value> = Vec::new();
+        for event in &activity.events {
+            let id = event.request_id.clone().unwrap();
+            let details = f.core.activity_details(id).await.unwrap();
+            if let Some(request) = details.and_then(|d| d.request) {
+                requests.push(serde_json::from_str(&request.text).unwrap());
+            }
+        }
         assert!(requests.iter().any(|r| r["method"] == "search_read"
             && r["kwargs"]["limit"] == 51
             && r["kwargs"]["fields"] == json!(["id", "display_name"])

@@ -3,7 +3,7 @@ use crate::{
     audit::AuditDetails,
     clients::Capability,
     error::OdxError,
-    execution::Core,
+    execution::{AuditedCall, Core, Upstream},
     output::{Outcome, ToolError},
     tools::{catalog::READ_METHODS, query::effective_context},
 };
@@ -31,6 +31,9 @@ pub struct ShellCall {
     /// An MCP client ran this through `terminal_run`: its grant is checked and the audit names it.
     #[serde(default)]
     pub client_id: Option<String>,
+    /// That client's token revision when it asked; a replaced token voids the request.
+    #[serde(default)]
+    pub client_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,25 +118,10 @@ pub(crate) fn insert_history(
     Ok(())
 }
 
-/// Treat all methods outside the read catalog as potential writes.
-pub fn is_modifying(method: &str) -> bool {
-    !READ_METHODS.contains(&method)
-}
-
-fn identifier(s: &str, dotted: bool) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && !s.starts_with('_')
-        && !s.starts_with('.')
-        && !s.ends_with('.')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || (dotted && c == '.'))
-}
-
 impl Core {
     pub async fn shell_history(&self) -> crate::error::Result<Vec<HistoryEntry>> {
         let s = self.inner.lock().await;
-        s.vault.as_ref().ok_or(OdxError::Locked)?.shell_history()
+        s.vault()?.shell_history()
     }
     /// Add a command, skipping consecutive duplicates and oversized input.
     pub async fn shell_history_add(
@@ -142,34 +130,25 @@ impl Core {
         environment: Option<String>,
     ) -> crate::error::Result<()> {
         let s = self.inner.lock().await;
-        s.vault
-            .as_ref()
-            .ok_or(OdxError::Locked)?
-            .shell_history_add(command, environment)
+        s.vault()?.shell_history_add(command, environment)
     }
     pub async fn shell_sessions(&self) -> crate::error::Result<Option<String>> {
         let s = self.inner.lock().await;
-        s.vault.as_ref().ok_or(OdxError::Locked)?.shell_sessions()
+        s.vault()?.shell_sessions()
     }
     pub async fn shell_sessions_save(&self, data: &str) -> crate::error::Result<()> {
         let s = self.inner.lock().await;
-        s.vault
-            .as_ref()
-            .ok_or(OdxError::Locked)?
-            .shell_sessions_save(data)
+        s.vault()?.shell_sessions_save(data)
     }
     pub async fn shell_history_clear(&self) -> crate::error::Result<()> {
         let s = self.inner.lock().await;
-        s.vault
-            .as_ref()
-            .ok_or(OdxError::Locked)?
-            .shell_history_clear()
+        s.vault()?.shell_history_clear()
     }
     pub async fn shell_call(&self, call: ShellCall) -> Result<ShellResult, ToolError> {
-        if !identifier(&call.model, true) {
+        if !crate::tools::args::valid_model(&call.model) {
             return Err(ToolError::invalid(format!("invalid model: {}", call.model)));
         }
-        if !identifier(&call.method, false) {
+        if !crate::tools::args::valid_method(&call.method) {
             return Err(ToolError::invalid(format!(
                 "method not allowed: {} (private methods are not exposed)",
                 call.method
@@ -180,7 +159,8 @@ impl Core {
                 "set context in the session or kwargs.context, not both",
             ));
         }
-        let write = is_modifying(&call.method);
+        // Every method outside the read catalog is a potential write.
+        let write = !READ_METHODS.contains(&call.method.as_str());
         if write && !call.confirmed {
             return Err(ToolError::new(
                 "confirmation_required",
@@ -191,14 +171,16 @@ impl Core {
         let actor = call.client_id.clone();
         let (env, global, session, now) = {
             let s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+            let v = s.vault()?;
             // The app already limits agents to their grant; the core checks again, as for any client call.
             if let Some(client_id) = &actor {
                 let grant = v
                     .data()
                     .clients
                     .iter()
-                    .find(|g| &g.id == client_id && !g.revoked)
+                    .find(|g| {
+                        &g.id == client_id && !g.revoked && Some(g.revision) == call.client_revision
+                    })
                     .ok_or(OdxError::Unauthorized)?;
                 let in_scope =
                     grant.all_environments || grant.environment_ids.contains(&call.environment_id);
@@ -243,16 +225,9 @@ impl Core {
         }
         let env = self.resolve_protocol(env, session).await?;
         let operation = format!("{}:{}", call.method, call.model);
-        let permits = self.limits.acquire(&env.id).await?;
-        // Environment changes during admission must still close recorded attempts.
-        self.assert_environment_current(&env.id, env.revision, session)
-            .await?;
-        let mut audit = self
-            .log_as(
-                actor.as_deref(),
-                &env.id,
-                &operation,
-                "attempted",
+        let audit = self
+            .audit_request(
+                &uuid::Uuid::new_v4().to_string(),
                 AuditDetails::call(
                     &env,
                     &call.model,
@@ -262,56 +237,27 @@ impl Core {
                 ),
             )
             .await?;
-        if let Err(e) = self
-            .assert_environment_current(&env.id, env.revision, session)
-            .await
-        {
-            audit.finish_odx_error(&env, &e);
-            self.log_outcome_as(audit, actor.as_deref(), &env.id, &operation, "not_sent")
-                .await?;
-            return Err(e.into());
-        }
         let started = Instant::now();
-        let uid = match self.odoo.authenticate(&env).await {
-            Ok(uid) => uid,
-            Err(e) => {
-                audit.finish_odx_error(&env, &e);
-                self.log_outcome_as(audit, actor.as_deref(), &env.id, &operation, "failed")
-                    .await?;
-                return Err(e.into());
-            }
+        let audited = AuditedCall {
+            actor: actor.as_deref(),
+            env: &env,
+            revision: env.revision,
+            session,
+            operation: &operation,
+            model: &call.model,
+            method: &call.method,
+            args: move |_| Value::Array(call.args),
+            kwargs: Value::Object(kwargs),
+            write,
+            recorded: false,
+            max_response: crate::odoo::jsonrpc::MAX_RESPONSE,
         };
-        let result = self
-            .odoo
-            .execute_kw_measured(
-                &env,
-                uid,
-                &call.model,
-                &call.method,
-                Value::Array(call.args),
-                Value::Object(kwargs),
-            )
-            .await;
+        let (data, bytes) = self
+            .audited_call(audit, audited, &mut Upstream::start(), || async {
+                Ok(env.clone())
+            })
+            .await?;
         let elapsed = started.elapsed().as_millis() as u64;
-        let (outcome, result): (&str, Result<(Value, usize), ToolError>) = match result {
-            Ok(ok) => ("succeeded", Ok(ok)),
-            // Odoo error confirms the transaction failed.
-            Err(OdxError::Remote(m)) => ("failed", Err(OdxError::Remote(m).into())),
-            // A sent write without a response may have applied; never retry.
-            Err(_) if write => ("uncertain", Err(OdxError::Uncertain.into())),
-            Err(e) => ("failed", Err(e.into())),
-        };
-        match &result {
-            Ok((value, _)) => audit.finish(&env, Ok(value)),
-            Err(error) => audit.finish_tool_error(&env, error),
-        }
-        // Already sent: keep the real outcome; append() sets audit_failed, which blocks new operations.
-        let _ = self
-            .log_outcome_as(audit, actor.as_deref(), &env.id, &operation, outcome)
-            .await;
-        // Release after the outcome is logged so drain() waits for it.
-        drop(permits);
-        let (data, bytes) = result?;
         Ok(ShellResult {
             data,
             write,

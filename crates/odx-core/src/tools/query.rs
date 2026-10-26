@@ -1,6 +1,6 @@
 use crate::{
     output::ToolError,
-    tools::catalog::{Args, domain, field_list, fields, ids, is_identifier, order, with_id},
+    tools::args::{Args, domain, field_list, fields, ids, is_identifier, order, with_id},
 };
 use serde_json::{Map, Value, json};
 

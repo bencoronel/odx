@@ -1,6 +1,6 @@
 mod flow;
 mod support;
-use odx_core::{Core, EnvironmentDraft, Protocol, ShellCall, WriteMode, context::ContextEntry};
+use odx_core::{Core, EnvironmentDraft, ShellCall, WriteMode, context::ContextEntry};
 use serde_json::{Value, json};
 
 fn entry(name: &str, value: Value, enabled: bool) -> ContextEntry {
@@ -11,15 +11,7 @@ fn entry(name: &str, value: Value, enabled: bool) -> ContextEntry {
     }
 }
 fn draft(url: &str) -> EnvironmentDraft {
-    EnvironmentDraft {
-        name: "A".into(),
-        url: url.into(),
-        database: "base-a".into(),
-        login: "fixture-user".into(),
-        protocol: Protocol::LegacyJsonrpc,
-        context: json!({}),
-        secret: "fixture-secret".into(),
-    }
+    support::draft("A", url)
 }
 
 #[tokio::test]
@@ -85,6 +77,7 @@ async fn typed_global_environment_and_call_contexts_are_merged_and_disabled_entr
             context: serde_json::from_value(json!({"lang":"de_DE"})).unwrap(),
             confirmed: false,
             client_id: None,
+            client_revision: None,
         })
         .await
         .unwrap();
@@ -131,8 +124,7 @@ async fn typed_global_environment_and_call_contexts_are_merged_and_disabled_entr
 async fn invalid_context_is_atomic_and_changes_revoke_pending_approvals() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core.save_environment(draft(&sim.url)).await.unwrap();
     core.set_context(
         None,

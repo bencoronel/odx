@@ -1,5 +1,7 @@
 //! Local socket v2 between mcp-stdio and the app. JSON frames use big-endian u32 lengths, 1 B–1 MiB. Same-UID peers must send {"v":2,"kind":"hello"} within 5 s, then request frames with id and MCP message (frame id ignored). The app returns MCP messages in notification frames. No admin commands.
-use crate::{error::OdxError, execution::Core, transports::mcp::McpConnection};
+use crate::{
+    clients::AgentProcess, error::OdxError, execution::Core, transports::mcp::McpConnection,
+};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -107,6 +109,57 @@ pub async fn serve(core: Arc<Core>, listener: UnixListener) {
     }
 }
 
+/// The connector's parent, read from /proc: the agent session that launched it.
+#[cfg(target_os = "linux")]
+fn agent_process(connector: i32) -> AgentProcess {
+    let stat = std::fs::read_to_string(format!("/proc/{connector}/stat")).unwrap_or_default();
+    // Fields after the command, which is in parentheses and may contain spaces: state, ppid, ...
+    let Some(pid) = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+        .and_then(|ppid| ppid.parse::<u32>().ok())
+    else {
+        return AgentProcess::default();
+    };
+    let command = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .map(|raw| {
+            let mut args = raw
+                .split(|b| *b == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| String::from_utf8_lossy(a).into_owned());
+            let program = args.next().unwrap_or_default();
+            let program = program.rsplit('/').next().unwrap_or_default().to_string();
+            std::iter::once(program)
+                .chain(args)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|c| !c.is_empty());
+    let cwd =
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .map(|dir| {
+                match std::env::var_os("HOME")
+                    .and_then(|home| dir.strip_prefix(home).ok().map(Path::to_path_buf))
+                {
+                    Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+                    Some(rest) => format!("~/{}", rest.display()),
+                    None => dir.display().to_string(),
+                }
+            });
+    AgentProcess {
+        pid: Some(pid),
+        command,
+        cwd,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn agent_process(_connector: i32) -> AgentProcess {
+    AgentProcess::default()
+}
+
 fn connection_error(code: &str, message: &str) -> Value {
     json!({"v": WIRE_VERSION, "kind": "error", "code": code, "message": message})
 }
@@ -153,7 +206,8 @@ async fn handle(core: Arc<Core>, stream: UnixStream) {
             return;
         }
     };
-    let _registered = core.register_connection(&identity.client_id);
+    let agent = peer.pid().map(agent_process).unwrap_or_default();
+    let registered = core.register_connection(&identity.client_id, agent);
     if write_frame(&mut writer, &json!({"v": WIRE_VERSION, "kind": "ready"}))
         .await
         .is_err()
@@ -190,6 +244,7 @@ async fn handle(core: Arc<Core>, stream: UnixStream) {
         let frame = tokio::select! {
             frame = read_frame(&mut reader) => frame,
             _ = &mut writer_task => break,
+            _ = registered.closed() => break,
         };
         let frame = match frame {
             Ok(Some(frame)) => frame,
@@ -197,6 +252,9 @@ async fn handle(core: Arc<Core>, stream: UnixStream) {
         };
         if frame["v"] != WIRE_VERSION || frame["kind"] != "request" {
             break;
+        }
+        if frame["message"]["method"] == "tools/call" {
+            registered.called();
         }
         let raw = serde_json::to_vec(&frame["message"]).unwrap_or_default();
         connection.on_message(&raw).await;

@@ -84,8 +84,7 @@ fn hidden(sim_url: &str) -> String {
 }
 async fn core() -> (Arc<Core>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     (core, tmp)
 }
 async fn activity_dump(core: &Core) -> String {

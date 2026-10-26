@@ -1,4 +1,5 @@
 //! SQLCipher-encrypted audit events with one projection per request.
+use crate::execution::Core;
 use crate::{
     config::Environment,
     error::{OdxError, Result},
@@ -12,7 +13,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const MAX_EVENT: usize = 16 * 1024;
+/// Escaped payload budgets: responses get the most room so reads can be shown as tables and JSON.
+const REQUEST_BUDGET: usize = 8000;
+const RESPONSE_BUDGET: usize = 64000;
+const ERROR_BUDGET: usize = 4000;
+const MAX_EVENT: usize = 80 * 1024;
 const MAX_QUEUED_EVENTS: usize = 128;
 const MAX_HISTORY: u64 = 256 * 1024 * 1024;
 /// Prune on the first insert and every 64th after; 64 events of at most MAX_EVENT stay far below the page reserve.
@@ -75,6 +80,7 @@ impl AuditDetails {
                     "model": model, "method": method, "args": args, "kwargs": kwargs
                 }),
                 env,
+                REQUEST_BUDGET,
             )),
             ..Default::default()
         }
@@ -88,9 +94,15 @@ impl AuditRequest {
     ) {
         self.details.duration_ms = Some(self.started.elapsed().as_millis() as u64);
         match result {
-            Ok(value) => self.details.response = Some(AuditPayload::capture(value, env)),
+            Ok(value) => {
+                self.details.response = Some(AuditPayload::capture(value, env, RESPONSE_BUDGET))
+            }
             Err(error) => {
-                self.details.error = Some(AuditPayload::capture(&Value::String(error), env))
+                self.details.error = Some(AuditPayload::capture(
+                    &Value::String(error),
+                    env,
+                    ERROR_BUDGET,
+                ))
             }
         }
     }
@@ -100,36 +112,21 @@ impl AuditRequest {
         self.details.error_code = Some(error.code().into());
         self.details.error_params = Some(error.ui_params());
         if let Some(detail) = error.safe_detail() {
-            self.details.error = Some(AuditPayload::capture(&Value::String(detail.into()), env));
-        }
-    }
-
-    pub(crate) fn finish_tool_error(
-        &mut self,
-        env: &Environment,
-        error: &crate::output::ToolError,
-    ) {
-        self.details.duration_ms = Some(self.started.elapsed().as_millis() as u64);
-        self.details.error_code = Some(error.code.into());
-        self.details.error_params = Some(Value::Object(Default::default()));
-        if matches!(
-            error.code,
-            "upstream_error" | "upstream_network" | "upstream_timeout"
-        ) {
             self.details.error = Some(AuditPayload::capture(
-                &Value::String(error.message.clone()),
+                &Value::String(detail.into()),
                 env,
+                ERROR_BUDGET,
             ));
         }
     }
 }
 
 impl AuditPayload {
-    fn capture(value: &Value, env: &Environment) -> Self {
-        // Include JSON escaping in the 16 KiB event budget.
+    fn capture(value: &Value, env: &Environment, budget: usize) -> Self {
+        // Include JSON escaping in the MAX_EVENT budget.
         let mut writer = PreviewWriter {
             bytes: Vec::new(),
-            budget: 4000,
+            budget,
         };
         let truncated =
             serde_json::to_writer_pretty(&mut writer, &Redacted { value, env }).is_err();
@@ -140,6 +137,142 @@ impl AuditPayload {
             text: String::from_utf8(writer.bytes).unwrap(),
             truncated,
         }
+    }
+}
+
+// Audit logging on the core: open a request, record its outcome, and refuse work for a changed environment.
+
+impl Core {
+    /// Record the attempt before dispatch; audit failure blocks new operations.
+    pub(crate) async fn log_as(
+        &self,
+        client: Option<&str>,
+        env: &str,
+        operation: &str,
+        outcome: &str,
+        details: AuditDetails,
+    ) -> Result<AuditRequest> {
+        self.log_request_as(
+            client,
+            env,
+            operation,
+            outcome,
+            &uuid::Uuid::new_v4().to_string(),
+            details,
+        )
+        .await
+    }
+    pub(crate) async fn log_request_as(
+        &self,
+        client: Option<&str>,
+        env: &str,
+        operation: &str,
+        outcome: &str,
+        request_id: &str,
+        details: AuditDetails,
+    ) -> Result<AuditRequest> {
+        let request = self.audit_request(request_id, details).await?;
+        self.log_open(request.clone(), client, env, operation, outcome)
+            .await?;
+        Ok(request)
+    }
+    pub(crate) async fn audit_request(
+        &self,
+        id: &str,
+        details: AuditDetails,
+    ) -> Result<AuditRequest> {
+        let s = self.inner.lock().await;
+        if s.audit_failed {
+            return Err(OdxError::Persistence);
+        }
+        Ok(AuditRequest {
+            log: s.audit.as_ref().cloned().ok_or(OdxError::Locked)?,
+            id: id.into(),
+            details,
+            started: std::time::Instant::now(),
+        })
+    }
+    /// Opening or advancing a request uses the bounded audit queue.
+    pub(crate) async fn log_open(
+        &self,
+        audit: AuditRequest,
+        client: Option<&str>,
+        env: &str,
+        operation: &str,
+        outcome: &str,
+    ) -> Result<()> {
+        self.append(audit, client, env, operation, outcome, true)
+            .await
+    }
+    /// Closing a recorded request is bounded by admission, not queue capacity.
+    pub(crate) async fn log_outcome_as(
+        &self,
+        audit: AuditRequest,
+        client: Option<&str>,
+        env: &str,
+        operation: &str,
+        outcome: &str,
+    ) -> Result<()> {
+        self.append(audit, client, env, operation, outcome, false)
+            .await
+    }
+    async fn append(
+        &self,
+        audit: AuditRequest,
+        client: Option<&str>,
+        env: &str,
+        operation: &str,
+        outcome: &str,
+        bounded: bool,
+    ) -> Result<()> {
+        let event = AuditEvent {
+            request_id: Some(audit.id),
+            details: Some(audit.details),
+            at: Utc::now(),
+            client_id: client.map(Into::into),
+            environment_id: env.into(),
+            operation: operation.into(),
+            outcome: outcome.into(),
+        };
+        // Run SQLCipher fsync outside worker threads.
+        let log = audit.log;
+        let appended = tokio::task::spawn_blocking(move || {
+            if bounded {
+                log.append(&event)
+            } else {
+                log.append_closing(&event)
+            }
+        })
+        .await;
+        match appended {
+            Ok(Ok(())) => Ok(()),
+            // A full queue records nothing but leaves audit healthy.
+            Ok(Err(OdxError::Capacity)) => Err(OdxError::Capacity),
+            _ => {
+                self.inner.lock().await.audit_failed = true;
+                Err(OdxError::Persistence)
+            }
+        }
+    }
+    pub(crate) async fn assert_environment_current(
+        &self,
+        id: &str,
+        revision: u64,
+        session: u64,
+    ) -> Result<()> {
+        let s = self.inner.lock().await;
+        if s.audit_failed {
+            return Err(OdxError::Persistence);
+        }
+        if s.session != session {
+            return Err(OdxError::Locked);
+        }
+        let v = s.vault()?;
+        let env = v.data().environment(id)?;
+        if env.revision != revision {
+            return Err(OdxError::ApprovalUnavailable);
+        }
+        Ok(())
     }
 }
 
@@ -207,11 +340,7 @@ fn sensitive_key(key: &str) -> bool {
     .any(|part| key.contains(part))
 }
 fn redact_text(text: &str, env: &Environment) -> String {
-    let mut clean = text.to_owned();
-    // Redact masked headers and proxy credentials.
-    for secret in env.redaction_secrets() {
-        clean = clean.replace(secret, "[redacted]");
-    }
+    let mut clean = env.redact(text);
     // Local tokens have an odx_ prefix and 64 hex digits.
     let mut offset = 0;
     while let Some(start) = clean[offset..].find("odx_").map(|i| i + offset) {
@@ -239,7 +368,16 @@ impl Serialize for Redacted<'_> {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         match self.value {
-            Value::String(text) => serializer.serialize_str(&redact_text(text, self.env)),
+            Value::String(text) => {
+                // Only the start can fit in an event: redact that, never a whole 48 MiB download.
+                // The margin keeps a secret or an odx_ token that starts inside it whole.
+                let longest = self.env.redaction_secrets().first().map_or(0, |s| s.len());
+                let keep = text
+                    .char_indices()
+                    .nth(MAX_EVENT + longest + 68)
+                    .map_or(text.len(), |(i, _)| i);
+                serializer.serialize_str(&redact_text(&text[..keep], self.env))
+            }
             Value::Array(values) => {
                 let mut seq = serializer.serialize_seq(Some(values.len()))?;
                 for value in values {
@@ -274,16 +412,15 @@ impl Serialize for Redacted<'_> {
 }
 
 /// Optional activity_date filters; the cursor bounds the index scan.
-const PAGE_SQL: &str = "SELECT a.at,a.activity_key,e.payload FROM (
-                SELECT at,activity_key,last_seq FROM activity
+/// List columns only: details stay encrypted in audit_events until a request is opened.
+const PAGE_SQL: &str = "SELECT at,activity_key,environment_id,client_id,operation,outcome FROM activity
                 WHERE (at,activity_key)<(?8,?9)
                 AND (?1 IS NULL OR environment_id=?1) AND (?2 IS NULL OR client_id=?2)
                 AND (?3=0 OR write=1) AND (?4=0 OR outcome IN ('failed','uncertain','rejected','cancelled'))
                 AND (?5='' OR instr(lower(operation),?5)>0 OR instr(lower(outcome),?5)>0
                     OR environment_id IN (SELECT value FROM json_each(?6)) OR client_id IN (SELECT value FROM json_each(?7)))
-                ORDER BY at DESC,activity_key DESC LIMIT 101
-            ) a JOIN audit_events e ON e.seq=a.last_seq
-            ORDER BY a.at DESC,a.activity_key DESC";
+                AND (?10 IS NULL OR at>=?10) AND at>=?11
+                ORDER BY at DESC,activity_key DESC LIMIT 101";
 
 pub struct AuditLog {
     database: std::sync::Arc<crate::database::Database>,
@@ -334,8 +471,15 @@ impl AuditLog {
         )
     }
     /// Apply retention immediately after reducing it in Settings.
+    /// Prune now and give the freed pages back to the file system (the database uses auto_vacuum=INCREMENTAL).
     pub(crate) fn prune_now(&self) -> Result<()> {
-        self.database.transaction(|tx| self.prune(tx))
+        self.database.transaction(|tx| self.prune(tx))?;
+        // Each step frees one page: run it to the end (execute_batch would step it once).
+        let conn = self.database.lock()?;
+        let mut vacuum = conn.prepare("PRAGMA incremental_vacuum")?;
+        let mut rows = vacuum.query([])?;
+        while rows.next()?.is_some() {}
+        Ok(())
     }
     pub fn append(&self, event: &AuditEvent) -> Result<()> {
         self.queued
@@ -385,11 +529,7 @@ impl AuditLog {
         filter: &crate::activity::ActivityFilter,
         envs: &std::collections::HashMap<String, String>,
         clients: &std::collections::HashMap<String, String>,
-    ) -> Result<(
-        Vec<AuditEvent>,
-        Option<crate::activity::ActivityCursor>,
-        bool,
-    )> {
+    ) -> Result<(Vec<AuditEvent>, Option<crate::activity::ActivityCursor>)> {
         let q = filter.q.as_deref().unwrap_or("").to_lowercase();
         let matching_envs: Vec<_> = envs
             .iter()
@@ -416,13 +556,27 @@ impl AuditLog {
                 serde_json::to_string(&matching_clients)?,
                 at,
                 key,
+                filter.since.map(|since| since.timestamp_micros()),
+                // Retention applies to what is shown even between periodic prunes.
+                (Utc::now()
+                    - chrono::Duration::days(i64::from(
+                        self.retention_days.load(Ordering::Acquire)
+                    )))
+                .timestamp_micros(),
             ],
             |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
-                ))
+                let at: i64 = r.get(0)?;
+                let key: String = r.get(1)?;
+                let event = AuditEvent {
+                    request_id: key.strip_prefix("request:").map(String::from),
+                    details: None,
+                    at: DateTime::from_timestamp_micros(at).unwrap_or_default(),
+                    environment_id: r.get(2)?,
+                    client_id: r.get(3)?,
+                    operation: r.get(4)?,
+                    outcome: r.get(5)?,
+                };
+                Ok((at, key, event))
             },
         )?;
         let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -435,16 +589,26 @@ impl AuditLog {
                 key: key.clone(),
             }
         });
-        let events = rows
-            .into_iter()
-            .map(|(_, _, payload)| Ok(serde_json::from_slice(&payload)?))
-            .collect::<Result<Vec<AuditEvent>>>()?;
-        let complete = conn.query_row(
-            "SELECT history_complete FROM metadata WHERE id=1",
-            [],
-            |r| r.get(0),
-        )?;
-        Ok((events, next, complete))
+        Ok((rows.into_iter().map(|(_, _, event)| event).collect(), next))
+    }
+}
+
+impl AuditLog {
+    /// Details of the latest event of one request.
+    pub fn details(&self, request_id: &str) -> Result<Option<AuditDetails>> {
+        use rusqlite::OptionalExtension;
+        let conn = self.database.lock()?;
+        let payload: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT e.payload FROM activity a JOIN audit_events e ON e.seq=a.last_seq WHERE a.activity_key=?1",
+                [format!("request:{request_id}")],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(match payload {
+            Some(payload) => serde_json::from_slice::<AuditEvent>(&payload)?.details,
+            None => None,
+        })
     }
 }
 
@@ -583,24 +747,30 @@ mod tests {
             q: Some("test".into()),
             ..Default::default()
         };
-        let (page, next, complete) = audit.page(None, &filter, &envs, &clients).unwrap();
+        let (page, next) = audit.page(None, &filter, &envs, &clients).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].outcome, "failed");
-        assert!(next.is_none() && complete);
+        assert!(next.is_none());
         for i in 0..101 {
             event.request_id = Some(format!("parallel-{i}"));
             event.outcome = "succeeded".into();
             audit.append(&event).unwrap();
         }
-        let (page, next, _) = audit
+        let (page, next) = audit
             .page(None, &Default::default(), &envs, &clients)
             .unwrap();
         assert_eq!(page.len(), 100);
-        let (page, next, _) = audit
+        let (page, next) = audit
             .page(next.as_ref(), &Default::default(), &envs, &clients)
             .unwrap();
         assert_eq!(page.len(), 2);
         assert!(next.is_none());
+        let since = crate::activity::ActivityFilter {
+            since: Some(Utc::now() + chrono::Duration::seconds(1)),
+            ..Default::default()
+        };
+        let (page, _) = audit.page(None, &since, &envs, &clients).unwrap();
+        assert!(page.is_empty(), "since excludes older requests");
         let events = || -> i64 {
             audit
                 .database
@@ -636,6 +806,75 @@ mod tests {
     }
 
     #[test]
+    fn prune_now_gives_every_freed_page_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault =
+            crate::vault::Vault::create(dir.path().join("vault.sqlite3"), "fictional password")
+                .unwrap();
+        let audit = AuditLog::for_vault(&vault);
+        let old = Utc::now() - chrono::Duration::days(10);
+        for i in 0..200 {
+            let mut event = fixture_event(format!("old-{i}"), old);
+            event.details.as_mut().unwrap().response = Some(AuditPayload {
+                text: "x".repeat(8000),
+                truncated: false,
+            });
+            audit.append(&event).unwrap();
+        }
+        audit.set_retention(1, 256);
+        audit.prune_now().unwrap();
+        let free: i64 = audit
+            .database
+            .lock()
+            .unwrap()
+            .query_row("PRAGMA freelist_count", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(free, 0);
+    }
+
+    #[test]
+    fn the_list_hides_requests_past_retention_before_the_next_prune() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault =
+            crate::vault::Vault::create(dir.path().join("vault.sqlite3"), "fictional password")
+                .unwrap();
+        let audit = AuditLog::for_vault(&vault);
+        let old = Utc::now() - chrono::Duration::days(3);
+        audit.append(&fixture_event("old".into(), old)).unwrap();
+        audit
+            .append(&fixture_event("new".into(), Utc::now()))
+            .unwrap();
+        audit.set_retention(2, 256);
+        let none = std::collections::HashMap::new();
+        let (page, _) = audit.page(None, &Default::default(), &none, &none).unwrap();
+        let ids: Vec<_> = page
+            .iter()
+            .map(|e| e.request_id.as_deref().unwrap())
+            .collect();
+        assert_eq!(ids, ["new"]);
+    }
+
+    #[test]
+    fn details_are_read_per_request_from_its_latest_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault =
+            crate::vault::Vault::create(dir.path().join("vault.sqlite3"), "fictional password")
+                .unwrap();
+        let audit = AuditLog::for_vault(&vault);
+        let mut event = fixture_event("one".into(), Utc::now());
+        audit.append(&event).unwrap();
+        event.details.as_mut().unwrap().response = Some(AuditPayload {
+            text: "fixture response".into(),
+            truncated: false,
+        });
+        audit.append(&event).unwrap();
+        let details = audit.details("one").unwrap().unwrap();
+        assert_eq!(details.request.unwrap().text, "fixture request");
+        assert_eq!(details.response.unwrap().text, "fixture response");
+        assert!(audit.details("missing").unwrap().is_none());
+    }
+
+    #[test]
     fn cursor_pages_do_not_repeat_keys_when_new_events_arrive() {
         let dir = tempfile::tempdir().unwrap();
         let vault =
@@ -651,26 +890,21 @@ mod tests {
                 .unwrap();
         }
         let none = std::collections::HashMap::new();
-        let (first, next, _) = audit.page(None, &Default::default(), &none, &none).unwrap();
+        let (first, next) = audit.page(None, &Default::default(), &none, &none).unwrap();
         assert_eq!(first.len(), 100);
+        // The list carries no details; they are read per request.
+        assert!(first[0].details.is_none());
+        let id = first[0].request_id.as_deref().unwrap();
         assert_eq!(
-            first[0]
-                .details
-                .as_ref()
-                .unwrap()
-                .request
-                .as_ref()
-                .unwrap()
-                .text,
-            "fixture request",
-            "read payload from audit_events"
+            audit.details(id).unwrap().unwrap().request.unwrap().text,
+            "fixture request"
         );
         for i in 0..30 {
             audit
                 .append(&fixture_event(format!("new-{i:02}"), Utc::now()))
                 .unwrap();
         }
-        let (second, next, _) = audit
+        let (second, next) = audit
             .page(next.as_ref(), &Default::default(), &none, &none)
             .unwrap();
         assert!(next.is_none());
@@ -728,7 +962,7 @@ mod tests {
         assert!(rows < 100, "old requests were pruned");
         append(100);
         let none = std::collections::HashMap::new();
-        let (page, _, _) = AuditLog::for_vault(&vault)
+        let (page, _) = AuditLog::for_vault(&vault)
             .page(None, &Default::default(), &none, &none)
             .unwrap();
         assert_eq!(page[0].request_id.as_deref(), Some("prune-100"));
@@ -774,7 +1008,7 @@ mod tests {
             "message": format!("fixture-odoo-secret Bearer fixture-header-secret {token}"),
             "normal": [false, 3, null]
         });
-        let preview = AuditPayload::capture(&value, &env);
+        let preview = AuditPayload::capture(&value, &env, REQUEST_BUDGET);
         assert!(!preview.truncated);
         for secret in [
             "fixture-password",
@@ -790,9 +1024,12 @@ mod tests {
             serde_json::json!([false, 3, null])
         );
         let large = serde_json::json!({"data": "ñ\n\"".repeat(20_000)});
-        let preview = AuditPayload::capture(&large, &env);
-        assert!(preview.truncated);
-        assert!(serde_json::to_vec(&preview).unwrap().len() < 4096);
+        let capture = |budget| {
+            let preview = AuditPayload::capture(&large, &env, budget);
+            assert!(preview.truncated);
+            assert!(serde_json::to_vec(&preview).unwrap().len() < budget + 96);
+            preview
+        };
         let event = AuditEvent {
             request_id: Some("fixture-request".into()),
             client_id: None,
@@ -801,8 +1038,9 @@ mod tests {
             operation: "read:res.partner".into(),
             outcome: "succeeded".into(),
             details: Some(AuditDetails {
-                request: Some(preview.clone()),
-                response: Some(preview),
+                request: Some(capture(REQUEST_BUDGET)),
+                response: Some(capture(RESPONSE_BUDGET)),
+                error: Some(capture(ERROR_BUDGET)),
                 ..Default::default()
             }),
         };

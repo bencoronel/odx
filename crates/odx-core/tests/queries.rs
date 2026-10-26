@@ -97,18 +97,9 @@ async fn two_simulated_environments_are_isolated_and_locked_core_sends_nothing()
 async fn deleting_environment_revokes_access_without_upstream_calls() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
-        .save_environment(EnvironmentDraft {
-            name: "Disposable fixture".into(),
-            url: sim.url,
-            database: "base-a".into(),
-            login: "fixture-user".into(),
-            protocol: Protocol::LegacyJsonrpc,
-            context: json!({}),
-            secret: "fixture-secret".into(),
-        })
+        .save_environment(support::draft("Disposable fixture", &sim.url))
         .await
         .unwrap();
     let clone = core

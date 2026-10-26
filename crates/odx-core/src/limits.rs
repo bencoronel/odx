@@ -4,12 +4,13 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// How long a call waits for a slot before `Capacity`.
 const WAIT: Duration = Duration::from_secs(10);
 struct EnvironmentSlots {
     active: Arc<Semaphore>,
@@ -31,6 +32,8 @@ pub struct Limits {
     environment_queue_limit: usize,
     /// Downloads buffer ~130 MiB each (response, string, decoded copy).
     downloads: Arc<Semaphore>,
+    /// Queue deadline in milliseconds: WAIT unless a test shortens it.
+    wait_ms: Arc<AtomicU64>,
 }
 pub struct UpstreamPermits {
     _admission: OwnedSemaphorePermit,
@@ -68,11 +71,20 @@ impl Limits {
             global_queue_limit,
             environment_queue_limit,
             downloads: Arc::new(Semaphore::new(2)),
+            wait_ms: Arc::new(AtomicU64::new(WAIT.as_millis() as u64)),
         }
+    }
+    /// Shorten the queue deadline (10 s) so tests of it do not wait in real time.
+    pub fn set_queue_wait(&self, wait: Duration) {
+        self.wait_ms
+            .store(wait.as_millis() as u64, Ordering::Release);
+    }
+    fn wait(&self) -> Duration {
+        Duration::from_millis(self.wait_ms.load(Ordering::Acquire))
     }
     /// Bound concurrent downloads to cap peak memory; others wait up to the queue deadline.
     pub async fn download_permit(&self) -> Result<OwnedSemaphorePermit> {
-        match tokio::time::timeout(WAIT, self.downloads.clone().acquire_owned()).await {
+        match tokio::time::timeout(self.wait(), self.downloads.clone().acquire_owned()).await {
             Ok(Ok(p)) => Ok(p),
             _ => Err(OdxError::Capacity),
         }
@@ -111,7 +123,7 @@ impl Limits {
         if old >= self.global_queue_limit {
             return Err(OdxError::Capacity);
         }
-        let result = tokio::time::timeout(WAIT, self.global.clone().acquire_owned()).await;
+        let result = tokio::time::timeout(self.wait(), self.global.clone().acquire_owned()).await;
         match result {
             Ok(Ok(p)) => Ok(p),
             _ => Err(OdxError::Capacity),
@@ -129,7 +141,7 @@ impl Limits {
         if old >= self.environment_queue_limit {
             return Err(OdxError::Capacity);
         }
-        let result = tokio::time::timeout(WAIT, slots.active.clone().acquire_owned()).await;
+        let result = tokio::time::timeout(self.wait(), slots.active.clone().acquire_owned()).await;
         match result {
             Ok(Ok(p)) => Ok(p),
             _ => Err(OdxError::Capacity),
@@ -197,25 +209,53 @@ async fn converge(
     applied: &tokio::sync::Mutex<usize>,
     target: &AtomicUsize,
 ) {
-    let mut applied = applied.lock().await;
-    let want = target.load(Ordering::Acquire);
-    if want > *applied {
-        semaphore.add_permits(want - *applied);
-        *applied = want;
-    }
-    // Retire permits individually without overtaking existing waiters.
-    while *applied > want {
-        match semaphore.clone().acquire_owned().await {
-            Ok(permit) => permit.forget(),
-            Err(_) => return,
+    loop {
+        {
+            let mut applied = applied.lock().await;
+            let want = target.load(Ordering::Acquire);
+            if want >= *applied {
+                semaphore.add_permits(want - *applied);
+                *applied = want;
+                return;
+            }
         }
-        *applied -= 1;
+        // Retire one permit as a call finishes, without overtaking existing waiters. The lock is not held
+        // while waiting, so a later raise applies at once; a permit taken after that raise goes back.
+        let Ok(permit) = semaphore.clone().acquire_owned().await else {
+            return;
+        };
+        let mut applied = applied.lock().await;
+        if target.load(Ordering::Acquire) < *applied {
+            permit.forget();
+            *applied -= 1;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn a_raise_right_after_a_decrease_applies_without_waiting_for_calls() {
+        let l = Limits::with_caps(4, 4, 8, 8, 8);
+        let busy: Vec<_> = hold_slots(&l, 4).await;
+        // 4 -> 1 waits for running calls to finish; 1 -> 4 must not wait behind it.
+        let lowering = tokio::spawn(l.set_concurrency(1, 4));
+        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(1), l.set_concurrency(4, 4))
+            .await
+            .expect("raise applied at once");
+        drop(busy);
+        lowering.await.unwrap();
+        assert_eq!(l.global.available_permits(), 4);
+    }
+    async fn hold_slots(l: &Limits, n: usize) -> Vec<UpstreamPermits> {
+        let mut held = Vec::new();
+        for i in 0..n {
+            held.push(l.acquire(&format!("env-{i}")).await.unwrap());
+        }
+        held
+    }
     #[tokio::test]
     async fn caps_active_queue_and_isolates_environments() {
         let l = Limits::with_caps(1, 1, 1, 1, 3);

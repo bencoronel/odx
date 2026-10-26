@@ -1,6 +1,6 @@
 CREATE TABLE config (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
-CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), history_complete INTEGER NOT NULL, history_bytes INTEGER NOT NULL DEFAULT 0);
-INSERT INTO metadata(id, history_complete) VALUES(1,1);
+CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), history_bytes INTEGER NOT NULL DEFAULT 0);
+INSERT INTO metadata(id) VALUES(1);
 CREATE TABLE audit_events (
     seq INTEGER PRIMARY KEY, activity_key TEXT NOT NULL, at INTEGER NOT NULL,
     client_id TEXT, payload BLOB NOT NULL, bytes INTEGER NOT NULL

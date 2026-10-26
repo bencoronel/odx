@@ -1,54 +1,270 @@
 //! API/MCP tools and validation. All use shared grants, policy, limits and audit.
 use crate::{
-    approval::Approval,
     audit::AuditDetails,
     clients::{Capability, ClientIdentity},
     config::Environment,
     error::OdxError,
-    execution::{ApprovalEnd, Core, Upstream},
-    output::{Format, Outcome, ToolError, ToolOutput},
-    policy::{self, Effect},
-    tools::{files::OutputKind, mutations, query::effective_context},
+    execution::{AuditedCall, Core, Upstream},
+    output::{Outcome, ToolError, ToolOutput},
+    policy::{self},
+    tools::{
+        args::{
+            Args, common, domain, field_list, fields, ids, kw, model, order, paged, valid_method,
+            with_id,
+        },
+        files::OutputKind,
+        mutations,
+        query::effective_context,
+    },
 };
-use chrono::Utc;
 use serde_json::{Map, Value, json};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tokio::sync::oneshot;
+use std::{collections::HashSet, sync::Arc};
 
 const SCHEMAS: &str = include_str!("tools.schema.json");
 
-/// All 25 tools in alphabetical order.
-pub const TOOLS: [&str; 25] = [
-    "access",
-    "call",
-    "compare",
-    "create",
-    "download",
-    "envs",
-    "fields",
-    "history",
-    "models",
-    "name_search",
-    "read",
-    "read_group",
-    "ref",
-    "search",
-    "search_count",
-    "search_read",
-    "show",
-    "terminal_read",
-    "terminal_run",
-    "terminals",
-    "unlink",
-    "view",
-    "wait",
-    "whoami",
-    "write",
+/// Grant a client needs for a tool to be listed and called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Access {
+    Any,
+    Read,
+    Write,
+    /// call: reads with odoo:read, writes with odoo:write-request.
+    ReadOrWrite,
+}
+impl Access {
+    pub(crate) fn allowed(self, capabilities: &[Capability]) -> bool {
+        let read = capabilities.contains(&Capability::OdooRead);
+        let write = capabilities.contains(&Capability::OdooWriteRequest);
+        match self {
+            Access::Any => true,
+            Access::Read => read,
+            Access::Write => write,
+            Access::ReadOrWrite => read || write,
+        }
+    }
+}
+
+/// One tool's MCP metadata and grant. Its arguments are the tools.schema.json `$defs` entry of the same name.
+pub(crate) struct Tool {
+    pub(crate) name: &'static str,
+    pub(crate) title: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) read_only: bool,
+    pub(crate) destructive: bool,
+    pub(crate) access: Access,
+}
+
+/// Every tool, in alphabetical order: the one list MCP, HTTP and run_tool share.
+pub(crate) const TOOLS: [Tool; 25] = [
+    Tool {
+        name: "access",
+        title: "Permissions",
+        description: "Inspect the Odoo user's CRUD rights, ACLs and record rules. Each ACL and rule has applies: whether it matches the user's groups (null when unknown; a hint, not a guarantee). Partial data is flagged. Excludes proxy restrictions and does not guarantee permission for a specific operation.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "call",
+        title: "Call a method",
+        description: "Call a public business method; prefer dedicated tools when available. Known reads retain their validation and limits. JSON-2 requires empty args and named kwargs, including kwargs.ids for records. Other methods follow write mode; unlink always requires human approval. Preserves the JSON result; to_file saves it locally.",
+        read_only: false,
+        destructive: true,
+        access: Access::ReadOrWrite,
+    },
+    Tool {
+        name: "compare",
+        title: "Compare environments",
+        description: "Compare model records across env_a/env_b by XML ID or an explicit key field. Reads and pages are independent, not transactional. Zero differences on a partial page do not imply equality.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "create",
+        title: "Create",
+        description: "Create up to 1000 records. The environment mode determines execution or human approval.",
+        read_only: false,
+        destructive: false,
+        access: Access::Write,
+    },
+    Tool {
+        name: "download",
+        title: "Download binary",
+        description: "Save a binary field (default ir.attachment.datas) to a server-chosen local file. Returns path and size, never base64.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "envs",
+        title: "Environments",
+        description: "Odoo environments granted to this client, with their write modes and tags. Makes no Odoo calls.",
+        read_only: true,
+        destructive: false,
+        access: Access::Any,
+    },
+    Tool {
+        name: "fields",
+        title: "Fields",
+        description: "Inspect model field metadata before choosing fields, relations or selections. names limits upstream fields; q filters names/labels afterward.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "history",
+        title: "History",
+        description: "Read chatter newest first with tracked changes (field, old, new). Paginates messages, not changes. Unreadable tracking returns changes=null with warnings; this does not imply no changes occurred.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "models",
+        title: "Models",
+        description: "Find models whose technical name or label contains q.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "name_search",
+        title: "Search by name",
+        description: "Search names as in Odoo dropdowns. No offset; refine the query when more matches exist.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "read",
+        title: "Read by IDs",
+        description: "Read up to 1000 records by ID; flag missing IDs.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "read_group",
+        title: "Group",
+        description: "Aggregate in Odoo without downloading all records. groupby supports partner_id or date:month; groupby=[] requires explicit aggregates such as amount_total:sum. Uses lazy=false and paginates groups, not records.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "ref",
+        title: "Resolve XML ID",
+        description: "Resolve an XML ID (module.name) to {model,id}. Missing IDs return not_found; never falls back to name search.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "search",
+        title: "Search IDs",
+        description: "Find IDs matching the domain. Paginates with limit/offset.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "search_count",
+        title: "Count",
+        description: "Count records matching the domain.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "search_read",
+        title: "Search and read",
+        description: "Read records and fields in one call. Defaults to id and display_name. Paginates with limit/offset. Use search for IDs only and search_count for counts.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "show",
+        title: "Show in Odx",
+        description: "Bring the Odx window forward on something for the user to see: for now a Terminal tab. Use it when you want to show the user a result, not for every command.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "terminal_read",
+        title: "Terminal history",
+        description: "Recent commands of one Odx Terminal tab with their output, newest first: text lines, errors and tables (columns and rows). Commands an agent ran carry its name. Makes no Odoo calls.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "terminal_run",
+        title: "Run in Terminal",
+        description: "Type and run one Odx Terminal command (the Terminal syntax: search, read, count, \\d, call…) in a tab, or in a session of env, and return its output. The user can watch it in that tab; the window does not come forward (use show for that). Reads run at once. A write runs only if this client may request writes, and only after the user confirms it in the Terminal, so the call waits for that answer. Audited as this client.",
+        read_only: false,
+        destructive: true,
+        access: Access::Read,
+    },
+    Tool {
+        name: "terminals",
+        title: "Terminal sessions",
+        description: "Odx Terminal tabs on environments granted to this client: id, name, environment, whether it is the tab in front, how many commands it ran and the last one. Read from what the app saved, a second or so behind. Makes no Odoo calls.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "unlink",
+        title: "Delete",
+        description: "Delete records by ID. Always requires human approval; one approval covers all listed IDs. Cannot be undone.",
+        read_only: false,
+        destructive: true,
+        access: Access::Write,
+    },
+    Tool {
+        name: "view",
+        title: "View",
+        description: "Read the connected user's final view architecture and paginated inheritance chain. q filters lines and marks matching views. Readable views may differ from applied views due to groups or inactive views.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "wait",
+        title: "Wait for a condition",
+        description: "Poll search_count for matching records, or none with absent=true. Timeout defaults to 60 s, maximum 600 s; minimum interval 3 s. Returns matched=false on timeout.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "whoami",
+        title: "Odoo user",
+        description: "Odoo user used by the proxy: uid, login, name and companies.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "write",
+        title: "Update",
+        description: "Update records by ID under the environment write mode. Relational delete/unlink commands require individual human approval.",
+        read_only: false,
+        destructive: true,
+        access: Access::Write,
+    },
 ];
+
+pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
+    TOOLS.iter().find(|tool| tool.name == name)
+}
+
+/// tools.schema.json, parsed once.
+pub(crate) static SCHEMA: std::sync::LazyLock<Value> =
+    std::sync::LazyLock::new(|| serde_json::from_str(SCHEMAS).expect("valid tools.schema.json"));
 
 /// Methods call treats as reads; all others are potential writes.
 pub(crate) const READ_METHODS: [&str; 10] = [
@@ -74,480 +290,19 @@ pub struct ToolDefinition {
     pub destructive: bool,
 }
 
-fn describe(name: &str) -> (&'static str, &'static str, bool, bool) {
-    match name {
-        "envs" => (
-            "Environments",
-            "Odoo environments granted to this client, with their write modes and tags. Makes no Odoo calls.",
-            true,
-            false,
-        ),
-        "terminals" => (
-            "Terminal sessions",
-            "Odx Terminal tabs on environments granted to this client: id, name, environment, whether it is the tab in front, how many commands it ran and the last one. Read from what the app saved, a second or so behind. Makes no Odoo calls.",
-            true,
-            false,
-        ),
-        "terminal_read" => (
-            "Terminal history",
-            "Recent commands of one Odx Terminal tab with their output: text lines, errors and tables (columns and rows). Commands an agent ran carry its name. Makes no Odoo calls.",
-            true,
-            false,
-        ),
-        "terminal_run" => (
-            "Run in Terminal",
-            "Type and run one Odx Terminal command (the Terminal syntax: search, read, count, \\d, call…) in a tab, or in a session of env, and return its output. The user can watch it in that tab; the window does not come forward (use show for that). Reads run at once. A write runs only if this client may request writes, and only after the user confirms it in the Terminal, so the call waits for that answer. Audited as this client.",
-            false,
-            true,
-        ),
-        "show" => (
-            "Show in Odx",
-            "Bring the Odx window forward on something for the user to see: for now a Terminal tab. Use it when you want to show the user a result, not for every command.",
-            true,
-            false,
-        ),
-        "whoami" => (
-            "Odoo user",
-            "Odoo user used by the proxy: uid, login, name and companies.",
-            true,
-            false,
-        ),
-        "search_read" => (
-            "Search and read",
-            "Read records and fields in one call. Defaults to id and display_name. Paginates with limit/offset. Use search for IDs only and search_count for counts.",
-            true,
-            false,
-        ),
-        "read" => (
-            "Read by IDs",
-            "Read up to 1000 records by ID; flag missing IDs.",
-            true,
-            false,
-        ),
-        "search" => (
-            "Search IDs",
-            "Find IDs matching the domain. Paginates with limit/offset.",
-            true,
-            false,
-        ),
-        "search_count" => ("Count", "Count records matching the domain.", true, false),
-        "fields" => (
-            "Fields",
-            "Inspect model field metadata before choosing fields, relations or selections. names limits upstream fields; q filters names/labels afterward.",
-            true,
-            false,
-        ),
-        "models" => (
-            "Models",
-            "Find models whose technical name or label contains q.",
-            true,
-            false,
-        ),
-        "name_search" => (
-            "Search by name",
-            "Search names as in Odoo dropdowns. No offset; refine the query when more matches exist.",
-            true,
-            false,
-        ),
-        "create" => (
-            "Create",
-            "Create up to 1000 records. The environment mode determines execution or human approval.",
-            false,
-            false,
-        ),
-        "write" => (
-            "Update",
-            "Update records by ID under the environment write mode. Relational delete/unlink commands require individual human approval.",
-            false,
-            true,
-        ),
-        "unlink" => (
-            "Delete",
-            "Delete records by ID. Always requires human approval; one approval covers all listed IDs. Cannot be undone.",
-            false,
-            true,
-        ),
-        "call" => (
-            "Call a method",
-            "Call a public business method; prefer dedicated tools when available. Known reads retain their validation and limits. JSON-2 requires empty args and named kwargs, including kwargs.ids for records. Other methods follow write mode; unlink always requires human approval. Preserves the JSON result; to_file saves it locally.",
-            false,
-            true,
-        ),
-        "wait" => (
-            "Wait for a condition",
-            "Poll search_count for matching records, or none with absent=true. Timeout defaults to 60 s, maximum 600 s; minimum interval 3 s. Returns matched=false on timeout.",
-            true,
-            false,
-        ),
-        "read_group" => (
-            "Group",
-            "Aggregate in Odoo without downloading all records. groupby supports partner_id or date:month; groupby=[] requires explicit aggregates such as amount_total:sum. Uses lazy=false and paginates groups, not records.",
-            true,
-            false,
-        ),
-        "ref" => (
-            "Resolve XML ID",
-            "Resolve an XML ID (module.name) to {model,id}. Missing IDs return not_found; never falls back to name search.",
-            true,
-            false,
-        ),
-        "history" => (
-            "History",
-            "Read chatter newest first with tracked changes (field, old, new). Paginates messages, not changes. Unreadable tracking returns changes=null with warnings; this does not imply no changes occurred.",
-            true,
-            false,
-        ),
-        "view" => (
-            "View",
-            "Read the connected user's final view architecture and paginated inheritance chain. q filters lines and marks matching views. Readable views may differ from applied views due to groups or inactive views.",
-            true,
-            false,
-        ),
-        "access" => (
-            "Permissions",
-            "Inspect the Odoo user's CRUD rights, ACLs and record rules. Each ACL and rule has applies: whether it matches the user's groups (null when unknown; a hint, not a guarantee). Partial data is flagged. Excludes proxy restrictions and does not guarantee permission for a specific operation.",
-            true,
-            false,
-        ),
-        "compare" => (
-            "Compare environments",
-            "Compare model records across env_a/env_b by XML ID or an explicit key field. Reads and pages are independent, not transactional. Zero differences on a partial page do not imply equality.",
-            true,
-            false,
-        ),
-        "download" => (
-            "Download binary",
-            "Save a binary field (default ir.attachment.datas) to a server-chosen local file. Returns path and size, never base64.",
-            true,
-            false,
-        ),
-        _ => ("", "", false, false),
-    }
-}
-
 /// Published definitions with schemas from the contract.
 pub fn tool_definitions() -> Vec<ToolDefinition> {
-    let schemas: Value = serde_json::from_str(SCHEMAS).expect("valid tools.schema.json");
     TOOLS
         .iter()
-        .map(|name| {
-            let schema = schemas["$defs"][*name].clone();
-            let (title, description, read_only, destructive) = describe(name);
-            ToolDefinition {
-                name,
-                title,
-                description,
-                input_schema: schema,
-                read_only,
-                destructive,
-            }
+        .map(|tool| ToolDefinition {
+            name: tool.name,
+            title: tool.title,
+            description: tool.description,
+            input_schema: SCHEMA["$defs"][tool.name].clone(),
+            read_only: tool.read_only,
+            destructive: tool.destructive,
         })
         .collect()
-}
-
-fn from_error(error: OdxError) -> ToolError {
-    match error {
-        OdxError::Locked => ToolError::new("locked", "Odx vault is locked", Outcome::NotSent),
-        OdxError::Unauthorized | OdxError::ClientNotFound => ToolError::new(
-            "unauthenticated",
-            "invalid, replaced or revoked client token",
-            Outcome::NotSent,
-        ),
-        OdxError::Invalid(_) => ToolError::invalid("invalid input"),
-        error @ OdxError::Validation { .. } => {
-            let code = error.code();
-            let params = error.ui_params();
-            ToolError::invalid(error.to_string()).with_ui_error(code, params)
-        }
-        OdxError::EnvironmentNotFound => ToolError::new(
-            "environment_unavailable",
-            "environment unavailable to this client",
-            Outcome::NotSent,
-        ),
-        OdxError::Denied => ToolError::new(
-            "forbidden",
-            "denied by environment policy",
-            Outcome::NotSent,
-        ),
-        OdxError::ApprovalUnavailable => ToolError::new(
-            "approval_revoked",
-            "request no longer valid: revoked, expired or environment changed",
-            Outcome::NotSent,
-        ),
-        OdxError::Uncertain => ToolError::new(
-            "uncertain_result",
-            "Odoo may have applied the write; no retry was attempted. Check its state before repeating",
-            Outcome::Uncertain,
-        ),
-        OdxError::Persistence | OdxError::Io(_) | OdxError::Json(_) => ToolError::new(
-            "audit_unavailable",
-            "could not record audit; nothing was sent to Odoo",
-            Outcome::NotSent,
-        ),
-        OdxError::Capacity => ToolError::new(
-            "capacity_exceeded",
-            "capacity limit reached; retry later",
-            Outcome::NotSent,
-        ),
-        OdxError::Remote(m) => ToolError::new("upstream_error", m, Outcome::Failed),
-        OdxError::AuthenticationRejected => ToolError::new(
-            "upstream_auth",
-            "Odoo rejected the environment credential",
-            Outcome::Failed,
-        ),
-        OdxError::Network {
-            kind: "timeout",
-            message,
-        } => ToolError::new("upstream_timeout", message, Outcome::Failed),
-        OdxError::Network {
-            kind: "proxy",
-            message,
-        } => ToolError::new(
-            "upstream_network",
-            format!("outbound proxy failure: {message}"),
-            Outcome::Failed,
-        ),
-        OdxError::Network { message, .. } => {
-            ToolError::new("upstream_network", message, Outcome::Failed)
-        }
-        error @ OdxError::HttpStatus { .. } => {
-            let (code, params) = (error.code(), error.ui_params());
-            ToolError::new("upstream_error", error.to_string(), Outcome::Failed)
-                .with_ui_error(code, params)
-        }
-        OdxError::Upstream(m) => ToolError::new("upstream_network", m, Outcome::Failed),
-        e @ OdxError::ResponseTooLarge { .. } => {
-            ToolError::new("output_too_large", e.to_string(), Outcome::Failed)
-        }
-        OdxError::UnlockFailed => ToolError::new(
-            "service_unavailable",
-            "service unavailable",
-            Outcome::NotSent,
-        ),
-    }
-}
-impl From<OdxError> for ToolError {
-    fn from(error: OdxError) -> Self {
-        from_error(error)
-    }
-}
-
-// Arguments
-
-pub(crate) struct Args {
-    pub(crate) map: Map<String, Value>,
-}
-impl Args {
-    pub(crate) fn new(value: Value, allowed: &[&'static str]) -> Result<Self, ToolError> {
-        let Value::Object(map) = value else {
-            return Err(ToolError::invalid("arguments must be a JSON object"));
-        };
-        for (key, v) in &map {
-            if !allowed.contains(&key.as_str()) {
-                return Err(ToolError::invalid(format!("unknown field: {key}")));
-            }
-            if v.is_null() {
-                return Err(ToolError::invalid(format!("{key} cannot be null; omit it")));
-            }
-        }
-        Ok(Self { map })
-    }
-    pub(crate) fn has(&self, key: &str) -> bool {
-        self.map.contains_key(key)
-    }
-    pub(crate) fn str_opt(&mut self, key: &'static str) -> Result<Option<String>, ToolError> {
-        match self.map.get(key) {
-            None => Ok(None),
-            Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
-            Some(_) => Err(ToolError::invalid(format!("{key} must be nonempty text"))),
-        }
-    }
-    pub(crate) fn str(&mut self, key: &'static str) -> Result<String, ToolError> {
-        self.str_opt(key)?
-            .ok_or_else(|| ToolError::invalid(format!("missing {key}")))
-    }
-    pub(crate) fn int(
-        &mut self,
-        key: &'static str,
-        default: i64,
-        min: i64,
-        max: i64,
-    ) -> Result<i64, ToolError> {
-        match self.map.get(key) {
-            None => Ok(default),
-            Some(v) => v
-                .as_i64()
-                .filter(|n| (min..=max).contains(n))
-                .ok_or_else(|| {
-                    ToolError::invalid(format!("{key} must be an integer between {min} and {max}"))
-                }),
-        }
-    }
-    pub(crate) fn object(&mut self, key: &'static str) -> Result<Map<String, Value>, ToolError> {
-        match self.map.get(key) {
-            None => Ok(Map::new()),
-            Some(Value::Object(m)) => Ok(m.clone()),
-            Some(_) => Err(ToolError::invalid(format!("{key} must be a JSON object"))),
-        }
-    }
-    pub(crate) fn array(&mut self, key: &'static str) -> Result<Option<Vec<Value>>, ToolError> {
-        match self.map.get(key) {
-            None => Ok(None),
-            Some(Value::Array(a)) => Ok(Some(a.clone())),
-            Some(_) => Err(ToolError::invalid(format!("{key} must be a list"))),
-        }
-    }
-    pub(crate) fn bool(&mut self, key: &'static str) -> Result<bool, ToolError> {
-        match self.map.get(key) {
-            None => Ok(false),
-            Some(Value::Bool(b)) => Ok(*b),
-            Some(_) => Err(ToolError::invalid(format!("{key} must be boolean"))),
-        }
-    }
-    pub(crate) fn raw(&mut self, key: &'static str) -> Option<Value> {
-        self.map.get(key).cloned()
-    }
-    /// Text allowing empty values for fields/models q filters.
-    pub(crate) fn text(&mut self, key: &'static str) -> Result<Option<String>, ToolError> {
-        match self.map.get(key) {
-            None => Ok(None),
-            Some(Value::String(s)) => Ok(Some(s.clone())),
-            Some(_) => Err(ToolError::invalid(format!("{key} must be text"))),
-        }
-    }
-}
-
-pub(crate) fn is_identifier(s: &str, dotted: bool) -> bool {
-    let mut chars = s.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c == '_' || (!dotted && c.is_ascii_uppercase()))
-        && s.len() <= 128
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || (dotted && c == '.'))
-}
-pub(crate) fn model(args: &mut Args) -> Result<String, ToolError> {
-    let m = args.str("model")?;
-    if !is_identifier(&m, true) || m.contains("..") || m.ends_with('.') {
-        return Err(ToolError::invalid(format!("invalid model: {m}")));
-    }
-    Ok(m)
-}
-pub(crate) fn fields(args: &mut Args, default: &[&str]) -> Result<Vec<String>, ToolError> {
-    field_list(args, "fields", default)
-}
-pub(crate) fn field_list(
-    args: &mut Args,
-    key: &'static str,
-    default: &[&str],
-) -> Result<Vec<String>, ToolError> {
-    let Some(list) = args.array(key)? else {
-        return Ok(default.iter().map(|s| s.to_string()).collect());
-    };
-    if list.is_empty() {
-        return Err(ToolError::invalid(format!("{key} cannot be empty")));
-    }
-    let mut out: Vec<String> = Vec::new();
-    for f in list {
-        let Some(name) = f.as_str().filter(|n| is_identifier(n, false)) else {
-            return Err(ToolError::invalid(format!("invalid field: {f}")));
-        };
-        if out.iter().any(|x| x == name) {
-            return Err(ToolError::invalid(format!("duplicate field: {name}")));
-        }
-        out.push(name.into());
-    }
-    Ok(out)
-}
-pub(crate) fn with_id(mut fields: Vec<String>) -> Vec<String> {
-    if !fields.iter().any(|f| f == "id") {
-        fields.insert(0, "id".into());
-    }
-    fields
-}
-pub(crate) fn domain(args: &mut Args) -> Result<Value, ToolError> {
-    let Some(items) = args.array("domain")? else {
-        return Ok(json!([]));
-    };
-    for item in &items {
-        let ok = match item {
-            Value::String(op) => matches!(op.as_str(), "&" | "|" | "!"),
-            Value::Array(t) => {
-                t.len() == 3 && t[0].as_str().is_some_and(|f| !f.is_empty()) && t[1].is_string()
-            }
-            _ => false,
-        };
-        if !ok {
-            return Err(ToolError::invalid(format!(
-                "invalid domain item: {item}; use [field, operator, value] or '&', '|', '!'"
-            )));
-        }
-    }
-    Ok(Value::Array(items))
-}
-/// Append id as a stable tie-breaker if missing.
-pub(crate) fn order(args: &mut Args, key: &'static str) -> Result<String, ToolError> {
-    let Some(raw) = args.str_opt(key)? else {
-        return Ok("id asc".into());
-    };
-    let mut has_id = false;
-    for part in raw.split(',') {
-        let tokens: Vec<&str> = part.split_whitespace().collect();
-        let valid = match tokens.as_slice() {
-            [f] => is_identifier(f, false),
-            [f, dir] => {
-                is_identifier(f, false)
-                    && matches!(dir.to_ascii_lowercase().as_str(), "asc" | "desc")
-            }
-            _ => false,
-        };
-        if !valid {
-            return Err(ToolError::invalid(format!("invalid order: {raw}")));
-        }
-        has_id |= tokens[0] == "id";
-    }
-    Ok(if has_id {
-        raw
-    } else {
-        format!("{raw}, id asc")
-    })
-}
-pub(crate) fn ids(args: &mut Args) -> Result<Vec<i64>, ToolError> {
-    let list = args
-        .array("ids")?
-        .ok_or_else(|| ToolError::invalid("missing ids"))?;
-    let ids: Vec<i64> = list
-        .iter()
-        .map(|v| v.as_i64().filter(|n| *n > 0 && *n <= 9_007_199_254_740_991))
-        .collect::<Option<_>>()
-        .ok_or_else(|| ToolError::invalid("ids must be positive integers"))?;
-    mutations::validate_ids(&ids)?;
-    Ok(ids)
-}
-/// Remove the extra fetched row and populate meta.page.
-pub(crate) fn paged(
-    mut data: Value,
-    limit: usize,
-    offset: usize,
-    meta: &mut Map<String, Value>,
-) -> Value {
-    if let Value::Array(rows) = &mut data {
-        meta.insert("page".into(), crate::output::page_of(rows, limit, offset));
-    }
-    data
-}
-pub(crate) fn common(args: &mut Args) -> Result<(Format, usize), ToolError> {
-    let format = match args.map.get("format").and_then(Value::as_str) {
-        None if !args.has("format") => Format::Compact,
-        Some("compact") => Format::Compact,
-        Some("json") => Format::Json,
-        _ => return Err(ToolError::invalid("format must be compact or json")),
-    };
-    let trunc = args.int("trunc", 200, 0, i64::MAX)? as usize;
-    Ok((format, trunc))
-}
-
-const BASE: [&str; 4] = ["env", "context", "format", "trunc"];
-pub(crate) fn allowed(extra: &[&'static str]) -> Vec<&'static str> {
-    BASE.iter().chain(extra).copied().collect()
 }
 
 // Execution
@@ -575,7 +330,7 @@ impl Core {
             ..client.clone()
         };
         // Reject credential-returning calls before transport discovery probes.
-        if TOOLS.contains(&name)
+        if tool(name).is_some()
             && let Some(model) = arguments.get("model").and_then(Value::as_str)
         {
             let method = if name == "call" {
@@ -641,20 +396,16 @@ impl Core {
         client: &ClientIdentity,
     ) -> Result<(Vec<String>, Vec<Capability>), ToolError> {
         let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let v = s.vault()?;
         let grant = v
             .data()
             .clients
             .iter()
             .find(|g| g.id == client.client_id && !g.revoked && g.revision == client.revision)
             .ok_or(OdxError::Unauthorized)?;
-        // Resolve all-environment scope per call to include future environments.
-        let environment_ids = if grant.all_environments {
-            v.data().environments.iter().map(|e| e.id.clone()).collect()
-        } else {
-            grant.environment_ids.clone()
-        };
-        Ok((environment_ids, grant.capabilities.clone()))
+        // Resolved per call, so an all-environment grant includes environments added since.
+        let current = crate::clients::identity(grant, v.data());
+        Ok((current.environment_ids, current.capabilities))
     }
 
     pub(crate) async fn target(
@@ -670,14 +421,14 @@ impl Core {
         })
     }
 
-    async fn configured_target(
+    pub(crate) async fn configured_target(
         &self,
         client: &ClientIdentity,
         name: &str,
         capability: Capability,
     ) -> Result<Target, ToolError> {
         let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let v = s.vault()?;
         let env = v
             .data()
             .environments
@@ -709,10 +460,10 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(arguments, &["format", "trunc"])?;
+        let mut args = Args::for_tool("envs", arguments)?;
         let (format, trunc) = common(&mut args)?;
         let s = self.inner.lock().await;
-        let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+        let v = s.vault()?;
         let now = v.now();
         let mut envs: Vec<&Environment> = v
             .data()
@@ -852,14 +603,10 @@ impl Core {
             &Value::Object(kwargs.clone()),
         )
         .await?;
-        let permits = self.limits.acquire(&env.id).await?;
         let operation = format!("{method}:{model}");
-        let mut audit = self
-            .log_as(
-                Some(&client.client_id),
-                &env.id,
-                &operation,
-                "attempted",
+        let audit = self
+            .audit_request(
+                &uuid::Uuid::new_v4().to_string(),
                 AuditDetails::call(
                     env,
                     model,
@@ -869,58 +616,23 @@ impl Core {
                 ),
             )
             .await?;
-        // A change while waiting for a slot closes the recorded attempt as not sent.
-        if let Err(e) = self
-            .assert_environment_current(&env.id, env.revision, target.session)
-            .await
-        {
-            audit.finish_odx_error(env, &e);
-            self.log_outcome_as(
-                audit,
-                Some(&client.client_id),
-                &env.id,
-                &operation,
-                "not_sent",
-            )
-            .await?;
-            return Err(e.into());
-        }
-        let result = async {
-            let (uid, login) = self.odoo.authenticate_measured(env).await?;
-            // Only the call that logged in counts login in its metrics.
-            if let Some(bytes) = login {
-                upstream.calls += 1;
-                upstream.bytes += bytes;
-            }
-            self.odoo
-                .execute_kw_limited(
-                    env,
-                    uid,
-                    model,
-                    method,
-                    args(Some(uid)),
-                    Value::Object(kwargs),
-                    max_response,
-                )
-                .await
-        }
-        .await;
-        upstream.calls += 1;
-        let outcome = if result.is_ok() {
-            "succeeded"
-        } else {
-            "failed"
+        let call = AuditedCall {
+            actor: Some(&client.client_id),
+            env,
+            revision: env.revision,
+            session: target.session,
+            operation: &operation,
+            model,
+            method,
+            args: |uid| args(Some(uid)),
+            kwargs: Value::Object(kwargs),
+            write: false,
+            recorded: false,
+            max_response,
         };
-        match &result {
-            Ok((value, _)) => audit.finish(env, Ok(value)),
-            Err(error) => audit.finish_odx_error(env, error),
-        }
-        self.log_outcome_as(audit, Some(&client.client_id), &env.id, &operation, outcome)
+        let (value, _) = self
+            .audited_call(audit, call, upstream, || async { Ok(env.clone()) })
             .await?;
-        // Release after the outcome is logged so drain() waits for it.
-        drop(permits);
-        let (value, bytes) = result?;
-        upstream.bytes += bytes;
         Ok(value)
     }
 
@@ -930,20 +642,7 @@ impl Core {
         name: &str,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let extra: &[&'static str] = match name {
-            "whoami" => &[],
-            "search_read" => &[
-                "model", "domain", "fields", "limit", "offset", "order", "to_file",
-            ],
-            "read" => &["model", "ids", "fields", "to_file"],
-            "search" => &["model", "domain", "limit", "offset", "order"],
-            "search_count" => &["model", "domain"],
-            "fields" => &["model", "q", "names", "limit", "offset"],
-            "models" => &["q", "limit", "offset"],
-            "name_search" => &["model", "name", "domain", "limit"],
-            _ => &[],
-        };
-        let mut args = Args::new(arguments, &allowed(extra))?;
+        let mut args = Args::for_tool(name, arguments)?;
         let (format, trunc) = common(&mut args)?;
         let env_name = args.str("env")?;
         let call_context = Value::Object(args.object("context")?);
@@ -1254,13 +953,7 @@ impl Core {
         name: &str,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let extra: &[&'static str] = match name {
-            "create" => &["model", "values"],
-            "write" => &["model", "ids", "values"],
-            "unlink" => &["model", "ids"],
-            _ => &["model", "method", "args", "kwargs", "to_file"],
-        };
-        let mut args = Args::new(arguments, &allowed(extra))?;
+        let mut args = Args::for_tool(name, arguments)?;
         let (format, trunc) = common(&mut args)?;
         let to_file = args.bool("to_file")?;
         let env_name = args.str("env")?;
@@ -1281,12 +974,12 @@ impl Core {
                     ],
                     _ => vec![json!(ids(&mut args)?)],
                 };
-                let effect = mutations::call_effect(name, &positional, &Map::new(), &[])?;
+                let effect = mutations::call_effect(name, &positional, &Map::new(), &[], 0)?;
                 (name.to_string(), positional, Map::new(), effect)
             }
             _ => {
                 let method = args.str("method")?;
-                if !is_identifier(&method, false) || method.starts_with('_') {
+                if !valid_method(&method) {
                     return Err(ToolError::invalid(format!("method not allowed: {method}")));
                 }
                 let positional = args.array("args")?.unwrap_or_default();
@@ -1350,10 +1043,16 @@ impl Core {
                     }
                     return Ok(out);
                 }
-                let effect = mutations::call_effect(&method, &positional, &kwargs, &[])?;
+                let effect = mutations::call_effect(&method, &positional, &kwargs, &[], 0)?;
                 (method, positional, kwargs, effect)
             }
         };
+        // Odoo applies default_* context values to the records a call creates, x2many commands included.
+        if mutations::has_relational_delete(&Value::Object(call_context.clone())) {
+            return Err(ToolError::invalid(
+                "context cannot contain relational delete commands; send them in values",
+            ));
+        }
         let target = self
             .target(client, &env_name, Capability::OdooWriteRequest)
             .await?;
@@ -1364,7 +1063,16 @@ impl Core {
         let mut checked = Upstream::start();
         let args_list = &positional;
         let shorthand = mutations::shorthand_keys(&method, args_list, &kwargs);
-        if !shorthand.is_empty() {
+        let nested = mutations::nested_shorthand_keys(&method, args_list, &kwargs);
+        if !shorthand.is_empty() || !nested.is_empty() {
+            let is_x2many = |types: &Value, k: &str| {
+                matches!(types[k]["type"].as_str(), Some("one2many" | "many2many"))
+            };
+            let asked: Vec<&str> = shorthand
+                .iter()
+                .map(String::as_str)
+                .chain(nested.iter().map(|(field, _)| field.as_str()))
+                .collect();
             let types = self
                 .read_call(
                     client,
@@ -1373,8 +1081,8 @@ impl Core {
                     "fields_get",
                     json!([]),
                     Map::from_iter([
-                        ("allfields".into(), json!(shorthand)),
-                        ("attributes".into(), json!(["type"])),
+                        ("allfields".into(), json!(asked)),
+                        ("attributes".into(), json!(["type", "relation"])),
                     ]),
                     &Value::Object(call_context.clone()),
                     &mut checked,
@@ -1382,9 +1090,35 @@ impl Core {
                 .await?;
             let x2many: Vec<String> = shorthand
                 .into_iter()
-                .filter(|k| matches!(types[k]["type"].as_str(), Some("one2many" | "many2many")))
+                .filter(|k| is_x2many(&types, k))
                 .collect();
-            effect = mutations::call_effect(&method, args_list, &kwargs, &x2many)?;
+            // Shorthand inside create/update commands targets comodel fields: one fields_get per comodel.
+            let mut nested_deletes = 0;
+            let mut comodels: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+            for (field, key) in &nested {
+                if let Some(comodel) = types[field.as_str()]["relation"].as_str() {
+                    comodels.entry(comodel).or_default().push(key);
+                }
+            }
+            for (comodel, keys) in comodels {
+                let comodel_types = self
+                    .read_call(
+                        client,
+                        &target,
+                        comodel,
+                        "fields_get",
+                        json!([]),
+                        Map::from_iter([
+                            ("allfields".into(), json!(keys)),
+                            ("attributes".into(), json!(["type"])),
+                        ]),
+                        &Value::Object(call_context.clone()),
+                        &mut checked,
+                    )
+                    .await?;
+                nested_deletes += keys.iter().filter(|k| is_x2many(&comodel_types, k)).count();
+            }
+            effect = mutations::call_effect(&method, args_list, &kwargs, &x2many, nested_deletes)?;
         }
         kwargs.insert(
             "context".into(),
@@ -1454,274 +1188,6 @@ impl Core {
         }
         Ok(out)
     }
-
-    /// Register, execute if permitted or await human approval. Return result, upstream metrics and human wait time (zero in free-write mode).
-    #[allow(clippy::too_many_arguments)]
-    async fn submit(
-        self: &Arc<Self>,
-        client: &ClientIdentity,
-        target: &Target,
-        model: &str,
-        method: &str,
-        args: Value,
-        kwargs: Value,
-        effect: Effect,
-    ) -> Result<(Value, Upstream, Duration), ToolError> {
-        let env = &target.env;
-        self.reject_credential_call(Some(&client.client_id), env, model, method, &args, &kwargs)
-            .await?;
-        // Human wait spans request creation to execution start.
-        let requested;
-        let (id, deadline, details, waiter) = {
-            let mut s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
-            let now = v.now();
-            // Free-write skips approval; approval mode uses a matching valid rule or a human decision. unlink and relational deletes always require individual approval.
-            let authorization = match policy::authorize(env, effect.clone(), now) {
-                Err(_) => {
-                    return Err(ToolError::new(
-                        "forbidden",
-                        format!("environment {} is read-only", env.name),
-                        Outcome::NotSent,
-                    ));
-                }
-                Ok(false) => policy::Authorization::Free,
-                Ok(true) => {
-                    let rule = match (args.as_array(), kwargs.as_object()) {
-                        (Some(positional), Some(named)) => policy::matching_rule(
-                            &v.data().rules,
-                            &policy::EffectiveCall {
-                                environment_id: &env.id,
-                                model,
-                                method,
-                                args: positional,
-                                kwargs: named,
-                            },
-                            &effect,
-                            now,
-                        ),
-                        _ => None,
-                    };
-                    match rule {
-                        Some(rule) => policy::Authorization::Rule {
-                            rule_id: rule.id.clone(),
-                            rule_revision: rule.revision,
-                        },
-                        None => policy::Authorization::Individual,
-                    }
-                }
-            };
-            let needs_approval = authorization == policy::Authorization::Individual;
-            let minutes = s
-                .vault
-                .as_ref()
-                .map_or(5, |v| v.data().settings.approval_minutes);
-            // Vault clock: a system clock moved back must not extend approvals.
-            let now = s.vault.as_ref().map_or_else(Utc::now, |v| v.now());
-            // Remove only orphaned terminal/expired requests without waiters. Approved and sent requests remain until their outcome.
-            let crate::execution::Inner {
-                pending, waiters, ..
-            } = &mut *s;
-            pending.retain(|id, p| {
-                use crate::approval::State;
-                waiters.contains_key(id)
-                    || matches!(p.state, State::Approved | State::Sent)
-                    || (p.state == State::Pending && p.call.expires_at > now)
-            });
-            if s.pending.len() >= 100
-                || s.pending
-                    .values()
-                    .filter(|p| p.call.environment_id == env.id)
-                    .count()
-                    >= 20
-            {
-                return Err(OdxError::Capacity.into());
-            }
-            let mut approval = Approval::with_ttl(
-                env,
-                model.into(),
-                method.into(),
-                args,
-                kwargs,
-                chrono::Duration::minutes(i64::from(minutes)),
-                now,
-            );
-            approval.client_id = Some(client.client_id.clone());
-            approval.details.authorization = Some(authorization.clone());
-            approval.authorization = authorization;
-            let id = approval.id.clone();
-            // Wait on Instant from the vault-clock TTL; system time can be skewed against the vault clock.
-            let ttl = (approval.call.expires_at - now)
-                .to_std()
-                .unwrap_or_default();
-            let details = approval.details.clone();
-            s.pending.insert(id.clone(), approval);
-            requested = Instant::now();
-            let deadline = requested + ttl;
-            let waiter = if needs_approval {
-                let (tx, rx) = oneshot::channel();
-                s.waiters.insert(id.clone(), tx);
-                let client_label = s.vault.as_ref().and_then(|v| {
-                    v.data()
-                        .clients
-                        .iter()
-                        .find(|g| g.id == client.client_id)
-                        .map(|g| g.label.clone())
-                });
-                let _ = self.notices.send(crate::execution::ApprovalNotice {
-                    approval_id: id.clone(),
-                    client_label,
-                    environment_name: env.name.clone(),
-                    model: model.into(),
-                    method: method.into(),
-                });
-                Some(rx)
-            } else {
-                None
-            };
-            (id, deadline, details, waiter)
-        };
-        let Some(mut waiter) = waiter else {
-            // Free-write/rule execution uses the human-approval path in a separate task. Cancellation or disconnect cannot interrupt sent writes or their outcome audit.
-            let core = self.clone();
-            return tokio::spawn(async move { core.decide_measured(&id, true, None).await })
-                .await
-                .map_err(|_| {
-                    ToolError::new(
-                        "uncertain_result",
-                        "execution interrupted; Odoo may have applied the write",
-                        Outcome::Uncertain,
-                    )
-                })?
-                .map(|(value, up)| (value, up, Duration::ZERO))
-                .map_err(Into::into);
-        };
-        // Register in a separate task with the guard armed before awaiting it; cancellation removes the request after registration completes.
-        let logging = {
-            let (core, client_id, env_id) =
-                (self.clone(), client.client_id.clone(), env.id.clone());
-            let (operation, id) = (format!("{method}:{model}"), id.clone());
-            tokio::spawn(async move {
-                let logged = core
-                    .log_request_as(
-                        Some(&client_id),
-                        &env_id,
-                        &operation,
-                        "pending",
-                        &id,
-                        details,
-                    )
-                    .await;
-                if logged.is_err() {
-                    // Failed registration removes the request without an Activity entry.
-                    let mut s = core.inner.lock().await;
-                    s.pending.remove(&id);
-                    s.waiters.remove(&id);
-                }
-                logged.map(drop)
-            })
-        };
-        let mut guard = CancelGuard {
-            core: self.clone(),
-            id: id.clone(),
-            armed: true,
-            logging: Some(logging),
-        };
-        let logged = guard.logging.as_mut().expect("registration").await;
-        guard.logging = None;
-        match logged {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                guard.armed = false;
-                return Err(error.into());
-            }
-            Err(_) => return Err(OdxError::Persistence.into()),
-        }
-        let end = match tokio::time::timeout_at(deadline.into(), &mut waiter).await {
-            Ok(end) => end,
-            Err(_) => match self.withdraw(&id, true).await {
-                Ok(_) => {
-                    guard.armed = false;
-                    return Err(ToolError::new(
-                        "approval_expired",
-                        "request expired without a human decision",
-                        Outcome::NotSent,
-                    ));
-                }
-                // Approved or sent: receive the real outcome through the channel.
-                Err(_) => waiter.await,
-            },
-        };
-        guard.armed = false;
-        match end {
-            Err(_) => Err(ToolError::new(
-                "approval_revoked",
-                "request revoked",
-                Outcome::NotSent,
-            )),
-            Ok(ApprovalEnd::Executed(value, up)) => {
-                let wait = up.started.saturating_duration_since(requested);
-                Ok((value, up, wait))
-            }
-            Ok(ApprovalEnd::Rejected(reason)) => Err(ToolError::new(
-                "approval_rejected",
-                match reason {
-                    Some(reason) => format!(
-                        "request rejected by a human; nothing was sent to Odoo. Reason: {reason}"
-                    ),
-                    None => "request rejected by a human; nothing was sent to Odoo".into(),
-                },
-                Outcome::NotSent,
-            )),
-            Ok(ApprovalEnd::Revoked) => Err(ToolError::new(
-                "approval_revoked",
-                "request revoked: vault, environment, mode or client changed",
-                Outcome::NotSent,
-            )),
-            Ok(ApprovalEnd::Expired) => Err(ToolError::new(
-                "approval_expired",
-                "request expired without a human decision",
-                Outcome::NotSent,
-            )),
-            Ok(ApprovalEnd::Cancelled) => Err(ToolError::new(
-                "cancelled",
-                "request cancelled; nothing was sent to Odoo",
-                Outcome::NotSent,
-            )),
-            Ok(ApprovalEnd::Failed(error)) => Err(error.into()),
-        }
-    }
-}
-
-/// Remove the request when its client abandons the wait through cancellation, EOF or disconnect.
-struct CancelGuard {
-    core: Arc<Core>,
-    id: String,
-    armed: bool,
-    /// Await pending registration before cancellation.
-    logging: Option<tokio::task::JoinHandle<crate::error::Result<()>>>,
-}
-impl Drop for CancelGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let core = self.core.clone();
-        let id = std::mem::take(&mut self.id);
-        let logging = self.logging.take();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                // Failed registration already removed the request.
-                if let Some(logging) = logging
-                    && !matches!(logging.await, Ok(Ok(())))
-                {
-                    return;
-                }
-                // Dispatch closes approved or sent requests.
-                let _ = core.cancel_approval(&id).await;
-            });
-        }
-    }
 }
 
 enum ReadPlan {
@@ -1761,44 +1227,36 @@ enum ReadPlan {
     },
 }
 
-pub(crate) fn kw(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn validation_error_keeps_external_envelope_and_filters_desktop_parameters() {
-        let error = OdxError::validation_with_params(
-            "validation.rule.limit_reached",
-            json!({ "limit": 128, "secret": "do-not-send" }),
-            "legacy validation text",
-        );
-        let tool = from_error(error);
-        assert_eq!(tool.code, "invalid_arguments");
-        assert_eq!(tool.message, "legacy validation text");
-        assert_eq!(tool.ui_code, Some("validation.rule.limit_reached"));
-        assert_eq!(tool.ui_params, json!({ "limit": 128 }));
+    fn the_registry_and_the_schema_list_the_same_tools() {
+        let mut schema: Vec<&str> = SCHEMA["$defs"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        schema.sort();
+        let names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
         assert_eq!(
-            tool.envelope("request")["error"]["code"],
-            "invalid_arguments"
+            names, schema,
+            "registry sorted and matching tools.schema.json"
         );
-        assert!(tool.envelope("request").get("ui_code").is_none());
-        assert!(!tool.envelope("request").to_string().contains("do-not-send"));
-
-        let legacy = from_error(OdxError::Invalid("api_key=must-not-leak".into()));
-        assert_eq!(legacy.message, "invalid input");
-        assert!(
-            !legacy
-                .envelope("request")
-                .to_string()
-                .contains("must-not-leak")
-        );
+        for tool in &TOOLS {
+            assert!(
+                !tool.title.is_empty() && !tool.description.is_empty(),
+                "{}",
+                tool.name
+            );
+            assert!(
+                SCHEMA["$defs"][tool.name]["properties"].is_object(),
+                "{}",
+                tool.name
+            );
+        }
     }
 
     #[test]
@@ -1835,21 +1293,5 @@ mod tests {
             assert!(!d.input_schema.to_string().contains("\"$ref\""));
             assert!(!d.description.is_empty());
         }
-    }
-
-    #[test]
-    fn arguments_reject_unknown_fields_nulls_and_bad_identifiers() {
-        assert!(Args::new(json!({"env":"a","extra":1}), &allowed(&[])).is_err());
-        assert!(Args::new(json!({"env":null}), &allowed(&[])).is_err());
-        let mut a = Args::new(json!({"model":"res.partner;drop"}), &allowed(&["model"])).unwrap();
-        assert!(model(&mut a).is_err());
-        let mut a = Args::new(json!({"domain":"[('id','=',1)]"}), &allowed(&["domain"])).unwrap();
-        assert!(domain(&mut a).is_err());
-        let mut a = Args::new(json!({"order":"name desc; drop"}), &allowed(&["order"])).unwrap();
-        assert!(order(&mut a, "order").is_err());
-        let mut a = Args::new(json!({"order":"name desc"}), &allowed(&["order"])).unwrap();
-        assert_eq!(order(&mut a, "order").unwrap(), "name desc, id asc");
-        let mut a = Args::new(json!({"fields":["name","name"]}), &allowed(&["fields"])).unwrap();
-        assert!(fields(&mut a, &[]).is_err());
     }
 }

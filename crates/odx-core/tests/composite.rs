@@ -515,11 +515,17 @@ async fn every_subcall_is_audited_with_the_uniform_context() {
         .await
         .unwrap()
         .events;
-    let contexts: Vec<String> = events
-        .iter()
-        .filter_map(|e| e.details.as_ref()?.request.as_ref())
-        .map(|r| r.text.clone())
-        .collect();
+    let mut contexts: Vec<String> = Vec::new();
+    for event in &events {
+        let details = f
+            .core
+            .activity_details(event.request_id.clone().unwrap())
+            .await
+            .unwrap();
+        if let Some(request) = details.and_then(|d| d.request) {
+            contexts.push(request.text);
+        }
+    }
     assert!(!contexts.is_empty());
     assert!(
         contexts

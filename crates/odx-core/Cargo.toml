@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 digest_auth.workspace = true
@@ -14,7 +13,6 @@ hex.workspace = true
 libsodium-rs.workspace = true
 libc.workspace = true
 quick-xml.workspace = true
-rand.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 axum.workspace = true

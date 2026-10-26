@@ -159,6 +159,7 @@ async fn headers_reach_every_upstream_path_and_remain_private_and_encrypted() {
         context: Default::default(),
         confirmed: false,
         client_id: None,
+        client_revision: None,
     })
     .await
     .unwrap();
@@ -211,8 +212,7 @@ async fn headers_reach_every_upstream_path_and_remain_private_and_encrypted() {
 async fn sensitive_header_values_are_masked_and_kept_when_saved_unchanged() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let a = core.save_environment(draft(&sim.url, "A")).await.unwrap();
     core.set_headers(None, vec![header("X-Api-Key", "fixture-global-key")])
         .await

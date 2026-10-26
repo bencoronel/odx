@@ -12,6 +12,8 @@ use tokio::{
 
 const HANDSHAKE: Duration = Duration::from_secs(5);
 const MAX_HEAD: usize = 16 * 1024;
+/// Odx opens a handful of proxied connections at a time; the rest of the budget is margin.
+const MAX_CONNECTIONS: usize = 64;
 /// reqwest authenticates to the relay as this user with the per-relay random token.
 pub(super) const RELAY_USER: &str = "odx";
 
@@ -49,6 +51,8 @@ impl Relay {
             addr,
             token: token.clone(),
         });
+        // Bounded: idle local connections cannot exhaust the process's file descriptors.
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
         let task = tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
@@ -56,9 +60,13 @@ impl Relay {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
                 };
+                let Ok(slot) = slots.clone().try_acquire_owned() else {
+                    continue;
+                };
                 let upstream = upstream.clone();
                 tokio::spawn(async move {
                     let _ = relay(stream, &upstream).await;
+                    drop(slot);
                 });
             }
         });
@@ -190,12 +198,33 @@ async fn tunnel(upstream: &Upstream, authority: &str) -> io::Result<TcpStream> {
 
 /// SOCKS5 CONNECT with username/password only (RFC 1928/1929).
 async fn relay(mut client: TcpStream, upstream: &Upstream) -> io::Result<()> {
+    // A client that never finishes the SOCKS exchange must not hold its socket forever.
+    let Some(authority) = timeout(HANDSHAKE, socks_request(&mut client, upstream))
+        .await
+        .map_err(|_| io::Error::other("SOCKS handshake timed out"))??
+    else {
+        return Ok(());
+    };
+    match timeout(HANDSHAKE, tunnel(upstream, &authority)).await {
+        Ok(Ok(mut stream)) => {
+            client.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+            copy_bidirectional(&mut client, &mut stream).await?;
+            Ok(())
+        }
+        // 0x02: connection not allowed by ruleset.
+        _ => client.write_all(&[5, 2, 0, 1, 0, 0, 0, 0, 0, 0]).await,
+    }
+}
+
+/// The authenticated CONNECT target, or None once a refusal has been sent.
+async fn socks_request(client: &mut TcpStream, upstream: &Upstream) -> io::Result<Option<String>> {
     let mut header = [0u8; 2];
     client.read_exact(&mut header).await?;
     let mut methods = vec![0u8; header[1] as usize];
     client.read_exact(&mut methods).await?;
     if header[0] != 5 || !methods.contains(&2) {
-        return client.write_all(&[5, 0xFF]).await;
+        client.write_all(&[5, 0xFF]).await?;
+        return Ok(None);
     }
     client.write_all(&[5, 2]).await?;
     let mut user = [0u8; 2];
@@ -207,7 +236,8 @@ async fn relay(mut client: TcpStream, upstream: &Upstream) -> io::Result<()> {
     let mut password = vec![0u8; len[0] as usize];
     client.read_exact(&mut password).await?;
     if name != RELAY_USER.as_bytes() || !utils::memcmp(&password, upstream.token.as_bytes()) {
-        return client.write_all(&[1, 1]).await;
+        client.write_all(&[1, 1]).await?;
+        return Ok(None);
     }
     client.write_all(&[1, 0]).await?;
     let mut request = [0u8; 4];
@@ -230,25 +260,40 @@ async fn relay(mut client: TcpStream, upstream: &Upstream) -> io::Result<()> {
             format!("[{}]", std::net::Ipv6Addr::from(ip))
         }
         // 0x07: command not supported.
-        _ => return client.write_all(&[5, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await,
+        _ => {
+            client.write_all(&[5, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+            return Ok(None);
+        }
     };
     let mut port = [0u8; 2];
     client.read_exact(&mut port).await?;
-    let authority = format!("{host}:{}", u16::from_be_bytes(port));
-    match timeout(HANDSHAKE, tunnel(upstream, &authority)).await {
-        Ok(Ok(mut stream)) => {
-            client.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
-            copy_bidirectional(&mut client, &mut stream).await?;
-            Ok(())
-        }
-        // 0x02: connection not allowed by ruleset.
-        _ => client.write_all(&[5, 2, 0, 1, 0, 0, 0, 0, 0, 0]).await,
-    }
+    Ok(Some(format!("{host}:{}", u16::from_be_bytes(port))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(start_paused = true)]
+    async fn a_client_that_never_finishes_the_socks_handshake_is_dropped() {
+        let relay = Relay::start(ProxySettings {
+            url: "http://127.0.0.1:9".into(),
+            username: crate::security::Secret::new("fixture-user").unwrap(),
+            password: crate::security::Secret::new("fixture-pass").unwrap(),
+        })
+        .await
+        .unwrap();
+        let mut client = TcpStream::connect(relay.url.trim_start_matches("socks5h://"))
+            .await
+            .unwrap();
+        client.write_all(&[5]).await.unwrap();
+        // Paused time auto-advances past HANDSHAKE while the relay waits for the rest.
+        let mut buf = [0u8; 1];
+        assert_eq!(
+            client.read(&mut buf).await.unwrap(),
+            0,
+            "relay closed the socket"
+        );
+    }
     #[test]
     fn a_header_with_several_challenges_keeps_quoted_commas() {
         assert_eq!(

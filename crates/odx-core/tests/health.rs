@@ -1,5 +1,5 @@
 mod support;
-use odx_core::{Core, EnvironmentDraft, Protocol};
+use odx_core::{EnvironmentDraft, Protocol};
 use serde_json::json;
 
 fn draft(name: &str, url: &str, secret: &str) -> EnvironmentDraft {
@@ -21,8 +21,7 @@ async fn health_check_reports_reachability_and_credentials_without_leaking_secre
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let closed_url = format!("http://{}", closed.local_addr().unwrap());
     drop(closed);
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let ok = core
         .save_environment(draft("Ok", &sim.url, "fixture-secret"))
         .await
@@ -86,8 +85,7 @@ async fn health_check_reports_reachability_and_credentials_without_leaking_secre
 async fn draft_check_and_database_list_persist_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
 
     assert_eq!(
         core.list_databases(&format!("{}/", sim.url)).await.unwrap(),
@@ -119,8 +117,7 @@ async fn draft_check_and_database_list_persist_nothing() {
 async fn tags_are_normalized_and_persisted() {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let env = core
         .save_environment(draft("Tagged", &sim.url, "fixture-secret"))
         .await

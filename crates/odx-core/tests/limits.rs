@@ -121,8 +121,7 @@ async fn fixture(count: usize) -> Fixture {
 async fn fixture_at(count: usize, url: Option<String>) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let sim = support::simulator().await;
-    let core = Core::new(tmp.path().join("vault.sqlite3")).unwrap();
-    core.create("fictional master password").await.unwrap();
+    let core = support::unlocked_core(&tmp).await;
     let mut envs = Vec::new();
     for i in 0..count {
         let env = core
@@ -298,8 +297,10 @@ async fn reads_proceed_while_approvals_are_pending_without_upstream_slots() {
 
 // Use real time during audit/login before queuing; paused time would jump during real I/O (see the 60 s test).
 #[tokio::test]
-async fn queue_wait_gives_up_at_10s_with_capacity_exceeded() {
+async fn queue_wait_gives_up_at_the_deadline_with_capacity_exceeded() {
     let f = fixture(1).await;
+    // The deadline is 10 s; a short one checks the same path without waiting it out.
+    f.core.set_queue_wait(Duration::from_millis(500));
     f.sim.counts.hold_database("db-0");
     let held: Vec<Call> = (0..4).map(|_| spawn(&f, "search_read", read(0))).collect();
     until("4 in-flight reads", || f.sim.counts.in_flight("db-0") == 4).await;
@@ -308,7 +309,7 @@ async fn queue_wait_gives_up_at_10s_with_capacity_exceeded() {
     capacity(f.core.run_tool(&f.client, "search_read", read(0)).await);
     let waited = queued.elapsed();
     assert!(
-        waited >= Duration::from_secs(10) && waited < Duration::from_secs(12),
+        waited >= Duration::from_millis(500) && waited < Duration::from_secs(2),
         "queue deadline: {waited:?}"
     );
     f.sim.counts.release_databases();

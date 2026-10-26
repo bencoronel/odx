@@ -3,10 +3,9 @@
 //! [`DesktopRequest`], since the Terminal (its tabs, parser and confirmations) lives in the window.
 use crate::{
     clients::{Capability, ClientIdentity},
-    error::OdxError,
     execution::Core,
     output::{Outcome, ToolError, ToolOutput},
-    tools::catalog::{Args, common},
+    tools::args::{Args, common},
 };
 use serde_json::{Map, Value, json};
 use std::time::Duration;
@@ -25,6 +24,8 @@ pub enum DesktopRequest {
         env_id: String,
         command: String,
         client_id: String,
+        /// Token revision the command was requested under; shell_call checks it is still current.
+        client_revision: u64,
         client_label: String,
         allow_writes: bool,
         reply: oneshot::Sender<Result<Value, String>>,
@@ -165,6 +166,14 @@ impl Core {
         &self,
         client: &ClientIdentity,
     ) -> Result<(Vec<SavedTab>, Option<String>), ToolError> {
+        // Terminal tabs show Odoo records: reading them needs odoo:read, like any read tool.
+        if !client.capabilities.contains(&Capability::OdooRead) {
+            return Err(ToolError::new(
+                "forbidden",
+                "client lacks odoo:read capability",
+                Outcome::NotSent,
+            ));
+        }
         let data = self
             .shell_sessions()
             .await
@@ -203,7 +212,7 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(arguments, &["format", "trunc"])?;
+        let mut args = Args::for_tool("terminals", arguments)?;
         let (format, trunc) = common(&mut args)?;
         let (tabs, active) = self.client_tabs(client).await?;
         let data = tabs
@@ -233,13 +242,18 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(arguments, &["terminal", "last", "format", "trunc"])?;
+        let mut args = Args::for_tool("terminal_read", arguments)?;
         let (format, trunc) = common(&mut args)?;
         let terminal = args.str("terminal")?;
         let last = args.int("last", 5, 1, 50)? as usize;
         let tab = self.client_tab(client, &terminal).await?;
         let blocks = command_blocks(&tab.entries);
-        let shown = blocks[blocks.len().saturating_sub(last)..].to_vec();
+        // Newest first: when the reply is cut to the size limit, the command just run survives.
+        let shown: Vec<Value> = blocks[blocks.len().saturating_sub(last)..]
+            .iter()
+            .rev()
+            .cloned()
+            .collect();
         let mut meta = Map::new();
         meta.insert("terminal".into(), json!(tab.id));
         meta.insert("env".into(), json!(tab.env_name));
@@ -257,10 +271,7 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(
-            arguments,
-            &["terminal", "env", "command", "timeout", "format", "trunc"],
-        )?;
+        let mut args = Args::for_tool("terminal_run", arguments)?;
         let (format, trunc) = common(&mut args)?;
         let command = args.str("command")?;
         if command.trim().is_empty() || command.len() > MAX_COMMAND {
@@ -273,23 +284,17 @@ impl Core {
         let env_id = match (&terminal, args.str_opt("env")?) {
             (Some(terminal), None) => self.client_tab(client, terminal).await?.env_id,
             (None, Some(env)) => {
-                self.target(client, &env, Capability::OdooRead)
+                // Only the environment id is needed: no protocol probe, so a down Odoo fails in the Terminal, not here.
+                self.configured_target(client, &env, Capability::OdooRead)
                     .await?
                     .env
                     .id
             }
             _ => return Err(ToolError::invalid("give either terminal or env")),
         };
-        if !client.capabilities.contains(&Capability::OdooRead) {
-            return Err(ToolError::new(
-                "forbidden",
-                "client lacks odoo:read capability",
-                Outcome::NotSent,
-            ));
-        }
         let client_label = {
             let s = self.inner.lock().await;
-            let v = s.vault.as_ref().ok_or(OdxError::Locked)?;
+            let v = s.vault()?;
             v.data()
                 .clients
                 .iter()
@@ -303,6 +308,7 @@ impl Core {
             env_id,
             command,
             client_id: client.client_id.clone(),
+            client_revision: client.revision,
             client_label,
             allow_writes: client.capabilities.contains(&Capability::OdooWriteRequest),
             reply,
@@ -341,7 +347,7 @@ impl Core {
         client: &ClientIdentity,
         arguments: Value,
     ) -> Result<ToolOutput, ToolError> {
-        let mut args = Args::new(arguments, &["terminal"])?;
+        let mut args = Args::for_tool("show", arguments)?;
         let terminal = args.str("terminal")?;
         self.client_tab(client, &terminal).await?;
         let (reply, answer) = oneshot::channel();

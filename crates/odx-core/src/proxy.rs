@@ -320,15 +320,11 @@ impl VaultData {
 }
 
 impl Environment {
-    /// Redact environment credentials, masked headers and effective proxy credentials from errors and activity.
+    /// Environment credentials, masked headers and effective proxy credentials to redact from errors and activity.
+    /// Values under MIN_REDACTED characters are left alone: they would redact unrelated text.
     pub(crate) fn redaction_secrets(&self) -> Vec<&str> {
         let proxy = match &self.proxy {
-            // Short usernames could redact unrelated error/activity text.
-            EnvironmentProxy::Custom(p) => [p.username.as_str()]
-                .into_iter()
-                .filter(|u| u.chars().count() >= MIN_REDACTED_USERNAME)
-                .chain([p.password.as_str()])
-                .collect(),
+            EnvironmentProxy::Custom(p) => vec![p.username.as_str(), p.password.as_str()],
             _ => vec![],
         };
         let mut secrets: Vec<&str> = self
@@ -338,10 +334,23 @@ impl Environment {
             .map(|h| h.value.as_str())
             .chain(std::iter::once(self.secret.as_str()))
             .chain(proxy)
-            .filter(|v| !v.is_empty())
+            .filter(|v| v.chars().count() >= MIN_REDACTED)
             .collect();
         secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
         secrets
+    }
+    /// Replace every secret with [redacted]. Short ones only as whole words, so a password
+    /// "admin" leaves base.user_admin intact.
+    pub(crate) fn redact(&self, text: &str) -> String {
+        let mut clean = text.to_owned();
+        for secret in self.redaction_secrets() {
+            clean = if secret.chars().count() < WHOLE_WORD_BELOW {
+                replace_word(&clean, secret)
+            } else {
+                clean.replace(secret, "[redacted]")
+            };
+        }
+        clean
     }
     pub(crate) fn proxied(&self) -> bool {
         matches!(self.proxy, EnvironmentProxy::Custom(_))
@@ -349,12 +358,31 @@ impl Environment {
 }
 
 /// Minimum proxy username length for literal redaction.
-const MIN_REDACTED_USERNAME: usize = 4;
+const MIN_REDACTED: usize = 4;
+const WHOLE_WORD_BELOW: usize = 8;
+
+fn replace_word(text: &str, word: &str) -> String {
+    let word_char = |c: char| c.is_alphanumeric() || c == '_';
+    let (mut out, mut last) = (String::with_capacity(text.len()), 0);
+    for (start, _) in text.match_indices(word) {
+        let end = start + word.len();
+        if text[..start].chars().next_back().is_some_and(word_char)
+            || text[end..].chars().next().is_some_and(word_char)
+        {
+            continue;
+        }
+        out.push_str(&text[last..start]);
+        out.push_str("[redacted]");
+        last = end;
+    }
+    out.push_str(&text[last..]);
+    out
+}
 
 impl Core {
     pub async fn proxies(&self) -> Result<ProxiesView> {
         let s = self.inner.lock().await;
-        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+        let data = s.vault()?.data();
         Ok(ProxiesView {
             proxies: data
                 .proxies
@@ -366,12 +394,8 @@ impl Core {
     }
     pub async fn environment_proxy(&self, id: &str) -> Result<EnvironmentProxyView> {
         let s = self.inner.lock().await;
-        let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
-        let env = data
-            .environments
-            .iter()
-            .find(|e| e.id == id)
-            .ok_or(OdxError::EnvironmentNotFound)?;
+        let data = s.vault()?.data();
+        let env = data.environment(id)?;
         Ok(match &env.proxy {
             EnvironmentProxy::Profile { id } => EnvironmentProxyView {
                 mode: ProxyMode::Profile,
@@ -472,11 +496,7 @@ impl Core {
     ) -> Result<()> {
         self.change_proxies(|data| {
             let next = data.chosen_proxy(proxy)?;
-            data.environments
-                .iter_mut()
-                .find(|e| e.id == id)
-                .ok_or(OdxError::EnvironmentNotFound)?
-                .proxy = next;
+            data.environment_mut(id)?.proxy = next;
             Ok(())
         })
         .await
@@ -487,7 +507,7 @@ impl Core {
         change: impl FnOnce(&mut VaultData) -> Result<()>,
     ) -> Result<()> {
         let mut s = self.inner.lock().await;
-        let vault = s.vault.as_mut().ok_or(OdxError::Locked)?;
+        let vault = s.vault_mut()?;
         let old = vault.data();
         let mut next = old.clone();
         change(&mut next)?;
@@ -547,7 +567,7 @@ impl Core {
         crate::config::validate_url(url)?;
         let (settings, headers, active) = {
             let s = self.inner.lock().await;
-            let data = s.vault.as_ref().ok_or(OdxError::Locked)?.data();
+            let data = s.vault()?.data();
             let stored = id
                 .as_deref()
                 .and_then(|id| data.profile(id))
@@ -566,7 +586,10 @@ impl Core {
             proxy: EnvironmentProxy::Custom(settings),
             ..Default::default()
         };
-        let permits = self.limits.acquire(crate::execution::DRAFT_SLOTS).await?;
+        let permits = self
+            .limits
+            .acquire(crate::environments::DRAFT_SLOTS)
+            .await?;
         let started = std::time::Instant::now();
         let result = self.odoo.version(&env).await;
         let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -611,6 +634,27 @@ mod tests {
         assert!(!secrets.contains(&"ana"));
         let long = env("proxyuser");
         assert!(long.redaction_secrets().contains(&"proxyuser"));
+    }
+    #[test]
+    fn short_secrets_redact_whole_words_only_and_tiny_ones_nothing() {
+        let env = crate::config::Environment {
+            secret: Secret::new("admin").unwrap(),
+            headers: vec![crate::headers::HeaderEntry {
+                name: "Authorization".into(),
+                value: "1".into(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            env.redact(r#"{"login": "admin", "xmlid": "base.user_admin", "ids": [1]}"#),
+            r#"{"login": "[redacted]", "xmlid": "base.user_admin", "ids": [1]}"#
+        );
+        let long = crate::config::Environment {
+            secret: Secret::new("fixture-long-secret").unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(long.redact("xfixture-long-secretx"), "x[redacted]x");
     }
     #[test]
     fn urls_are_normalized_and_restricted() {
