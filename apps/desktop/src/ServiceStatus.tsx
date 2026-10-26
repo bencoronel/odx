@@ -39,7 +39,8 @@ export default function ServiceStatus({ vault, services, pending = 0, openMcp, o
   return <footer className="statusbar" aria-label={t("service.statusLabel")}>
     {unlocked && services && <ServiceItem label="MCP" service={services.mcp} unlocked={unlocked} open={openMcp}
       count={unlocked ? services.connections.length : undefined}
-      details={services.connections.length ? services.connections.map((c) => t("service.connectionSince", { client: c.client_label ?? t("common.deletedClient"), time: formatDateTime(new Date(c.since), { hour: "2-digit", minute: "2-digit" }) })) : [t("service.noConnector")]} />}
+      details={services.connections.length ? services.connections.map((c) => t("service.connectionSince", { client: c.cwd ?? c.client_label ?? t("common.deletedClient"), time: formatDateTime(new Date(c.since), { hour: "2-digit", minute: "2-digit" }) })
+        + (c.calls ? ` · ${t("mcpLocal.calls", { count: c.calls })}` : "")) : [t("service.noConnector")]} />}
     {unlocked
       ? <button className={`status-item ml-auto ${pending ? "text-warn" : ""}`} onClick={openApprovals}><Icon name="check" />{pending ? t("service.pendingApprovals", { count: pending }) : t("service.noPendingApprovals")}</button>
       : <span className="status-item">{t("service.unlockToAccess")}</span>}

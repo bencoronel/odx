@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import McpLocalPage from "./McpLocalPage";
-import { ipc, type Client, type Environment, type ServiceStatus } from "./ipc";
-vi.mock("./ipc", () => ({ ipc: { agentSetup: vi.fn(), agentInstall: vi.fn() } }));
+import { ipc, type Client, type ServiceStatus } from "./ipc";
+import { envNamed } from "./test/fixtures";
+vi.mock("./ipc", () => ({ ipc: { agentSetup: vi.fn(), agentInstall: vi.fn(), mcpDisconnect: vi.fn() } }));
 afterEach(cleanup);
 beforeEach(() => {
   localStorage.clear();
@@ -10,7 +11,7 @@ beforeEach(() => {
 });
 const services: ServiceStatus = {
   api: { state: "listening" }, mcp: { state: "listening" },
-  connector_command: "/tmp/fixture-Odx", connector_args: ["mcp-stdio"],
+  mcp_name: "odx", connector_command: "/tmp/fixture-Odx", connector_args: ["mcp-stdio"],
   api_url: "http://127.0.0.1:8770/api/v1", connections: [],
 };
 const profile: Client = {
@@ -18,10 +19,7 @@ const profile: Client = {
   environment_ids: [], all_environments: true, capabilities: ["odoo:read"], revoked: false,
   created_at: "2026-10-16T00:00:00Z", token_issued_at: "2026-10-16T00:00:00Z",
 };
-const envs: Environment[] = ["A", "B"].map((name) => ({
-  id: `env-${name}`, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "read_only", has_secret: true, tags: [],
-}));
+const envs = ["A", "B"].map((name) => envNamed(name, { id: `env-${name}` }));
 function Page(props: Partial<Parameters<typeof McpLocalPage>[0]>) {
   return <McpLocalPage clients={[]} services={services} envs={envs} busy={false} update={vi.fn()} {...props} />;
 }
@@ -29,13 +27,25 @@ const snippet = () => document.querySelector("pre")!.textContent;
 
 it("summarises connected agents and last use without token actions", () => {
   render(<Page clients={[{ ...profile, last_used_at: new Date(Date.now() - 5 * 60_000).toISOString() }]} services={{ ...services, connections: [
-    { client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:00:00Z" },
-    { client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:01:00Z" },
+    { id: 1, client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:00:00Z", calls: 0 },
+    { id: 2, client_id: profile.id, client_label: profile.label, since: "2026-10-17T10:01:00Z", calls: 3, pid: 4242, command: "claude --resume", cwd: "~/fixture/project" },
   ] }} />);
   expect(screen.getByRole("status", { name: "Local MCP status" }).textContent).toBe("2 agents connected · 5 minutes ago");
+  const rows = within(screen.getByRole("region", { name: "Open connections" })).getAllByRole("button", { name: "Disconnect" });
+  expect(rows).toHaveLength(2);
+  expect(screen.getByText("~/fixture/project").nextElementSibling!.textContent).toMatch(/^claude --resume · PID 4242 · 3 calls · since /);
+  expect(screen.getByText("Unknown agent").nextElementSibling!.textContent).toMatch(/^0 calls · since /);
   expect(document.body.textContent).not.toContain("ODX_TOKEN");
   for (const name of ["Replace token", "Revoke", "New HTTP client"]) expect(screen.queryByRole("button", { name })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("disconnects one connector and keeps its button busy until the list drops it", async () => {
+  vi.mocked(ipc.mcpDisconnect).mockResolvedValue(true);
+  render(<Page clients={[profile]} services={{ ...services, connections: [{ id: 7, client_id: profile.id, since: "2026-10-17T10:00:00Z", calls: 0 }] }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+  expect(ipc.mcpDisconnect).toHaveBeenCalledWith(7);
+  expect((await screen.findByRole("button", { name: "Disconnecting…" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("shows one setup snippet at a time for the chosen agent", () => {

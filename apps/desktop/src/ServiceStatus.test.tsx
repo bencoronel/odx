@@ -13,15 +13,17 @@ vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));
 
 const listening: Service = { state: "listening", address: "127.0.0.1:8770" };
 const services = (api: Service, mcp: Service = listening, connections: Services["connections"] = []): Services => ({
-  api, mcp, connections, connector_command: "/tmp/fixture-Odx", connector_args: ["mcp-stdio"], api_url: "http://127.0.0.1:8770/api/v1",
+  api, mcp, connections, mcp_name: "odx", connector_command: "/tmp/fixture-Odx", connector_args: ["mcp-stdio"], api_url: "http://127.0.0.1:8770/api/v1",
 });
 const bar = () => screen.getByRole("contentinfo", { name: "Service status" });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 it("shows listening services as active only while the vault is unlocked", () => {
   const openMcp = vi.fn();
-  render(<ServiceStatus vault="unlocked" services={services(listening, listening, [{ client_id: "c", client_label: "Agent", since: "2026-10-16T10:00:00Z" }])} pending={2} openMcp={openMcp} />);
-  fireEvent.click(within(bar()).getByRole("button", { name: /MCP active · 1 connection/ }));
+  render(<ServiceStatus vault="unlocked" services={services(listening, listening, [{ id: 1, client_id: "c", client_label: "Agent", since: "2026-10-16T10:00:00Z", calls: 2, cwd: "~/fixture" }])} pending={2} openMcp={openMcp} />);
+  const mcp = within(bar()).getByRole("button", { name: /MCP active · 1 connection/ });
+  expect(mcp.getAttribute("data-tip")).toMatch(/~\/fixture · since .* · 2 calls/);
+  fireEvent.click(mcp);
   expect(openMcp).toHaveBeenCalled();
   expect(bar().textContent).not.toContain("API");
   expect(within(bar()).queryByRole("button", { name: /API/ })).toBeNull();
@@ -64,7 +66,7 @@ beforeEach(() => {
   vi.mocked(ipc.approvals).mockResolvedValue([]);
   vi.mocked(ipc.clients).mockResolvedValue([]);
   vi.mocked(ipc.serviceStatus).mockResolvedValue(services({ state: "stopped" }));
-  vi.mocked(ipc.activity).mockResolvedValue({ events: [], next_cursor: null, complete: true });
+  vi.mocked(ipc.activity).mockResolvedValue({ events: [], next_cursor: null });
   vi.mocked(ipc.headers).mockResolvedValue({ headers: [], inherited: [] });
   vi.mocked(ipc.context).mockResolvedValue({ entries: [], inherited: {} });
   vi.mocked(ipc.shellHistory).mockResolvedValue([]);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ipc, type Agent, type AgentSetup, type Client, type Environment, type ServiceStatus } from "./ipc";
+import { ipc, type Agent, type AgentSetup, type Client, type Environment, type McpConnection, type ServiceStatus } from "./ipc";
+import { formatDateTime } from "./i18n/format";
 import { Icon } from "./Icon";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
@@ -23,6 +24,7 @@ export default function McpLocalPage({ clients, services, envs, busy, update }: 
     <header className="settings-head mcp-head"><h2>{t("mcpLocal.title")}</h2>{used && <Status local={local!} services={services} />}</header>
     {services?.mcp.state === "error" && <p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError({ code: services.mcp.error ?? "unknown" })}</p>}
     {!used && connect}
+    {local && <Connections connections={services?.connections.filter((connection) => connection.client_id === local.id) ?? []} />}
     {/* Remount after each save so the form starts from the stored permissions. */}
     {local && <Permissions key={[local.all_environments, ...local.environment_ids, ...local.capabilities].join()} local={local} envs={envs} busy={busy}
       save={(ids, caps) => update(local.id, local.label, ids, caps)} />}
@@ -38,6 +40,33 @@ function Status({ local, services }: { local: Client; services: ServiceStatus | 
     <span className={`status-dot tone-${connections ? "ok" : "neutral"}`} />
     {t("mcpLocal.connectedAgents", { count: connections })} · {relativeTime(local.last_used_at!, now)}
   </p>;
+}
+
+/** One row per open connector, so stale agent sessions can be told apart and closed. */
+function Connections({ connections }: { connections: McpConnection[] }) {
+  const { t } = useTranslation();
+  const [closing, setClosing] = useState<number[]>([]);
+  const [error, setError] = useState<ErrorState>("");
+  if (!connections.length) return null;
+  return <section className="panel" aria-labelledby="mcp-connections-title">
+    <header className="panel-header"><h3 id="mcp-connections-title">{t("mcpLocal.connections")}</h3></header>
+    {connections.map((connection) => <div key={connection.id} className="setting-row">
+      <div>
+        <strong className="truncate" title={connection.cwd ?? undefined}>{connection.cwd ?? t("mcpLocal.unknownAgent")}</strong>
+        <span className="hint truncate" title={connection.command ?? undefined}>{[connection.command, connection.pid != null && `PID ${connection.pid}`,
+          t("mcpLocal.calls", { count: connection.calls }), t("mcpLocal.since", { time: formatDateTime(new Date(connection.since), { hour: "2-digit", minute: "2-digit" }) })].filter(Boolean).join(" · ")}</span>
+      </div>
+      <button type="button" className="btn sm" disabled={closing.includes(connection.id)} data-tip={t("mcpLocal.disconnectHint")} onClick={() => {
+        setClosing((ids) => [...ids, connection.id]);
+        setError("");
+        ipc.mcpDisconnect(connection.id).catch((reason) => {
+          setError(normalizeAppError(reason));
+          setClosing((ids) => ids.filter((id) => id !== connection.id));
+        });
+      }}>{closing.includes(connection.id) ? t("mcpLocal.disconnecting") : t("mcpLocal.disconnect")}</button>
+    </div>)}
+    {error && <div className="panel-body"><p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
+  </section>;
 }
 
 function Permissions({ local, envs, busy, save }: {
@@ -81,10 +110,10 @@ function mcpLaunchCommand(services: ServiceStatus) {
 }
 const agents: Agent[] = ["claude", "codex"];
 const targets = {
-  claude: { label: "Claude Code", text: (s: ServiceStatus) => `claude mcp add --transport stdio --scope user odx -- ${mcpLaunchCommand(s)}` },
+  claude: { label: "Claude Code", text: (s: ServiceStatus) => `claude mcp add --transport stdio --scope user ${s.mcp_name} -- ${mcpLaunchCommand(s)}` },
   // Codex starts MCP servers with a reduced environment; the connector needs XDG_RUNTIME_DIR to find the app socket.
-  codex: { label: "Codex CLI", text: (s: ServiceStatus) => `codex mcp add odx --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- ${mcpLaunchCommand(s)}` },
-  json: { label: "JSON", text: (s: ServiceStatus) => JSON.stringify({ mcpServers: { odx: { command: s.connector_command, args: s.connector_args } } }, null, 2) },
+  codex: { label: "Codex CLI", text: (s: ServiceStatus) => `codex mcp add ${s.mcp_name} --env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" -- ${mcpLaunchCommand(s)}` },
+  json: { label: "JSON", text: (s: ServiceStatus) => JSON.stringify({ mcpServers: { [s.mcp_name]: { command: s.connector_command, args: s.connector_args } } }, null, 2) },
 } as const;
 
 /** Always open: its place on the page (first until an agent connects, last afterwards) sets its weight. */
