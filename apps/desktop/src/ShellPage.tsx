@@ -1,9 +1,13 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ContextType, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { currentShellFlush, registerShellFlush } from "./shellFlush";
 import { ipc, type AgentRequest, type Environment, type HistoryEntry, type ShellCall } from "./ipc";
 import { highlight } from "./shell/highlight";
+import { exportName, isIds, isM2o, toCsv, toJson, type Link, type Table } from "./table";
+import { CellActions, TableBlock } from "./TableBlock";
 import { CommandError, META, VERBS, expandAlias, needsOdoo, parse, searchCall, substitute, unfinished, type Command, type OdooCall } from "./shell/commands";
-import { completions, type Completion, type Field } from "./shell/complete";
+import { completions, type Completion } from "./shell/complete";
+import { connectionProblem, outcomeOf, plainEntry, pythonCall, reshapeTable, resultEntries } from "./shell/output";
+import { MAX_LINES, newTab, nextEntryId, peekEntryId, pristine, restore, savedAliases, seedEntryIds, snapshot, tabLabel, type Confirmation, type ConnectionErrorPresentation, type Entry, type NewEntry, type QueuedRun, type AgentRun, type Session, type ShellTab } from "./shell/sessions";
 import { modeIcons, modeLabels, modeShortLabels, modeTone } from "./ModeSelect";
 import { CallDetails, ValuesTable, methodTone, recordIds, writtenValues } from "./ApprovalDetails";
 import { EnvIcon } from "./EnvIcon";
@@ -12,12 +16,11 @@ import { Icon } from "./Icon";
 import CopyButton from "./CopyButton";
 import { useTranslation } from "react-i18next";
 import { formatDateTime, formatNumber } from "./i18n/format";
-import { i18n } from "./i18n";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { hasWindowState, useWindowState, usePreventUnload } from "./windowState";
-import { placeInWindow, useDismiss } from "./ContextMenu";
+import { FloatingMenu, MenuItems } from "./Menu";
+import { modalOpen } from "./modal";
 
-const MAX_LINES = 400;
 /** Commands kept out of the history, with their aliases (\s for \history). */
 const UNRECALLED = new Set(["\\?", "help", "\\history", "\\s", "\\clear"]);
 /** Longer logins (often e-mail addresses) are cut with an ellipsis in the prompt. */
@@ -28,221 +31,16 @@ const DEFAULT_FONT = 12;
 function storedFont(): number {
   try { const n = Number(localStorage.getItem(FONT_KEY)); return n >= FONT_RANGE[0] && n <= FONT_RANGE[1] ? n : DEFAULT_FONT; } catch { return DEFAULT_FONT; }
 }
+/** Quiet time before changed sessions are saved to the vault, so a burst of output is one save. */
+export const SAVE_DELAY_MS = 800;
+/** Typing pause before the input is checked for a syntax hint. */
+export const HINT_DELAY_MS = 700;
 const GROUP_FIELDS = ["all_group_ids", "groups_id", "group_ids"];
 
-/** `code`: column indexes containing commands to highlight. `model`: source of the rows, for clickable ids and relations. */
-/** `call`: the single Odoo call behind the rows, when there is one, so it can be copied as code. */
-export type Table = { columns: string[]; rows: unknown[][]; code?: number[]; model?: string; call?: OdooCall };
-type ConnectionErrorPresentation = { name: string; reason: "credential" | "offline"; detail?: AppError };
-type Entry =
-  /** `command`: a typed command that can be re-run; `folded` hides its output. `transient`: shown but never saved (restore notes). */
-  | { id: number; kind: "input"; prompt: string; text: string; command?: boolean; folded?: boolean; transient?: boolean;
-    /** The MCP agent that ran it through terminal_run. */
-    agent?: string }
-  | { id: number; kind: "text" | "info" | "error" | "warn" | "ok"; text: string; translationKey?: "shell.initial" | "shell.help"; appError?: AppError; connectionError?: ConnectionErrorPresentation; transient?: boolean }
-  | { id: number; kind: "table"; table: Table; expanded: boolean; footer?: string };
-/** Distributive Omit for union variants. */
-type NewEntry = Entry extends unknown ? (Entry extends infer E ? (E extends Entry ? Omit<E, "id"> : never) : never) : never;
-type Pending = {
-  call: OdooCall; display: Extract<Command, { kind: "call" }>["display"]; filter?: string; page?: { limit: number; offset: number };
-  /** Pin the environment at confirmation time. */
-  env?: { id: string; name: string };
-};
-type Session = {
-  entries: Entry[];
-  env?: { id: string; name: string };
-  context: Record<string, unknown>;
-  expanded: boolean;
-  /** Show timing and byte counts for each call (\timing). */
-  timing: boolean;
-  last?: Pending;
-  /** Vault-encrypted history; `null` until loaded. */
-  history: HistoryEntry[] | null;
-  models: Record<string, string[]>;
-  /** Autocomplete fields keyed by `environment:model`. */
-  fields: Record<string, Field[]>;
-  /** Record ids of the latest result table and their model, for `$_`. */
-  previous?: { model?: string; ids: number[] };
-  /** Ids saved with \\set, for `$name`. */
-  vars?: Record<string, { model?: string; ids: number[] }>;
-};
 type Menu = Completion & { index: number };
 
-let nextId = 1;
-const fresh = (): Session => ({
-  entries: [{ id: nextId++, kind: "info", text: "", translationKey: "shell.initial" }],
-  context: {},
-  expanded: false,
-  timing: true,
-  history: null,
-  models: {},
-  fields: {},
-});
-/** Each tab is bound to one environment for its whole life: `$_`, `\set` ids and pages never cross databases.
- * `reconnect`: check and connect when the tab is first shown. `runs`: commands waiting their turn, from another page
- * or an MCP agent (never saved). `unseen`: an agent ran something here, or a command finished, while another tab was in front. `pinned` tabs come first
- * and are left alone by Close others, Close to the left and Close to the right. */
-type AgentRun = Extract<AgentRequest, { kind: "run" }>;
-type QueuedRun = { command: string; agent?: AgentRun };
-type ShellTab = { id: string; name: string; defaultName: boolean; envId: string; envName: string; session: Session; busy: boolean; reconnect?: boolean; runs?: QueuedRun[]; unseen?: "agent" | "done"; pinned?: boolean };
 
-/** Saved in the vault (encrypted) so tabs and output survive restarts. Pending confirmations are never saved.
- * `aliases` are shared by every tab. */
-type SavedSessions = { version: 1; activeId: string; aliases?: Record<string, string>; tabs: { id: string; name: string; defaultName: boolean; pinned?: boolean; envId?: string; envName?: string; session: Pick<Session, "entries" | "env" | "context" | "expanded" | "timing" | "last" | "previous" | "vars"> }[] };
-const SAVE_LIMIT = 7 * 1024 * 1024;
-const encoder = new TextEncoder();
-const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
-function snapshot(tabs: ShellTab[], activeId: string, aliases: Record<string, string>): string {
-  const saved: SavedSessions = { version: 1, activeId, aliases, tabs: tabs.map((tab) => ({
-    id: tab.id, name: tab.name, defaultName: tab.defaultName, pinned: tab.pinned, envId: tab.envId, envName: tab.envName,
-    session: { entries: tab.session.entries.filter((entry) => !("transient" in entry && entry.transient)), env: tab.session.env, context: tab.session.context, expanded: tab.session.expanded, timing: tab.session.timing, last: tab.session.last, previous: tab.session.previous, vars: tab.session.vars },
-  })) };
-  // Over the limit, drop the oldest output of the largest tab until it fits. The vault limits UTF-8 bytes, not characters.
-  // Each tab is encoded once; trimming subtracts only the dropped entries, never more than they take, so the estimate stays an upper bound.
-  const json = JSON.stringify(saved);
-  if (encoder.encode(json).length <= SAVE_LIMIT) return json;
-  const overhead = bytes({ ...saved, tabs: [] }) + saved.tabs.length;
-  const sizes = saved.tabs.map(bytes);
-  do {
-    const i = sizes.indexOf(Math.max(...sizes));
-    const entries = saved.tabs[i].session.entries;
-    if (!entries.length) break;
-    const cut = Math.max(1, Math.ceil(entries.length / 10));
-    sizes[i] -= bytes(entries.slice(0, cut)) - 2;
-    saved.tabs[i].session.entries = entries.slice(cut);
-  } while (overhead + sizes.reduce((a, b) => a + b, 0) > SAVE_LIMIT);
-  return JSON.stringify(saved);
-}
-/** An untouched tab: default name, not pinned and only informational lines. */
-const pristine = (tab: Pick<ShellTab, "defaultName" | "pinned"> & { session?: Partial<Pick<Session, "entries">> }) =>
-  tab.defaultName && !tab.pinned && (tab.session?.entries ?? []).every((e) => e.kind === "info" || e.kind === "ok");
-function restore(data: string, note: string): { tabs: ShellTab[]; activeId: string } | null {
-  try {
-    const saved = JSON.parse(data) as SavedSessions;
-    if (saved?.version !== 1 || !Array.isArray(saved.tabs)) return null;
-    // Untouched tabs are not a session worth announcing; tabs saved before sessions had a fixed environment and never
-    // connected have nothing to resume.
-    const used = saved.tabs.filter((tab) => !pristine(tab) && (tab.envId ?? tab.session?.env?.id));
-    if (!used.length) return null;
-    const tabs = used.map((tab): ShellTab => {
-      const entries = Array.isArray(tab.session?.entries) ? tab.session.entries : [];
-      for (const entry of entries) nextId = Math.max(nextId, entry.id + 1);
-      return {
-        id: tab.id, name: tab.name, defaultName: tab.defaultName, pinned: tab.pinned, busy: false, reconnect: true,
-        envId: (tab.envId ?? tab.session.env?.id)!, envName: tab.envName ?? tab.session.env?.name ?? "",
-        session: { ...fresh(), ...tab.session, entries: [...entries, { id: nextId++, kind: "info" as const, text: note, transient: true }].slice(-MAX_LINES) },
-      };
-    });
-    return { tabs, activeId: tabs.some((tab) => tab.id === saved.activeId) ? saved.activeId : tabs[0].id };
-  } catch { return null; }
-}
-/** Aliases survive even when every saved tab is untouched and the tabs start fresh. */
-function savedAliases(data: string): Record<string, string> {
-  try {
-    const aliases = (JSON.parse(data) as SavedSessions)?.aliases;
-    return aliases && typeof aliases === "object" ? Object.fromEntries(Object.entries(aliases).filter(([, command]) => typeof command === "string")) : {};
-  } catch { return {}; }
-}
-const newTab = (env: Pick<Environment, "id" | "name">): ShellTab =>
-  ({ id: crypto.randomUUID(), name: "", defaultName: true, envId: env.id, envName: env.name, session: fresh(), busy: false, reconnect: true });
-const tabLabel = (tab: ShellTab) => tab.defaultName ? tab.envName : tab.name;
 
-/** JSON as a Python literal: the same structure with None, True and False. */
-function pythonLiteral(value: unknown): string {
-  if (value === null || value === undefined) return "None";
-  if (typeof value === "boolean") return value ? "True" : "False";
-  if (typeof value === "number") return String(value);
-  if (typeof value === "string") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(pythonLiteral).join(", ")}]`;
-  return `{${Object.entries(value as Record<string, unknown>).map(([k, v]) => `${JSON.stringify(k)}: ${pythonLiteral(v)}`).join(", ")}}`;
-}
-
-/** An Odoo call as a standalone XML-RPC script; the API key stays a placeholder, Odx never copies secrets. */
-function pythonCall(env: Pick<Environment, "url" | "database" | "login">, call: OdooCall, context: Record<string, unknown>): string {
-  const kwargs = Object.keys(context).length ? { ...call.kwargs, context: { ...context, ...(call.kwargs.context as object | undefined) } } : call.kwargs;
-  return [
-    "import xmlrpc.client",
-    "",
-    `url, db, login = ${JSON.stringify(env.url.replace(/\/+$/, ""))}, ${JSON.stringify(env.database)}, ${JSON.stringify(env.login)}`,
-    'key = "<API key>"',
-    'uid = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common").authenticate(db, login, key, {})',
-    'models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")',
-    `result = models.execute_kw(db, uid, key, ${JSON.stringify(call.model)}, ${JSON.stringify(call.method)}, ${pythonLiteral(call.args)}, ${pythonLiteral(kwargs)})`,
-    "print(result)",
-    "",
-  ].join("\n");
-}
-
-export function cellText(v: unknown): string {
-  if (v === null || v === undefined) return "null";
-  if (typeof v === "string") return v;
-  if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number" && typeof v[1] === "string") return `${v[1]} (${v[0]})`;
-  return typeof v === "object" ? JSON.stringify(v) : String(v);
-}
-const isM2o = (v: unknown): v is [number, string] => Array.isArray(v) && v.length === 2 && typeof v[0] === "number" && typeof v[1] === "string";
-const isIds = (v: unknown): v is number[] => Array.isArray(v) && v.length > 0 && v.every((n) => Number.isInteger(n) && n > 0);
-type Link = { model: string; column: string; value: unknown; row: Record<string, unknown> };
-/** Cell clicks: follow a record or relation, or open a long value. */
-/** What a table can do. In a session all of it; in a table window only reading: the optional ones need the session. */
-export const CellActions = createContext<{ follow?: (link: Link, inOdoo?: boolean) => void; inspect?: (title: string, value: unknown) => void; exportTable?: (table: Table, format: "csv" | "json") => void;
-  /** A model's fields for header tooltips, when loaded. */
-  fields: (model: string) => Field[] | undefined;
-  /** The call as a Python script against this tab's environment, without its API key. */
-  callCode?: (call: OdooCall) => string | null;
-  /** Put a command in the input, whole, to edit or run it. */
-  insert?: (command: string) => void;
-  /** Open the table in a window of its own. */
-  popOut?: (table: Table, footer?: string) => void } | null>(null);
-
-/** `pos` ("row:column") and `active` support keyboard navigation; `pin` keeps the column visible when scrolling sideways. */
-/** How a value reads once its field is known: selection labels, datetimes in local time, booleans as marks.
- * `tip` keeps the raw value; copying and exporting always use the raw value. */
-function typedValue(value: unknown, field?: Field): { text: string; tip?: string; className?: string } | null {
-  if (!field) return null;
-  if (field.type === "boolean" && typeof value === "boolean") return { text: value ? "✓" : "✗", tip: String(value), className: value ? "bool yes" : "bool no" };
-  if (field.type === "selection" && typeof value === "string") {
-    const label = field.selection?.find(([key]) => key === value)?.[1];
-    return label ? { text: label, tip: value } : null;
-  }
-  // Odoo sends datetimes in UTC without a zone.
-  if (field.type === "datetime" && typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
-    const at = new Date(`${value.replace(" ", "T")}Z`);
-    return Number.isNaN(at.getTime()) ? null : { text: formatDateTime(at, { dateStyle: "short", timeStyle: "medium" }), tip: `${value} UTC` };
-  }
-  return null;
-}
-
-/** `edges`: the selection's outline on this cell (inset shadows on the sides that border unselected cells). */
-function Cell({ value, column, model, row, pos, active, selected, edges, pin }: { value: unknown; column: string; model?: string; row: Record<string, unknown>; pos?: string; active?: boolean; selected?: boolean; edges?: string; pin?: boolean }) {
-  const { t } = useTranslation();
-  const actions = useContext(CellActions);
-  const typed = typedValue(value, model ? actions?.fields(model)?.find((f) => f.name === column) : undefined);
-  const text = typed?.text ?? cellText(value);
-  const dim = !typed && (value === false || value === null || value === undefined || (Array.isArray(value) && !value.length));
-  const short = text.length > 80 ? `${text.slice(0, 80)}…` : text;
-  const className = `${dim ? "dim" : ""} ${typeof value === "number" ? "num" : ""} ${typed?.className ?? ""} ${pin ? "pin" : ""}`;
-  const cell = { "data-cell": pos, "data-active": active || undefined, "data-selected": selected || undefined, style: edges ? { boxShadow: edges } : undefined };
-  // ir.model.data rows point at another model through res_id.
-  const follow = actions?.follow;
-  const linked = model && follow && (
-    (column === "id" && typeof value === "number")
-    || (model === "ir.model.data" && column === "res_id" && typeof value === "number" && typeof row.model === "string")
-    || (column !== "id" && (isM2o(value) || isIds(value))));
-  // A click selects the cell (see TableBlock); a double click acts on it.
-  if (linked) return <td className={className} {...cell}><button type="button" className="term-link" tabIndex={-1} data-tip={t("shell.openRecord")}
-    onDoubleClick={(event) => follow({ model, column, value, row }, event.ctrlKey || event.metaKey)}>{short}</button></td>;
-  const inspect = actions?.inspect;
-  if (inspect && (short !== text || (value !== null && typeof value === "object"))) return <td className={className} {...cell}>
-    <button type="button" className="term-more" tabIndex={-1} data-tip={t("shell.inspectValue")}
-      onDoubleClick={() => inspect(`${model ? `${model} ` : ""}${row.id !== undefined ? `${cellText(row.id)} · ` : ""}${column}`, value)}>{short}</button>
-  </td>;
-  return <td className={className} {...cell} data-tip={typed?.tip ?? (short !== text ? text : undefined)}>{short}</td>;
-}
-export function rowsTable(rows: Record<string, unknown>[]): Table {
-  const columns: string[] = [];
-  for (const row of rows) for (const key of Object.keys(row)) if (!columns.includes(key)) columns.push(key);
-  return { columns, rows: rows.map((row) => columns.map((c) => row[c])) };
-}
 const size = (bytes: number) => bytes < 1024 ? `${formatNumber(bytes)} B` : `${formatNumber(bytes / 1024, { maximumFractionDigits: 1 })} KB`;
 
 export default function ShellPage({ envs, connectTo, command, onConnectHandled, visible = true, agentRequests = [], onAgentHandled }: {
@@ -259,7 +57,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
   const seeded = useRef(false);
   if (!seeded.current) {
     seeded.current = true;
-    for (const tab of tabs) for (const entry of tab.session.entries) nextId = Math.max(nextId, entry.id + 1);
+    for (const tab of tabs) seedEntryIds(tab.session.entries);
   }
   const [activeId, setActiveId] = useWindowState("shell.activeId", tabs[0]?.id ?? "");
   const [aliases, setAliases] = useWindowState<Record<string, string>>("shell.aliases", {});
@@ -296,7 +94,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
   const persist = useCallback(() => {
     if (!loaded) return;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(save, 800);
+    saveTimer.current = setTimeout(save, SAVE_DELAY_MS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
   // Switching tabs alone is not worth a save of every tab's output; the next save records it.
@@ -317,7 +115,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
     setFontSizeState(next);
     try { localStorage.setItem(FONT_KEY, String(next)); } catch { /* per-window only */ }
   }, []);
-  usePreventUnload(tabs.some((tab) => tab.busy) || renaming !== null);
+  usePreventUnload(tabs.some((tab) => tab.busy || tab.runs?.length) || renaming !== null);
   const refreshTabs = useCallback(() => setTabs((current) => [...current]), [setTabs]);
   // Stable callbacks let hidden sessions skip re-rendering when the app updates.
   const connectHandled = useRef(onConnectHandled);
@@ -410,21 +208,24 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
   // Agent requests: a run goes to its tab's queue (the session runs it); show brings that tab to the front.
   useEffect(() => {
     if (!loaded) return;
+    // Tabs opened earlier in this batch, so two runs for one environment share a session.
+    const all = [...tabs];
     for (const request of agentRequests) {
       onAgentHandled?.(request.id);
       if (request.kind === "show") {
-        if (tabs.some((tab) => tab.id === request.terminal)) { setActiveId(request.terminal); void ipc.agentReply(request.id); }
+        if (all.some((tab) => tab.id === request.terminal)) { setActiveId(request.terminal); void ipc.agentReply(request.id); }
         else void ipc.agentReply(request.id, undefined, `no terminal ${request.terminal}`);
         continue;
       }
       const env = envs.find((e) => e.id === request.envId);
-      const own = tabs.filter((tab) => tab.envId === request.envId);
-      let tab = request.terminal ? tabs.find((item) => item.id === request.terminal) : own.find((item) => item.id === activeId) ?? own[0];
+      const own = all.filter((tab) => tab.envId === request.envId);
+      let tab = request.terminal ? all.find((item) => item.id === request.terminal) : own.find((item) => item.id === activeId) ?? own[0];
       if (!tab && !request.terminal && env) {
         // A new session for the agent opens behind the current tab; only show brings it forward.
         tab = newTab(env);
+        all.push(tab);
         setTabs((current) => [...current, tab!]);
-        if (!tabs.length) setActiveId(tab.id);
+        if (all.length === 1) setActiveId(tab.id);
       }
       if (!tab) { void ipc.agentReply(request.id, undefined, request.terminal ? `no terminal ${request.terminal}` : "environment unavailable"); continue; }
       tab.runs = [...tab.runs ?? [], { command: request.command, agent: request }];
@@ -437,7 +238,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
   useEffect(() => {
     if (!visible) return;
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || document.querySelector('[role="alertdialog"]')) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || modalOpen()) return;
       const key = event.key.toLowerCase();
       const index = tabs.findIndex((tab) => tab.id === activeId);
       if (key === "t" && !event.shiftKey) { event.preventDefault(); pick(plus.current ?? document.querySelector<HTMLElement>(".shell-empty .btn")); }
@@ -528,7 +329,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
       const left = closable(tabs.slice(0, index));
       const right = closable(tabs.slice(index + 1));
       const done = () => { setTabMenu(null); document.getElementById(`shell-tab-${tab.id}`)?.focus(); };
-      return <TabMenu at={tabMenu} label={tabLabel(tab)} close={done} items={[
+      return <FloatingMenu at={tabMenu} label={tabLabel(tab)} close={done}><MenuItems close={done} items={[
         { label: t("shell.renameSession"), keys: "F2", run: () => rename(tab) },
         { label: t(tab.pinned ? "shell.unpinSession" : "shell.pinSession"), run: () => pin(tab) },
         null,
@@ -536,7 +337,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
         { label: t("shell.closeOthers"), disabled: !others.length, run: () => close(others, tab) },
         { label: t("shell.closeLeft"), disabled: !left.length, run: () => close(left, tab) },
         { label: t("shell.closeRight"), disabled: !right.length, run: () => close(right, tab) },
-      ]} />;
+      ]} /></FloatingMenu>;
     })()}
     {tabs.map((tab) => <div className="shell-panel" key={tab.id} role="tabpanel" id={`shell-panel-${tab.id}`}
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
@@ -591,21 +392,25 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     setBusy(false);
     print({ kind: "input", prompt: prompt(), text: "^C" });
     text("warn", t(writing.current ? "shell.discardedWrite" : "shell.discarded"));
+    stopBatch();
   };
-  const [confirming, setConfirming] = useWindowState<Pending | null>(`shell.${tab.id}.confirming`, null);
+  const [confirming, setConfirming] = useWindowState<Confirmation | null>(`shell.${tab.id}.confirming`, null, (p) => p?.agent ? null : p);
   // Mirrors for the agent flow, which waits across renders.
   const confirmingNow = useRef(confirming);
   confirmingNow.current = confirming;
   /** The agent a running command belongs to: its calls carry its id, for the core's checks and the audit. */
   const acting = useRef<AgentRun | null>(null);
-  const shell = (call: ShellCall) => ipc.shell(acting.current ? { ...call, client_id: acting.current.clientId } : call);
-  usePreventUnload(busy);
+  const shell = (call: ShellCall) => ipc.shell(acting.current ? { ...call, client_id: acting.current.clientId, client_revision: acting.current.clientRevision } : call);
+  // An agent's confirmation and run end with its reply; closing the window would drop both.
+  usePreventUnload(busy || !!confirming?.agent);
   const [menu, setMenu] = useState<Menu | null>(null);
   const menuList = useRef<HTMLUListElement>(null);
   const out = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
 
-  useLayoutEffect(() => { if (active) out.current?.scrollTo({ top: out.current.scrollHeight }); }, [session.entries, busy, confirming, active]);
+  // New output, a call or a prompt brings the end into view; folding or toggling an earlier table keeps the reader's place.
+  const lastEntry = session.entries[session.entries.length - 1]?.id;
+  useLayoutEffect(() => { if (active) out.current?.scrollTo({ top: out.current.scrollHeight }); }, [lastEntry, busy, confirming, active]);
   useEffect(() => {
     if (active && !busy && !document.activeElement?.closest(".shell-tabs")) field.current?.focus();
   }, [busy, confirming, active]);
@@ -639,6 +444,8 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   const [pasted, setPasted] = useState<string[] | null>(null);
   /** Pasted commands running one by one; `mark` is the first entry id of the current step, to spot its errors. */
   const [batch, setBatch] = useState<{ lines: string[]; total: number; mark: number } | null>(null);
+  /** A cancelled confirmation or a discarded call stops a pasted batch, whichever way it was cancelled. */
+  const stopBatch = () => { if (batch) { setBatch(null); text("warn", t("shell.batchStopped", { index: batch.total - batch.lines.length, total: batch.total })); } };
   const stepping = useRef(false);
   /** A line starts with a command or an alias; indented or option lines continue a multi-line command instead. */
   const isCommand = (line: string) => { const word = line.split(/\s+/)[0]; return VERBS.includes(word) || META.includes(word) || word in aliases; };
@@ -652,7 +459,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   const runPasted = () => {
     if (!pasted) return;
     if (!tab.session.env && pasted.some(odooCommand)) { setHint(t(connecting ? "shell.waitConnection" : "shell.needsConnection")); setNudge((n) => n + 1); return; }
-    setBatch({ lines: pasted, total: pasted.length, mark: nextId });
+    setBatch({ lines: pasted, total: pasted.length, mark: peekEntryId() });
     setPasted(null);
   };
   // One step at a time: wait for the previous call and any write confirmation, stop at the first error.
@@ -664,7 +471,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     if (!batch.lines.length) return setBatch(null);
     const [line, ...rest] = batch.lines;
     stepping.current = true;
-    setBatch({ ...batch, lines: rest, mark: nextId });
+    setBatch({ ...batch, lines: rest, mark: peekEntryId() });
     void submit(line).finally(() => { stepping.current = false; setBatch((current) => current && { ...current }); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch, busy, confirming]);
@@ -691,7 +498,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     if (!tab.session.env) { reconnect(); await until(() => !tab.busy); }
     if (!tab.session.env) return reply(undefined, failureNow.current ? connectionProblem(failureNow.current) : t("shell.noConnection"));
     acting.current = agent ?? null;
-    const mark = nextId;
+    const mark = peekEntryId();
     try {
       await submit(command, agent?.clientLabel);
       await until(() => !tab.busy);
@@ -730,7 +537,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       // An open string or bracket means the user is mid-value; Enter still reports it.
       if (!/\s/.test(input.trim()) || unfinished(input)) return;
       try { parse(expand(input)); } catch (e) { if (e instanceof CommandError) setHint(e.message); }
-    }, 700);
+    }, HINT_DELAY_MS);
     return () => clearTimeout(timer);
   }, [input, confirming, search]);
 
@@ -751,8 +558,10 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     reconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, envs, busy]);
-  const print = (...entries: NewEntry[]) => update((s) => ({ ...s, entries: [...s.entries, ...entries.map((e) => ({ ...e, id: nextId++ }) as Entry)].slice(-MAX_LINES) }));
+  const print = (...entries: NewEntry[]) => update((s) => ({ ...s, entries: [...s.entries, ...entries.map((e) => ({ ...e, id: nextEntryId() }) as Entry)].slice(-MAX_LINES) }));
   const text = (kind: "text" | "info" | "error" | "warn" | "ok", t: string) => print({ kind, text: t });
+  /** An error as Odoo or the core reported it, in the user's language. */
+  const fail = (reason: unknown) => print({ kind: "error", text: "", appError: normalizeAppError(reason) });
   /** `login>`: who the calls run as; the database shows at the end of the input line. */
   const prompt = () => {
     const env = envs.find((e) => e.id === tab.envId);
@@ -761,10 +570,10 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   };
   /** Alias, then `$_` and `$name`; \\alias keeps its command as typed. */
   const expand = (line: string) => /^\s*\\alias(\s|$)/.test(line) ? line : substitute(expandAlias(line, aliases), tab.session.previous?.ids, tab.session.vars);
-  /** The latest table's record ids become `$_`. */
+  /** The latest table's record ids become `$_`. A table without ids (\cols name) clears it: `$_` must never mean rows no longer shown. */
   const remember = (table: Table) => {
     const idColumn = table.columns.indexOf("id");
-    if (idColumn >= 0) update((s) => ({ ...s, previous: { model: table.model, ids: table.rows.map((row) => row[idColumn]).filter((id): id is number => typeof id === "number") } }));
+    update((s) => ({ ...s, previous: idColumn < 0 ? undefined : { model: table.model, ids: table.rows.map((row) => row[idColumn]).filter((id): id is number => typeof id === "number") } }));
   };
 
   /** Why the latest environment state refuses writes, mirroring policy::authorize; empty when allowed. */
@@ -775,7 +584,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     return "";
   };
 
-  async function run(pending: Pending, confirmed: boolean) {
+  async function run(pending: Confirmation, confirmed: boolean) {
     const env = pending.env ?? tab.session.env;
     if (!env) return text("error", t("shell.noConnection"));
     const current = begin(confirmed);
@@ -800,58 +609,17 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
         const blocked = writeBlocked(env.id);
         if (blocked) text("error", blocked);
         // The mirror updates now: an agent run checks it right after this call, before the next render.
-        else { confirmingNow.current = { ...pending, env }; setConfirming(confirmingNow.current); }
+        else { confirmingNow.current = { ...pending, env, agent: acting.current?.clientId }; setConfirming(confirmingNow.current); }
       } else if (e?.code === "uncertain_result") print({ kind: "warn", text: "", appError: normalizeAppError(reason) });
-      else print({ kind: "error", text: "", appError: normalizeAppError(reason) });
+      else fail(reason);
     } finally { finish(current); }
   }
 
-  function render(p: Pending, data: unknown, meta: string) {
+  function render(p: Confirmation, data: unknown, meta: string) {
     describe(p.call.model);
-    const expanded = tab.session.expanded;
-    if (Array.isArray(data) && p.display !== "groups") {
-      // name_search returns [id, name] pairs; reads return records.
-      const ids = data.map((r) => Array.isArray(r) ? r[0] : (r as { id?: unknown } | null)?.id).filter((id): id is number => typeof id === "number");
-      update((s) => ({ ...s, previous: { model: p.call.model, ids: p.page ? ids.slice(0, p.page.limit) : ids } }));
-    }
-    const m = meta ? ` · ${meta}` : "";
-    if (p.display === "fields" && data && typeof data === "object") {
-      const q = p.filter?.toLowerCase();
-      const rows = Object.entries(data as Record<string, Record<string, unknown>>)
-        .filter(([name, f]) => !q || name.toLowerCase().includes(q) || String(f.string ?? "").toLowerCase().includes(q))
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, f]) => [name, f.type, f.relation ?? "", f.string, f.required ? t("shell.yes") : "", f.store === false ? t("shell.no") : ""]);
-      return print({ kind: "table", expanded, table: { columns: [t("shell.field"), t("shell.type"), t("shell.relationship"), t("shell.label"), t("shell.required"), t("shell.stored")], rows, call: p.call }, footer: t("shell.count", { count: rows.length, item: t("shell.fields") }) + m });
-    }
-    if (p.display === "names" && Array.isArray(data)) {
-      const more = !!p.page && data.length > p.page.limit;
-      const rows = (p.page ? data.slice(0, p.page.limit) : data) as unknown[][];
-      return print({ kind: "table", expanded, table: { columns: ["id", t("shell.name")], rows, model: p.call.model, call: p.call }, footer: t("shell.count", { count: rows.length, item: t("shell.results") }) + m + (more ? t("shell.moreRefine") : "") });
-    }
-    if (p.display === "groups" && Array.isArray(data) && data.length) {
-      const groupby = p.call.kwargs.groupby as string[];
-      const more = !!p.page && data.length > p.page.limit;
-      const groups = (p.page ? data.slice(0, p.page.limit) : data) as Record<string, unknown>[];
-      // Groupby columns first, then the count, then aggregates; drop Odoo's __domain/__range/__context.
-      const rows = groups.map((g) => Object.fromEntries([
-        ...groupby.map((key) => [key, g[key]]),
-        ["count", g.__count],
-        ...Object.entries(g).filter(([key]) => !key.startsWith("__") && !groupby.includes(key)),
-      ]));
-      return print({ kind: "table", expanded, table: { ...rowsTable(rows), model: p.call.model, call: p.call }, footer: t("shell.count", { count: rows.length, item: t("shell.groups") }) + m + (more ? t("shell.moreGroups") : "") });
-    }
-    if (Array.isArray(data) && data.length && data.every((r) => r && typeof r === "object" && !Array.isArray(r))) {
-      let rows = data as Record<string, unknown>[];
-      let more = false;
-      if (p.page) { more = rows.length > p.page.limit; rows = rows.slice(0, p.page.limit); }
-      const where = p.page ? t("shell.fromOffset", { offset: p.page.offset }) : "";
-      // A single wide record reads better as a vertical list.
-      const wide = rows.length === 1 && Object.keys(rows[0]).length > 12;
-      return print({ kind: "table", expanded: expanded || wide, table: { ...rowsTable(rows), model: p.call.model, call: p.call }, footer: t("shell.row", { count: rows.length }) + where + m + (more ? t("shell.moreNext") : "") });
-    }
-    if (Array.isArray(data) && !data.length) return text("info", `${t("shell.noResults")}${m}`);
-    print({ kind: "text", text: typeof data === "object" ? JSON.stringify(data, null, 2) : String(data) });
-    if (meta) text("info", meta);
+    const { entries, previous } = resultEntries(p, data, meta, tab.session.expanded);
+    if (previous) update((s) => ({ ...s, previous }));
+    print(...entries);
   }
 
   /** Run several read calls as one command; timing covers all of them. */
@@ -877,7 +645,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     } catch (reason) {
       if (!current()) return;
       if (reason instanceof CommandError) text("error", reason.message);
-      else print({ kind: "error", text: "", appError: normalizeAppError(reason) });
+      else fail(reason);
     } finally { finish(current); }
   }
 
@@ -903,9 +671,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       update((s) => ({ ...s, env: { id: env.id, name: env.name }, last: undefined }));
       setServer({ version: health.server_version ?? undefined, latency: health.latency_ms });
       if (!tab.session.models[env.id]) {
-        void shell({ environment_id: env.id, model: "ir.model", method: "search_read", args: [], kwargs: { fields: ["model"], limit: 5000 } })
-          .then((r) => update((s) => ({ ...s, models: { ...s.models, [env.id]: (r.data as { model: string }[]).map((m) => m.model).sort() } })))
-          .catch(() => undefined);
+        void loadModels(env.id).catch(() => undefined);
       }
     } catch (reason) { if (current()) setFailure(normalizeAppError(reason)); } finally {
       finish(current);
@@ -935,25 +701,23 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     if (column === "id") { target = model; ids = [value as number]; }
     else if (column === "res_id" && model === "ir.model.data") { target = String(row.model); ids = [value as number]; }
     else {
-      try { target = await relationOf(env.id, model, column); } catch (reason) { return print({ kind: "error", text: "", appError: normalizeAppError(reason) }); }
+      try { target = await relationOf(env.id, model, column); } catch (reason) { return fail(reason); }
       if (!target) return text("error", t("shell.noRelation", { field: `${model}.${column}` }));
       ids = isM2o(value) ? [value[0]] : isIds(value) ? value : [];
     }
     if (inOdoo) {
       if (ids.length !== 1) return text("error", t("shell.openOneRecord"));
-      return ipc.openUrl(env.id, { model: target, id: ids[0] }).catch((reason) => print({ kind: "error", text: "", appError: normalizeAppError(reason) }));
+      return ipc.openUrl(env.id, { model: target, id: ids[0] }).catch((reason) => fail(reason));
     }
     if (isIds(value) && column !== "id" && column !== "res_id") return submit(`search ${target} -d [('id','in',[${ids.join(",")}])]`);
     return submit(`read ${target} ${ids[0]} -f *`);
   }
 
   async function exportTable(table: Table, format: "csv" | "json") {
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
-    const name = `odx-${table.model ?? "table"}-${stamp}.${format}`;
     try {
-      const path = await ipc.shellExport(name, format === "csv" ? toCsv(table) : toJson(table));
+      const path = await ipc.shellExport(exportName(table, format), format === "csv" ? toCsv(table) : toJson(table));
       text("ok", t("shell.exported", { path }));
-    } catch (reason) { print({ kind: "error", text: "", appError: normalizeAppError(reason) }); }
+    } catch (reason) { fail(reason); }
   }
 
   const fold = (id: number) => update((s) => ({ ...s, entries: s.entries.map((e) => e.id === id && e.kind === "input" ? { ...e, folded: !e.folded } : e) }));
@@ -1048,16 +812,18 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     setInput(""); setCursor(null); void submit(line);
   }
   async function submit(line: string, agent?: string) {
-    if (confirming) {
+    // The live prompt: a queued run calls the submit of the render that queued it.
+    const p = confirmingNow.current;
+    if (p) {
       const yes = /^(y|s|si|sí|yes)$/i.test(line.trim());
-      print({ kind: "input", prompt: t("shell.confirmPrompt", { name: confirming.env?.name }), text: line });
-      const p = confirming;
+      print({ kind: "input", prompt: t("shell.confirmPrompt", { name: p.env?.name }), text: line });
+      confirmingNow.current = null;
       setConfirming(null);
       // The temporary window may have closed while the prompt was open.
       const blocked = yes && p.env ? writeBlocked(p.env.id) : "";
       if (blocked) text("error", blocked);
       else if (yes) await run(p, true);
-      else { text("info", t("shell.cancelled")); if (batch) { setBatch(null); text("warn", t("shell.batchStopped", { index: batch.total - batch.lines.length, total: batch.total })); } }
+      else { text("info", t("shell.cancelled")); stopBatch(); }
       return;
     }
     // Load !n / !! into the input for review before execution.
@@ -1100,18 +866,18 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       case "clear": return update((s) => ({ ...s, entries: [] }));
       case "history": {
         if (command.clear) {
-          await ipc.shellHistoryClear().catch((e) => print({ kind: "error", text: "", appError: normalizeAppError(e) }));
+          await ipc.shellHistoryClear().catch((e) => fail(e));
           update((s) => ({ ...s, history: [] }));
           return text("info", t("shell.historyCleared"));
         }
         const q = command.q?.toLowerCase();
         const all = tab.session.history ?? [];
-        // When and what; a click on a command puts it in the input. The search still matches the environment.
-        const rows = all.filter((h) => !q || h.command.toLowerCase().includes(q) || (h.environment ?? "").toLowerCase().includes(q))
-          .map((h) => [formatDateTime(new Date(h.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }), h.command] as unknown[])
+        // The number !n recalls, when and what; a click on a command puts it in the input. The search still matches the environment.
+        const rows = all.map((h, i) => ({ h, n: i + 1 })).filter(({ h }) => !q || h.command.toLowerCase().includes(q) || (h.environment ?? "").toLowerCase().includes(q))
+          .map(({ h, n }) => [n, formatDateTime(new Date(h.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }), h.command] as unknown[])
           .slice(-50);
         if (!rows.length) return text("info", q ? t("shell.noCommandMatches") : t("shell.emptyHistory"));
-        return print({ kind: "table", expanded: false, table: { columns: [t("shell.columns.date"), t("shell.columns.command")], rows, code: [1] }, footer: t("shell.historyFooter", { shown: rows.length, total: all.length }) });
+        return print({ kind: "table", expanded: false, table: { columns: ["#", t("shell.columns.date"), t("shell.columns.command")], rows, code: [2] }, footer: t("shell.historyFooter", { shown: rows.length, total: all.length }) });
       }
       case "timing": {
         const timing = !tab.session.timing;
@@ -1130,18 +896,11 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
         if (command.value === undefined) return text("text", JSON.stringify(tab.session.context));
         update((s) => ({ ...s, context: command.value ?? {} }));
         return text("info", command.value ? t("shell.contextSet") : t("shell.contextCleared"));
-      case "next": {
+      case "next": case "prev": {
         const last = tab.session.last;
         if (!last?.page) return text("error", t("shell.noPreviousSearch"));
-        const offset = last.page.offset + last.page.limit;
-        const kw = last.call.kwargs as { domain: unknown[]; fields?: string[]; order?: string };
-        return run({ ...last, page: { ...last.page, offset }, call: searchCall(last.call.model, kw.domain, kw.fields, last.page.limit, offset, kw.order) }, false);
-      }
-      case "prev": {
-        const last = tab.session.last;
-        if (!last?.page) return text("error", t("shell.noPreviousSearch"));
-        if (!last.page.offset) return text("info", t("shell.firstPage"));
-        const offset = Math.max(0, last.page.offset - last.page.limit);
+        if (command.kind === "prev" && !last.page.offset) return text("info", t("shell.firstPage"));
+        const offset = command.kind === "next" ? last.page.offset + last.page.limit : Math.max(0, last.page.offset - last.page.limit);
         const kw = last.call.kwargs as { domain: unknown[]; fields?: string[]; order?: string };
         return run({ ...last, page: { ...last.page, offset }, call: searchCall(last.call.model, kw.domain, kw.fields, last.page.limit, offset, kw.order) }, false);
       }
@@ -1180,17 +939,8 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
         const source = [...tab.session.entries].reverse().find((e): e is Extract<Entry, { kind: "table" }> => e.kind === "table");
         if (!source) return text("error", t("shell.noTable"));
         const { table } = source;
-        let next: Table;
-        if (command.kind === "grep") {
-          const q = command.q.toLowerCase();
-          next = { ...table, rows: table.rows.filter((row) => row.some((v) => cellText(v).toLowerCase().includes(q))) };
-        } else {
-          const missing = command.columns.filter((c) => !table.columns.includes(c));
-          if (missing.length) return text("error", t("shell.unknownColumns", { columns: missing.join(", "), available: table.columns.join(", ") }));
-          const keep = command.hide ? table.columns.filter((c) => !command.columns.includes(c)) : command.columns;
-          const at = keep.map((c) => table.columns.indexOf(c));
-          next = { ...table, columns: keep, rows: table.rows.map((row) => at.map((j) => row[j])), code: table.code?.map((j) => at.indexOf(j)).filter((j) => j >= 0) };
-        }
+        const next = reshapeTable(table, command);
+        if ("missing" in next) return text("error", t("shell.unknownColumns", { columns: next.missing.join(", "), available: table.columns.join(", ") }));
         remember(next);
         return print({ kind: "table", expanded: source.expanded, table: next, footer: t("shell.filtered", { shown: next.rows.length, count: table.rows.length }) });
       }
@@ -1234,7 +984,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       }
       case "call": {
         if (!tab.session.env) return text("error", t("shell.connectHint"));
-        const pending: Pending = { call: command.call, display: command.display, filter: command.filter, page: command.page, env: tab.session.env };
+        const pending: Confirmation = { call: command.call, display: command.display, filter: command.filter, page: command.page, env: tab.session.env };
         return run(pending, false);
       }
     }
@@ -1259,15 +1009,17 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     fieldLoads.current.add(key);
     void load({ fields: model }).catch(() => fieldLoads.current.delete(key));
   };
+  /** Model names for completion, once per environment. */
+  async function loadModels(envId: string) {
+    const r = await shell({ environment_id: envId, model: "ir.model", method: "search_read", args: [], kwargs: { fields: ["model"], limit: 5000 } });
+    update((s) => ({ ...s, models: { ...s.models, [envId]: (r.data as { model: string }[]).map((m) => m.model).sort() } }));
+  }
   /** Load missing models or fields; report whether loading was needed. */
   async function load(needs: NonNullable<Completion["needs"]>) {
     const env = tab.session.env;
     if (!env) return;
-    if ("models" in needs) {
-      const r = await shell({ environment_id: env.id, model: "ir.model", method: "search_read", args: [], kwargs: { fields: ["model"], limit: 5000 } });
-      const models = (r.data as { model: string }[]).map((m) => m.model).sort();
-      update((s) => ({ ...s, models: { ...s.models, [env.id]: models } }));
-    } else {
+    if ("models" in needs) await loadModels(env.id);
+    else {
       const r = await shell({ environment_id: env.id, model: needs.fields, method: "fields_get", args: [], kwargs: { attributes: ["string", "type", "selection", "relation"] } });
       const fields = Object.entries(r.data as Record<string, { string: string; type: string; relation?: string | false; selection?: [string, string][] }>)
         .map(([name, f]) => ({ name, label: f.string, type: f.type, ...(f.relation ? { relation: f.relation } : {}), ...(Array.isArray(f.selection) ? { selection: f.selection } : {}) }))
@@ -1288,6 +1040,8 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     let found = completions(value, context());
     if (found?.needs) {
       try { await load(found.needs); } catch { return text("error", t("shell.suggestionsError")); }
+      // The line changed (or ran) while the names loaded: completing the old text would bring it back.
+      if (field.current?.value !== value) return;
       found = completions(value, context(tab.session));
     }
     if (!found || !found.items.length) { setMenu(null); return; }
@@ -1354,7 +1108,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); update((s) => ({ ...s, entries: [] })); return; }
     if ((event.ctrlKey && event.key.toLowerCase() === "c" && !window.getSelection()?.toString()) || event.key === "Escape") {
       event.preventDefault();
-      if (confirming) { setConfirming(null); text("info", t("shell.cancelled")); }
+      if (confirming) { confirmingNow.current = null; setConfirming(null); text("info", t("shell.cancelled")); stopBatch(); }
       else if (input) { print({ kind: "input", prompt: prompt(), text: `${input}^C` }); setInput(""); }
       return;
     }
@@ -1395,6 +1149,38 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   const connectingLabel = retrying ? t("shell.retrying") : t("shell.connecting");
   const insert = (command: string) => { setInput(command); setHelp(false); requestAnimationFrame(() => { field.current?.focus(); field.current?.setSelectionRange(command.length, command.length); }); };
 
+  // The output's contexts and toggle stay the same object while typing, so finished entries (memo) do not render again.
+  // Their functions read the latest render's closures through this ref.
+  const latest = useRef({ rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, popOut: (_table: Table, _footer?: string) => {} });
+  latest.current = { rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, popOut: (table: Table, footer?: string) => {
+    // Named after the command that printed it (the input line above the table), then where it ran.
+    const at = tab.session.entries.findIndex((entry) => entry.kind === "table" && entry.table === table);
+    const source = tab.session.entries.slice(0, at).reverse().find((entry) => entry.kind === "input");
+    // "environment (database) - command"
+    const where = `${tabEnv?.name ?? tab.envName}${tabEnv ? ` (${tabEnv.database})` : ""}`;
+    const title = [where, source?.text ?? table.model].filter(Boolean).join(" - ");
+    // With the environment and session context, the window can repeat the read to add a column, and nothing more.
+    void ipc.openTableWindow({ table, footer, fields: table.model ? tableFields(table.model) : undefined, title, envId: tab.envId, context: tab.session.context }, title).catch(() => undefined);
+  } };
+  const aliasNames = useMemo(() => Object.keys(aliases), [aliases]);
+  const sessionActions = useMemo(() => ({
+    rerun: (command: string) => latest.current.rerun(command), fold: (id: number) => latest.current.fold(id), busy: busy || !!confirming, aliases: aliasNames,
+  }), [busy, confirming, aliasNames]);
+  // Field lists and the environment change what cells show: a new value then renders the tables again.
+  const cellActions = useMemo((): NonNullable<ContextType<typeof CellActions>> => ({
+    follow: (link, inOdoo) => void latest.current.follow(link, inOdoo), inspect: (title, value) => latest.current.inspect(title, value),
+    exportTable: (table, format) => void latest.current.exportTable(table, format), fields: (model) => latest.current.tableFields(model),
+    callCode: (call) => latest.current.tabEnv ? pythonCall(latest.current.tabEnv, call, tab.session.context) : null,
+    insert: (command) => latest.current.insert(command),
+    // The window gets the table with what describes it (field labels and types); it shares nothing else with the session.
+    popOut: (table, footer) => latest.current.popOut(table, footer), aliases: aliasNames,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [session.fields, tabEnv, aliasNames]);
+  const toggle = useCallback((id: number) => update((s) => ({
+    ...s, entries: s.entries.map((e) => e.id === id && e.kind === "table" ? { ...e, expanded: !e.expanded } : e),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })), []);
+
   return <div className="term" style={{ fontSize }} onKeyDown={onTermKey} onMouseUp={(event) => {
     if (!window.getSelection()?.toString() && !(event.target as HTMLElement).closest(".term-find, .term-scroll, .term-status, .term-help, .term-confirm")) field.current?.focus();
   }}>
@@ -1412,24 +1198,10 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={closeFind}><Icon name="x" /></button>
     </div>}
     <div className="term-out" ref={out} role="log" aria-live="polite" aria-label={t("shell.output")}>
-      <SessionActions.Provider value={{ rerun, fold, busy: busy || !!confirming, aliases: Object.keys(aliases) }}>
-        <CellActions.Provider value={{ follow: (link, inOdoo) => void follow(link, inOdoo), inspect, exportTable: (table, format) => void exportTable(table, format), fields: tableFields,
-          callCode: (call) => tabEnv ? pythonCall(tabEnv, call, tab.session.context) : null, insert,
-          // The window gets the table with what describes it (field labels and types); it shares nothing else with the session.
-          popOut: (table, footer) => {
-            // Named after the command that printed it (the input line above the table), then where it ran.
-            const at = tab.session.entries.findIndex((entry) => entry.kind === "table" && entry.table === table);
-            const source = tab.session.entries.slice(0, at).reverse().find((entry) => entry.kind === "input");
-            // "environment (database) - command"
-            const where = `${tabEnv?.name ?? tab.envName}${tabEnv ? ` (${tabEnv.database})` : ""}`;
-            const title = [where, source?.text ?? table.model].filter(Boolean).join(" - ");
-            // With the environment and session context, the window can repeat the read to add a column, and nothing more.
-            void ipc.openTableWindow({ table, footer, fields: table.model ? tableFields(table.model) : undefined, title, envId: tab.envId, context: tab.session.context }, title).catch(() => undefined);
-          } }}>
+      <SessionActions.Provider value={sessionActions}>
+        <CellActions.Provider value={cellActions}>
           {groups(visible(session.entries)).map((group) => <div key={group[0].entry.id} className="term-group" data-outcome={outcomeOf(group.map(({ entry }) => entry))}>
-            {group.map(({ entry, hidden }) => <Line key={entry.id} entry={entry} hidden={hidden} onToggle={() => update((s) => ({
-              ...s, entries: s.entries.map((e) => e.id === entry.id && e.kind === "table" ? { ...e, expanded: !e.expanded } : e),
-            }))} />)}
+            {group.map(({ entry, hidden }) => <Line key={entry.id} entry={entry} hidden={hidden} onToggle={toggle} />)}
           </div>)}
         </CellActions.Provider>
       </SessionActions.Provider>
@@ -1534,26 +1306,14 @@ const MENU_SEARCH_FROM = 8;
 /** Environments for a new session; arrows move, Enter opens the first match, Escape and outside clicks close. */
 function EnvironmentMenu({ envs, at, choose, close }: { envs: Environment[]; at: { left: number; top: number }; choose: (env: Environment) => void; close: () => void }) {
   const { t } = useTranslation();
-  const ref = useRef<HTMLDivElement>(null);
   const searchable = envs.length > MENU_SEARCH_FROM;
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const shown = envs.filter((env) => !q || [env.name, hostOf(env.url), env.database, ...env.tags].some((value) => value.toLowerCase().includes(q)));
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("input, [role=menuitem]")?.focus();
-    // The "+" button toggles the menu itself.
-    const outside = (event: Event) => { if (!ref.current?.contains(event.target as Node) && !(event.target as Element).closest?.("[aria-haspopup=menu]")) close(); };
-    window.addEventListener("pointerdown", outside, true);
-    window.addEventListener("blur", close);
-    return () => { window.removeEventListener("pointerdown", outside, true); window.removeEventListener("blur", close); };
-  }, [close]);
-  return <div ref={ref} className="more-menu-list floating shell-env-menu" role="menu" aria-label={t("shell.newSession")} style={at}
-    onKeyDown={(event) => {
-      const items = [...ref.current!.querySelectorAll<HTMLElement>("[role=menuitem]")];
-      const index = items.indexOf(document.activeElement as HTMLElement);
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
-      else if (event.key === "Enter" && index < 0 && shown[0]) { event.preventDefault(); choose(shown[0]); }
-      else cycleFocus(event, items);
+  return <FloatingMenu at={at} label={t("shell.newSession")} className="more-menu-list floating shell-env-menu" close={close}
+    onKey={(event) => {
+      // Enter in the search box opens the first match.
+      if (event.key === "Enter" && (event.target as Element).matches("input") && shown[0]) { event.preventDefault(); choose(shown[0]); }
     }}>
     {searchable && <label className="search shell-env-search"><Icon name="search" />
       <input type="search" value={query} placeholder={t("shell.findEnvironment")} aria-label={t("shell.findEnvironment")} spellCheck={false} onChange={(e) => setQuery(e.target.value)} /></label>}
@@ -1563,35 +1323,7 @@ function EnvironmentMenu({ envs, at, choose, close }: { envs: Environment[]; at:
       </button>)}
       {!shown.length && <p className="hint shell-env-empty">{t("shell.noMatches")}</p>}
     </div>
-  </div>;
-}
-
-/** ArrowDown and ArrowUp move the focus through `items`, round. */
-function cycleFocus(event: KeyboardEvent, items: HTMLElement[]) {
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-  event.preventDefault();
-  const index = items.indexOf(document.activeElement as HTMLElement);
-  items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
-}
-
-type MenuItem = { label: string; keys?: string; disabled?: boolean; run: () => void } | null;
-/** A tab's right-click menu; `null` items are separators. Arrows move, Escape or a press outside closes it. */
-function TabMenu({ at, label, items, close }: { at: { left: number; top: number }; label: string; items: MenuItem[]; close: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(true, () => ref.current, close);
-  // Focus the first item and keep the menu inside the window.
-  useLayoutEffect(() => {
-    placeInWindow(ref.current!, at.left, at.top);
-    ref.current!.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus();
-  }, [at]);
-  return <div ref={ref} className="context-menu" role="menu" aria-label={label} style={at} onKeyDown={(event) => {
-    if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); event.stopPropagation(); close(); }
-    else cycleFocus(event, [...ref.current!.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)")]);
-  }}>
-    {items.map((item, i) => item ? <button key={item.label} type="button" role="menuitem" disabled={item.disabled} onClick={() => { close(); item.run(); }}>
-      <span>{item.label}</span>{item.keys && <kbd>{item.keys}</kbd>}
-    </button> : <hr key={i} />)}
-  </div>;
+  </FloatingMenu>;
 }
 
 /** `\?` as sections of commands; picking one types its first word, ready for arguments. Parsed from the translated
@@ -1627,7 +1359,7 @@ function HelpPanel({ insert, close }: { insert: (command: string) => void; close
 }
 
 /** What a write will change, shown while the prompt asks to confirm it: the same view as Approvals. */
-function WritePreview({ pending, answer }: { pending: Pending; answer: (yes: boolean) => void }) {
+function WritePreview({ pending, answer }: { pending: Confirmation; answer: (yes: boolean) => void }) {
   const { t } = useTranslation();
   const { call, env } = pending;
   const ids = recordIds(call);
@@ -1645,32 +1377,10 @@ function WritePreview({ pending, answer }: { pending: Pending; answer: (yes: boo
   </section>;
 }
 
-function connectionProblem(problem: ConnectionErrorPresentation | AppError): string {
-  if ("code" in problem) return formatAppError(problem);
-  return i18n.t("shell.connectionError", { name: problem.name, reason: i18n.t(problem.reason === "credential" ? "shell.credentialRejected" : "shell.offline"), error: problem.detail ? ` (${formatAppError(problem.detail)})` : "" });
-}
-
-/** An entry as an agent reads it: text as shown, errors in words, tables as columns and (capped) rows. */
-function plainEntry(entry: Entry): unknown {
-  if (entry.kind === "table") return { columns: entry.table.columns, rows: entry.table.rows.slice(0, 200), total_rows: entry.table.rows.length, model: entry.table.model, footer: entry.footer };
-  if (entry.kind === "input") return { kind: "input", text: entry.text };
-  const text = entry.connectionError ? connectionProblem(entry.connectionError) : entry.appError ? formatAppError(entry.appError) : entry.translationKey ? i18n.t(entry.translationKey) : entry.text;
-  return { kind: entry.kind, text };
-}
-
-/** A command block's mark in the margin: errors first, then writes (and their confirmations), then plain reads. */
-function outcomeOf(entries: Entry[]): "error" | "write" | "read" | undefined {
-  const [first] = entries;
-  if (first?.kind !== "input" || !first.text.trim()) return undefined;
-  if (entries.some((entry) => entry.kind === "error")) return "error";
-  const verb = first.text.trim().split(/\s+/)[0];
-  // A confirmation answer is its own block, under the write's question.
-  return ["create", "write", "unlink"].includes(verb) || first.prompt.endsWith("]") ? "write" : "read";
-}
 
 const SessionActions = createContext<{ busy: boolean; rerun: (command: string) => void; fold: (id: number) => void; aliases: string[] } | null>(null);
 
-function Line({ entry, hidden, onToggle }: { entry: Entry; hidden?: number; onToggle: () => void }): ReactNode {
+const Line = memo(function Line({ entry, hidden, onToggle }: { entry: Entry; hidden?: number; onToggle: (id: number) => void }): ReactNode {
   const { t } = useTranslation();
   const actions = useContext(SessionActions);
   if (entry.kind === "input") return <div className="term-line term-cmd">{entry.agent && <span className="term-agent" data-tip={t("shell.ranBy", { name: entry.agent })}>{entry.agent}</span>}<span className="term-prompt">{entry.prompt}</span> {highlight(entry.text, actions?.aliases)}
@@ -1685,217 +1395,9 @@ function Line({ entry, hidden, onToggle }: { entry: Entry; hidden?: number; onTo
   if (entry.kind !== "table") return <div className={`term-line ${entry.kind}`}>{entry.connectionError
     ? connectionProblem(entry.connectionError)
     : entry.appError ? <ErrorText error={entry.appError} /> : entry.translationKey ? t(entry.translationKey) : entry.text}</div>;
-  return <TableBlock table={entry.table} expanded={entry.expanded} footer={entry.footer} onToggle={onToggle} />;
-}
+  return <TableBlock table={entry.table} expanded={entry.expanded} footer={entry.footer} onToggle={() => onToggle(entry.id)} />;
+});
 
-/** Many2one values sort by name; empty values go last in both directions. */
-function compareCells(a: unknown, b: unknown): number {
-  const key = (v: unknown) => Array.isArray(v) && v.length === 2 && typeof v[0] === "number" && typeof v[1] === "string" ? v[1] : v;
-  const x = key(a);
-  const y = key(b);
-  if (typeof x === "number" && typeof y === "number") return x - y;
-  return cellText(x).localeCompare(cellText(y), undefined, { numeric: true, sensitivity: "base" });
-}
-const empty = (v: unknown) => v === false || v === null || v === undefined || v === "";
-
-/** `bare`: only the table, for a window that brings its own controls. `headerEnd`: a control in the header's last cell,
- * kept at the right edge while scrolling sideways. */
-export function TableBlock({ table, expanded, footer, onToggle, bare, headerEnd }: { table: Table; expanded: boolean; footer?: string; onToggle: () => void; bare?: boolean; headerEnd?: ReactNode }) {
-  const { t } = useTranslation();
-  const actions = useContext(CellActions);
-  const aliases = useContext(SessionActions)?.aliases;
-  const [sort, setSort] = useState<{ column: number; desc: boolean } | null>(null);
-  const described = table.model ? actions?.fields(table.model) : undefined;
-  /** Label, type and relation of a technical column name, when the model's fields are known. */
-  const about = (column: string) => {
-    const field = described?.find((f) => f.name === column);
-    return field ? `${field.label}\n${field.type}${field.relation ? ` → ${field.relation}` : ""}` : undefined;
-  };
-  const [active, setActive] = useState<{ r: number; c: number } | null>(null);
-  // Cells, columns and rows are selected like a spreadsheet's, not their text: `anchor` is where a range starts.
-  const [selection, setSelection] = useState<{ cells: Set<string>; anchor: { r: number; c: number } } | null>(null);
-  const dragging = useRef(false);
-  // The cursor frame marks where the keys act: shown for a lone cell or while moving with the keyboard, not over a mouse selection.
-  const [keyboard, setKeyboard] = useState(false);
-  // A press anywhere outside the table lets go of its selection.
-  useDismiss(!!selection, () => scroller.current, () => setSelection(null));
-  const [copied, setCopied] = useState(false);
-  const scroller = useRef<HTMLDivElement>(null);
-  const rows = sort === null ? table.rows : [...table.rows].sort((a, b) => {
-    const [x, y] = [a[sort.column], b[sort.column]];
-    if (empty(x) || empty(y)) return Number(empty(x)) - Number(empty(y));
-    return sort.desc ? compareCells(y, x) : compareCells(x, y);
-  });
-  // A sum per numeric column (record ids aside), over the rows shown: \grep filters first. Empty values count as nothing.
-  const totals = rows.length > 1 ? table.columns.map((column, j) => {
-    if (column === "id" || !rows.every((row) => row[j] === null || row[j] === false || typeof row[j] === "number")) return null;
-    const values = rows.map((row) => row[j]).filter((value): value is number => typeof value === "number");
-    return values.length ? { sum: values.reduce((a, b) => a + b, 0), count: values.length } : null;
-  }) : null;
-  const totalsShown = totals?.some(Boolean) ? totals : null;
-  const record = (row: unknown[]) => Object.fromEntries(table.columns.map((c, j) => [c, row[j]]));
-  // Ascending, descending, then back to the original order.
-  const cycle = (column: number) => setSort(sort?.column !== column ? { column, desc: false } : sort.desc ? null : { column, desc: true });
-  // The id column stays visible while scrolling sideways.
-  const pinned = table.columns[0] === "id" || table.columns[0] === "#";
-  const cellKey = (r: number, c: number) => `${r}:${c}`;
-  const box = (a: { r: number; c: number }, b: { r: number; c: number }) => {
-    const cells = new Set<string>();
-    for (let r = Math.min(a.r, b.r); r <= Math.max(a.r, b.r); r++) for (let c = Math.min(a.c, b.c); c <= Math.max(a.c, b.c); c++) cells.add(cellKey(r, c));
-    return cells;
-  };
-  const lastRow = rows.length - 1;
-  const lastColumn = table.columns.length - 1;
-  /** Shift extends from the anchor, Ctrl adds or removes, otherwise the target replaces the selection. */
-  const choose = (target: Set<string>, anchor: { r: number; c: number }, end: { r: number; c: number }, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
-    if (event.shiftKey && selection) return setSelection({ ...selection, cells: box(selection.anchor, end) });
-    if ((event.ctrlKey || event.metaKey) && selection) {
-      const cells = new Set(selection.cells);
-      const all = [...target].every((key) => cells.has(key));
-      for (const key of target) { if (all) cells.delete(key); else cells.add(key); }
-      return setSelection({ cells, anchor });
-    }
-    setSelection({ cells: target, anchor });
-  };
-  const selectCell = (r: number, c: number, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => { setActive({ r, c }); choose(new Set([cellKey(r, c)]), { r, c }, { r, c }, event); };
-  // Whole columns and rows: Shift runs from the anchor's column (or row) to this one, across the table.
-  const selectColumn = (c: number, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
-    if (event.shiftKey && selection) return setSelection({ ...selection, cells: box({ r: 0, c: selection.anchor.c }, { r: lastRow, c }) });
-    choose(box({ r: 0, c }, { r: lastRow, c }), { r: 0, c }, { r: lastRow, c }, event);
-  };
-  const selectRow = (r: number, event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
-    if (event.shiftKey && selection) return setSelection({ ...selection, cells: box({ r: selection.anchor.r, c: 0 }, { r, c: lastColumn }) });
-    choose(box({ r, c: 0 }, { r, c: lastColumn }), { r, c: 0 }, { r, c: lastColumn }, event);
-  };
-  /** Outline the selected blocks like a spreadsheet: a side gets a line where the neighbour is not selected. */
-  const edgesOf = (r: number, c: number) => {
-    const has = (row: number, column: number) => !!selection?.cells.has(cellKey(row, column));
-    if (!has(r, c)) return undefined;
-    const line = "var(--accent)";
-    return [!has(r - 1, c) && `inset 0 1px 0 ${line}`, !has(r, c + 1) && `inset -1px 0 0 ${line}`, !has(r + 1, c) && `inset 0 -1px 0 ${line}`, !has(r, c - 1) && `inset 1px 0 0 ${line}`]
-      .filter(Boolean).join(", ") || undefined;
-  };
-  const selectedColumn = (c: number) => !!selection && rows.length > 0 && rows.every((_, r) => selection.cells.has(cellKey(r, c)));
-  const selectedRow = (r: number) => !!selection && table.columns.every((_, c) => selection.cells.has(cellKey(r, c)));
-  /** One cell copies as its value; more copy as TSV with the headers of their columns, blanks where a row skips one. */
-  const selectionText = () => {
-    const keys = selection?.cells.size ? [...selection.cells].map((key) => key.split(":").map(Number)) : active ? [[active.r, active.c]] : [];
-    if (keys.length === 1) return cellText(rows[keys[0][0]][keys[0][1]]);
-    const clean = (text: string) => text.replace(/[\t\n\r]/g, " ");
-    const used = (index: 0 | 1) => [...new Set(keys.map((key) => key[index]))].sort((a, b) => a - b);
-    const columns = used(1);
-    return [columns.map((c) => clean(table.columns[c])).join("\t"),
-      ...used(0).map((r) => columns.map((c) => selection!.cells.has(cellKey(r, c)) ? clean(cellText(rows[r][c])) : "").join("\t"))].join("\n");
-  };
-  const copySelection = () => void navigator.clipboard.writeText(selectionText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }).catch(() => undefined);
-  useEffect(() => {
-    const stop = () => { dragging.current = false; };
-    window.addEventListener("mouseup", stop);
-    return () => window.removeEventListener("mouseup", stop);
-  }, []);
-  useLayoutEffect(() => {
-    if (active) scroller.current?.querySelector(`[data-cell="${active.r}:${active.c}"]`)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [active]);
-
-  function onKey(event: KeyboardEvent<HTMLDivElement>) {
-    if (expanded || !rows.length || event.altKey) return;
-    const at = active ?? { r: 0, c: 0 };
-    const last = { r: rows.length - 1, c: table.columns.length - 1 };
-    const move = (r: number, c: number) => {
-      event.preventDefault();
-      const to = { r: Math.max(0, Math.min(last.r, r)), c: Math.max(0, Math.min(last.c, c)) };
-      setActive(to);
-      setKeyboard(true);
-      // Shift+arrows grow the selection from its anchor; plain arrows move a one-cell selection.
-      setSelection(event.shiftKey && selection ? { ...selection, cells: box(selection.anchor, to) } : { cells: new Set([cellKey(to.r, to.c)]), anchor: to });
-    };
-    const ctrl = event.ctrlKey || event.metaKey;
-    if (ctrl && event.key.toLowerCase() === "a") { event.preventDefault(); setSelection({ cells: box({ r: 0, c: 0 }, last), anchor: { r: 0, c: 0 } }); return; }
-    switch (event.key) {
-      case "ArrowUp": if (!ctrl) move(at.r - 1, at.c); return;
-      case "ArrowDown": if (!ctrl) move(at.r + 1, at.c); return;
-      case "ArrowLeft": return move(at.r, at.c - 1);
-      case "ArrowRight": return move(at.r, at.c + 1);
-      case "Home": return ctrl ? move(0, 0) : move(at.r, 0);
-      case "End": return ctrl ? move(last.r, last.c) : move(at.r, last.c);
-      case "PageUp": return move(at.r - 10, at.c);
-      case "PageDown": return move(at.r + 10, at.c);
-      case "Enter": {
-        event.preventDefault();
-        const td = scroller.current?.querySelector(`[data-cell="${at.r}:${at.c}"]`);
-        const button = td?.querySelector("button");
-        if (button) button.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, ctrlKey: ctrl }));
-        else actions?.inspect?.(`${table.model ? `${table.model} · ` : ""}${table.columns[at.c]}`, rows[at.r][at.c]);
-        return;
-      }
-    }
-    if (event.key.toLowerCase() === "c" && !event.shiftKey) {
-      event.preventDefault();
-      copySelection();
-    }
-  }
-
-  return <div className="term-block">
-    <div className="term-scroll" ref={scroller} tabIndex={expanded ? undefined : 0} data-pinned={pinned || undefined}
-      aria-label={t("shell.tableNavigation")} onKeyDown={onKey}
-      onFocus={() => { if (!active) setActive({ r: 0, c: 0 }); }}
-      onMouseDown={(event) => {
-        if (event.button !== 0 || expanded) return;
-        const cell = (event.target as HTMLElement).closest<HTMLElement>("[data-cell]")?.dataset.cell;
-        if (!cell) return;
-        const [r, c] = cell.split(":").map(Number);
-        selectCell(r, c, event);
-        setKeyboard(false);
-        dragging.current = !event.shiftKey && !event.ctrlKey && !event.metaKey;
-      }}
-      onMouseOver={(event) => {
-        if (!dragging.current || !selection) return;
-        const cell = (event.target as HTMLElement).closest<HTMLElement>("[data-cell]")?.dataset.cell;
-        if (cell) { const [r, c] = cell.split(":").map(Number); setSelection({ ...selection, cells: box(selection.anchor, { r, c }) }); }
-      }}>
-      {expanded ? rows.map((row, i) => { const values = record(row); return <table key={i} className="term-table expanded"><tbody>
-        <tr><th colSpan={2}>{t("shell.record", { index: i + 1 })}</th></tr>
-        {table.columns.map((c, j) => <tr key={c}><th data-tip={about(c)}>{c}</th><Cell value={row[j]} column={c} model={table.model} row={values} /></tr>)}
-      </tbody></table>; })
-        : <table className="term-table" data-copied={copied || undefined}><thead><tr>
-          <th className="term-row-head" aria-label={t("shell.selectAll")} data-tip={t("shell.selectAll")} onMouseDown={(event) => { event.preventDefault(); setSelection({ cells: box({ r: 0, c: 0 }, { r: lastRow, c: lastColumn }), anchor: { r: 0, c: 0 } }); }} />
-          {table.columns.map((c, j) => <th key={c} className={pinned && j === 0 ? "pin" : undefined} data-selected={selectedColumn(j) || undefined} data-tip={about(c)}
-            aria-sort={sort?.column === j ? (sort.desc ? "descending" : "ascending") : undefined}
-            onMouseDown={(event) => { if (event.button !== 0 || (event.target as HTMLElement).closest(".term-sort")) return; event.preventDefault(); selectColumn(j, event); }}>
-          <span className="term-column">{c}</span>
-          <button type="button" className="term-sort" tabIndex={-1} aria-label={t("shell.sortBy", { column: c })} onClick={() => cycle(j)}>
-            <Icon name={sort?.column === j && sort.desc ? "caretDown" : "caretUp"} className={sort?.column === j ? "on" : undefined} />
-          </button>
-        </th>)}{headerEnd && <th className="term-header-end">{headerEnd}</th>}</tr></thead>
-          <tbody>{rows.map((row, i) => { const values = record(row); return <tr key={i}>
-            <td className="term-row-head" data-selected={selectedRow(i) || undefined} onMouseDown={(event) => { if (event.button !== 0) return; event.preventDefault(); selectRow(i, event); }}>{i + 1}</td>
-            {row.map((v, j) => {
-            const pos = `${i}:${j}`;
-            const on = active?.r === i && active.c === j && (keyboard || (selection?.cells.size ?? 0) <= 1);
-            const selected = selection?.cells.has(pos);
-            const edges = edgesOf(i, j);
-            return table.code?.includes(j)
-              ? <td key={j} data-cell={pos} data-active={on || undefined} data-selected={selected || undefined} style={edges ? { boxShadow: edges } : undefined}>{actions?.insert
-                ? <button type="button" className="term-link term-command" tabIndex={-1} data-tip={t("shell.editCommand")} onDoubleClick={() => actions.insert?.(String(v))}>{highlight(String(v), aliases)}</button>
-                : highlight(String(v), aliases)}</td>
-              : <Cell key={j} value={v} column={table.columns[j]} model={table.model} row={values} pos={pos} active={on} selected={selected} edges={edges} pin={pinned && j === 0} />;
-          })}{headerEnd && <td className="term-header-end" />}</tr>; })}</tbody>
-          {totalsShown && <tfoot><tr><td className="term-row-head" aria-label={t("shell.total")}>Σ</td>{totalsShown.map((total, j) => <td key={j} className={[pinned && j === 0 && "pin", total && "num"].filter(Boolean).join(" ") || undefined}>
-            {total && <span data-tip={t("shell.average", { value: formatNumber(total.sum / total.count, { maximumFractionDigits: 2 }) })}>{formatNumber(total.sum, { maximumFractionDigits: 2 })}</span>}
-          </td>)}{headerEnd && <td className="term-header-end" />}</tr></tfoot>}
-        </table>}
-    </div>
-    {!bare && <div className="term-foot">
-      <span className="term-foot-info">{footer ? `(${footer})` : ""}{copied ? ` · ${t("common.copied")}` : ""}</span>
-      <span className="term-foot-actions">
-        <button type="button" className="term-copy" aria-label={t(expanded ? "shell.collapseTable" : "shell.expandTable")} data-tip={t(expanded ? "shell.collapseTable" : "shell.expandTable")}
-          aria-pressed={expanded} onClick={onToggle}><Icon name={expanded ? "table" : "rows"} /></button>
-        {actions?.popOut && <button type="button" className="term-copy" aria-label={t("shell.openInWindow")} data-tip={t("shell.openInWindow")} onClick={() => actions.popOut?.(table, footer)}><Icon name="external" /></button>}
-        <CopyTable table={{ ...table, rows }} />
-      </span>
-    </div>}
-  </div>;
-}
 
 /** Elapsed time of the call in progress. */
 function Running({ since }: { since: number }) {
@@ -1908,57 +1410,7 @@ function Running({ since }: { since: number }) {
   </div>;
 }
 
-export const toTsv = (table: Table) => [table.columns, ...table.rows.map((row) => row.map(cellText))]
-  .map((cells) => cells.map((c) => String(c).replace(/[\t\n\r]/g, " ")).join("\t"))
-  .join("\n");
-/** Raw values keyed by column, as Odoo returned them. */
-export const toJson = (table: Table) => JSON.stringify(table.rows.map((row) => Object.fromEntries(table.columns.map((c, j) => [c, row[j] ?? null]))), null, 2);
-export const toMarkdown = (table: Table) => {
-  const line = (cells: string[]) => `| ${cells.map((c) => c.replace(/\|/g, "\\|").replace(/[\n\r]+/g, " ")).join(" | ")} |`;
-  return [line(table.columns), line(table.columns.map(() => "---")), ...table.rows.map((row) => line(row.map(cellText)))].join("\n");
-};
-/** RFC 4180 with a BOM so spreadsheets detect UTF-8. Odoo data can come from outside (web forms), so values
- * that a spreadsheet would run as a formula get a leading apostrophe. */
-const csvCell = (value: string) => {
-  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-};
-export const toCsv = (table: Table) => "\uFEFF" + [table.columns, ...table.rows.map((row) => row.map(cellText))]
-  .map((cells) => cells.map(csvCell).join(","))
-  .join("\r\n");
 
-/** TSV for spreadsheets one click away; other formats behind a small menu. */
-function CopyTable({ table }: { table: Table }) {
-  const { t } = useTranslation();
-  const actions = useContext(CellActions);
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<string | null>(null);
-  const menu = useRef<HTMLSpanElement>(null);
-  // Not on blur: the terminal refocuses its editor on mouseup, which would unmount the menu before the click.
-  useDismiss(open, () => menu.current, () => setOpen(false));
-  const code = table.call ? actions?.callCode?.(table.call) : null;
-  const copy = (label: string, text: string) => {
-    void navigator.clipboard.writeText(text).then(() => { setCopied(label); setTimeout(() => setCopied(null), 1500); }).catch(() => undefined);
-    setOpen(false);
-  };
-  return <>
-    <CopyButton text={() => toTsv(table)} className="term-copy" tip={t("shell.copyTsvTip")} ariaLabel={t("shell.copyTsvLabel")} label="TSV" />
-    <span className="term-table-menu" ref={menu} onMouseDown={(e) => e.preventDefault()}
-      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
-      <button type="button" className="term-copy" aria-haspopup="menu" aria-expanded={open} aria-label={t("shell.moreTableActions")} data-tip={copied ? t("shell.copiedAs", { format: copied }) : t("shell.moreTableActions")}
-        onClick={() => setOpen(!open)}>{copied ? <Icon name="check" /> : "⋯"}</button>
-      {open && <div className="term-menu term-table-actions" role="menu">
-        <button type="button" role="menuitem" onClick={() => copy("JSON", toJson(table))}>{t("shell.copyAs", { format: "JSON" })}</button>
-        <button type="button" role="menuitem" onClick={() => copy("Markdown", toMarkdown(table))}>{t("shell.copyAs", { format: "Markdown" })}</button>
-        {code && <button type="button" role="menuitem" onClick={() => copy("Python", code)}>{t("shell.copyAs", { format: "Python" })}</button>}
-        {actions?.exportTable && <>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); actions.exportTable?.(table, "csv"); }}>{t("shell.saveAs", { format: "CSV" })}</button>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); actions.exportTable?.(table, "json"); }}>{t("shell.saveAs", { format: "JSON" })}</button>
-        </>}
-      </div>}
-    </span>
-  </>;
-}
 
 /** Odoo's own message comes first; long messages fold their tail. */
 function ErrorText({ error }: { error: AppError }) {

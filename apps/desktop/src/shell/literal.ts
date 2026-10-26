@@ -49,7 +49,8 @@ export function parseLiteral(text: string): unknown {
       pos++;
       const k = String(key);
       if (Object.prototype.hasOwnProperty.call(out, k)) fail(i18n.t("shell.literal.duplicateKey", { key: k }));
-      out[k] = value();
+      // An own property even for "__proto__": plain assignment would set the prototype and drop the key.
+      Object.defineProperty(out, k, { value: value(), enumerable: true, writable: true, configurable: true });
       ws();
       if (peek() === ",") { pos++; ws(); if (peek() === "}") { pos++; return out; } continue; }
       if (peek() === "}") { pos++; return out; }
@@ -81,7 +82,8 @@ export function parseLiteral(text: string): unknown {
     const m = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(text.slice(pos));
     if (!m) return fail(i18n.t("shell.literal.invalidNumber"));
     const n = Number(m[0]);
-    if (!Number.isFinite(n)) fail(i18n.t("shell.literal.invalidNumber"));
+    // Python 3 rejects 010 (it is not octal 8 nor decimal 10); 0, 00, 0.5 and 010.5 stay valid.
+    if (!Number.isFinite(n) || /^[+-]?0+[1-9]\d*$/.test(m[0])) fail(i18n.t("shell.literal.invalidNumber"));
     pos += m[0].length;
     if (Number.isInteger(n) && !Number.isSafeInteger(n)) fail(i18n.t("shell.literal.integerRange"));
     return n;

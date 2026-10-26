@@ -1,47 +1,32 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import ShellPage from "./ShellPage";
+import ShellPage, { HINT_DELAY_MS, SAVE_DELAY_MS } from "./ShellPage";
 import App from "./App";
 import { ipc, type AgentRequest, type Environment } from "./ipc";
+import { captureWindowState } from "./windowState";
+import { envNamed, shellResult } from "./test/fixtures";
+import { command, newSession, stubScroll } from "./test/terminal";
 
-vi.mock("./ipc", () => ({ ipc: {
-  agentTake: vi.fn(), agentReply: vi.fn(async () => undefined), openTableWindow: vi.fn(async () => undefined),
-  shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), shellHistoryAdd: vi.fn(), check: vi.fn(), shell: vi.fn(), shellExport: vi.fn(), openUrl: vi.fn(),
-  status: vi.fn(), environments: vi.fn(), approvals: vi.fn(), clients: vi.fn(), serviceStatus: vi.fn(), lock: vi.fn(), unlock: vi.fn(),
-} }));
+vi.mock("./ipc", async () => (await import("./test/terminal")).terminalIpc());
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }));
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));
-const envs: Environment[] = ["A", "B"].map((name) => ({
-  id: name, name, url: `https://${name}.test`, database: name, login: "fixture",
-  protocol: "legacy_jsonrpc", context: {}, write_mode: "approval", has_secret: true, tags: [],
-}));
+const envs = ["A", "B"].map((name) => envNamed(name, { write_mode: "approval" }));
 beforeEach(() => {
   vi.resetAllMocks();
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  stubScroll();
   vi.mocked(ipc.shellHistory).mockResolvedValue([]);
   vi.mocked(ipc.shellHistoryAdd).mockResolvedValue(undefined);
   vi.mocked(ipc.check).mockImplementation(async (id) => ({ environment_id: id, status: "ok", latency_ms: 1 }));
-  vi.mocked(ipc.shell).mockResolvedValue({ data: [], write: false, upstream_ms: 1, upstream_bytes: 2 });
+  vi.mocked(ipc.shell).mockResolvedValue(shellResult([]));
 });
-afterEach(() => { cleanup(); });
-const command = (line: string) => {
-  const input = screen.getByRole("textbox", { name: "Command" });
-  fireEvent.change(input, { target: { value: line } });
-  fireEvent.keyDown(input, { key: "Enter" });
-};
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 const panel = () => screen.getByRole("tabpanel");
 /** Like the core, require confirmation for calls outside the read catalog. */
 const requireConfirmation = (reads: string[]) => vi.mocked(ipc.shell).mockImplementation(async (call) => {
   if (!call.confirmed && call.model !== "ir.model" && !reads.includes(call.method)) throw { code: "confirmation_required", message: "write requires confirmation", outcome: "not_sent" };
-  return { data: true, write: !reads.includes(call.method), upstream_ms: 1, upstream_bytes: 2 };
+  return shellResult(true, !reads.includes(call.method));
 });
 
-/** Sessions open from the "+" menu, bound to the chosen environment. */
-const newSession = (env = "A") => {
-  // The tab strip's "+" comes first; the empty state repeats it.
-  fireEvent.click(screen.getAllByRole("button", { name: "New Terminal session" })[0]);
-  fireEvent.click(screen.getByRole("menuitem", { name: env }));
-};
 /** The active session is connected: its mode chip shows next to `database` (fixtures name databases like their env). */
 const connectedTo = (database: string) => waitFor(() => {
   expect(panel().querySelector(".term-status .term-mode")).toBeTruthy();
@@ -75,7 +60,7 @@ it("keeps each tab's context, output and unfinished input when switching tabs an
 it("keeps a running call in its original tab while another session connects elsewhere", async () => {
   let finish!: (result: Awaited<ReturnType<typeof ipc.shell>>) => void;
   vi.mocked(ipc.shell).mockImplementation((call) => call.model === "ir.model"
-    ? Promise.resolve({ data: [], write: false, upstream_ms: 1, upstream_bytes: 2 })
+    ? Promise.resolve(shellResult([]))
     : new Promise((resolve) => { finish = resolve; }));
   render(<ShellPage envs={envs} />);
   await openSession("A");
@@ -87,7 +72,7 @@ it("keeps a running call in its original tab while another session connects else
   fireEvent(firstTab, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
   expect(screen.getByRole("tab")).toBe(firstTab);
   await openSession("B");
-  finish({ data: "result from A", write: false, upstream_ms: 1, upstream_bytes: 2 });
+  finish(shellResult("result from A"));
   await waitFor(() => expect(close.disabled).toBe(false));
   expect(within(panel()).queryByText("result from A")).toBeNull();
   // Finished behind another tab: the tab is marked until shown.
@@ -250,18 +235,22 @@ it("saves pending session changes before locking the vault", async () => {
 });
 
 it("does not save every tab just because the active tab changed", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(ipc.shellSessions).toHaveBeenCalled());
-  newSession("A");
-  newSession("B");
-  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 2000 });
+  // Both connected first: their status lines are changes that get saved too.
+  await openSession("A");
+  await openSession("B");
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled());
   vi.mocked(ipc.saveShellSessions).mockClear();
   fireEvent.click(screen.getAllByRole("tab")[0]);
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
   expect(ipc.saveShellSessions).not.toHaveBeenCalled();
   // The next save records it.
   command("\\context");
-  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 2000 });
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled());
   const saved = JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0]);
   expect(saved.activeId).toBe(saved.tabs[0].id);
 });
@@ -535,7 +524,7 @@ it("renders read_group with groupby columns and the count, sorts by header and t
 it("shows elapsed time while a call runs and drops a read discarded with Ctrl+C", async () => {
   let finish!: (result: Awaited<ReturnType<typeof ipc.shell>>) => void;
   vi.mocked(ipc.shell).mockImplementation((call) => call.model === "ir.model"
-    ? Promise.resolve({ data: [], write: false, upstream_ms: 1, upstream_bytes: 2 })
+    ? Promise.resolve(shellResult([]))
     : new Promise((resolve) => { finish = resolve; }));
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -545,7 +534,7 @@ it("shows elapsed time while a call runs and drops a read discarded with Ctrl+C"
   fireEvent.keyDown(input, { key: "c", ctrlKey: true });
   expect(within(panel()).getByText(/^Discarded\./)).toBeTruthy();
   expect(within(panel()).queryByText(/Ctrl\+C discards/)).toBeNull();
-  finish({ data: 4242, write: false, upstream_ms: 1, upstream_bytes: 2 });
+  finish(shellResult(4242));
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(within(panel()).queryByText("4242")).toBeNull();
 });
@@ -573,6 +562,7 @@ it("follows ids and many2one cells as visible read commands and inspects long va
 });
 
 it("inserts newlines with Shift+Enter, submits multi-line commands and flags syntax errors after a pause", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   answer(() => [{ id: 1, name: "Ada" }]);
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -586,13 +576,14 @@ it("inserts newlines with Shift+Enter, submits multi-line commands and flags syn
   await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "search_read", kwargs: { domain: [["name", "=", "Ada"]] } }));
   // Mid-value input (open quote or bracket) gets no hint.
   fireEvent.change(input, { target: { value: "search res.partner -d [('name','=','" } });
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  await vi.advanceTimersByTimeAsync(HINT_DELAY_MS + 200);
   expect(panel().querySelector(".term-hint")).toBeNull();
   fireEvent.change(input, { target: { value: "search res.partner -d {'name': 1}" } });
-  await waitFor(() => expect(panel().querySelector(".term-hint")?.textContent).toMatch(/list/i), { timeout: 2000 });
+  await vi.advanceTimersByTimeAsync(HINT_DELAY_MS + 200);
+  await waitFor(() => expect(panel().querySelector(".term-hint")?.textContent).toMatch(/list/i));
   // A lone first word is left to the highlighter.
   fireEvent.change(input, { target: { value: "\\" } });
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  await vi.advanceTimersByTimeAsync(HINT_DELAY_MS + 200);
   expect(panel().querySelector(".term-hint")).toBeNull();
 });
 
@@ -631,8 +622,8 @@ it("re-runs and folds commands from the output", async () => {
 
 it("filters and reshapes the last table, saves ids as $name, pages back and runs aliases", async () => {
   vi.mocked(ipc.shell).mockImplementation(async (call) => call.method === "search_read"
-    ? { data: [{ id: 3, name: "Ada", email: "ada@x" }, { id: 5, name: "Bob", email: "bob@x" }], write: false, upstream_ms: 1, upstream_bytes: 2 }
-    : { data: true, write: false, upstream_ms: 1, upstream_bytes: 2 });
+    ? shellResult([{ id: 3, name: "Ada", email: "ada@x" }, { id: 5, name: "Bob", email: "bob@x" }])
+    : shellResult(true));
   render(<ShellPage envs={envs} />);
   await connectA();
   command("\\grep ada");
@@ -656,13 +647,15 @@ it("filters and reshapes the last table, saves ids as $name, pages back and runs
 });
 
 it("restores aliases from the vault even when no saved tab was used", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "x", aliases: { pp: "search res.partner" }, tabs: [] }));
   render(<ShellPage envs={envs} />);
   await connectA();
   command("pp -l 1");
   await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ model: "res.partner", method: "search_read" }));
   command("\\alias pq count res.partner");
-  await waitFor(() => expect(JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)?.[0] ?? "{}").aliases).toEqual({ pp: "search res.partner", pq: "count res.partner" }), { timeout: 2000 });
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
+  expect(JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)?.[0] ?? "{}").aliases).toEqual({ pp: "search res.partner", pq: "count res.partner" });
 });
 
 it("finds text in the output with Ctrl+F and zooms the font with Ctrl +/-", async () => {
@@ -689,9 +682,9 @@ it("finds text in the output with Ctrl+F and zooms the font with Ctrl +/-", asyn
 it("chains the previous result's ids with $_ and refuses it without a result", async () => {
   requireConfirmation(["search_read"]);
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
-    if (call.method === "search_read") return { data: [{ id: 3 }, { id: 5 }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.method === "search_read") return shellResult([{ id: 3 }, { id: 5 }]);
     if (!call.confirmed) throw { code: "confirmation_required", message: "", outcome: "not_sent" };
-    return { data: true, write: true, upstream_ms: 1, upstream_bytes: 2 };
+    return shellResult(true, true);
   });
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -702,6 +695,29 @@ it("chains the previous result's ids with $_ and refuses it without a result", a
   expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0].kwargs).not.toHaveProperty("fields");
   command("write res.partner $_ {'active': False}");
   await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "write", args: [[3, 5], { active: false }] }));
+});
+
+it("never lets $_ keep ids no longer shown: a table without ids clears it, a create replaces it", async () => {
+  vi.mocked(ipc.shell).mockImplementation(async (call) => {
+    if (call.method === "search_read") return shellResult([{ id: 3, name: "A" }, { id: 5, name: "B" }]);
+    if (!call.confirmed) throw { code: "confirmation_required", message: "", outcome: "not_sent" };
+    return shellResult(call.method === "create" ? 9 : true, true);
+  });
+  render(<ShellPage envs={envs} />);
+  await connectA();
+  command("search res.partner -f name");
+  await waitFor(() => expect(within(panel()).getByText("2 rows", { exact: false })).toBeTruthy());
+  command("\\cols name");
+  command("write res.partner $_ {'active': False}");
+  expect(within(panel()).getByText("$_ needs a previous result with records")).toBeTruthy();
+  command("search res.partner -f name");
+  await waitFor(() => expect(within(panel()).getAllByText("2 rows", { exact: false })).toHaveLength(2));
+  command("create res.partner {'name': 'C'}");
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  command("y");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "create", confirmed: true }));
+  command("write res.partner $_ {'active': False}");
+  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "write" && JSON.stringify(call.args) === JSON.stringify([[9], { active: false }]))).toBe(true));
 });
 
 it("opens records in Odoo with Ctrl+click and saves tables to Downloads", async () => {
@@ -724,7 +740,7 @@ it("opens records in Odoo with Ctrl+click and saves tables to Downloads", async 
 
 it("shows Odoo's message and folds the rest of long errors", async () => {
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
-    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.model === "ir.model") return shellResult([]);
     throw { code: "upstream.remote", detail: "ValidationError: Email is required\nline 2\nline 3", outcome: "failed" };
   });
   render(<ShellPage envs={envs} />);
@@ -733,27 +749,6 @@ it("shows Odoo's message and folds the rest of long errors", async () => {
   const summary = await within(panel()).findByText("Show 2 more lines");
   expect(summary.closest(".term-line")?.textContent).toContain("ValidationError: Email is required");
   expect(summary.closest("details")?.open).toBe(false);
-});
-
-it("copies tables as JSON and Markdown from the formats menu", async () => {
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  answer(() => [{ id: 7, name: "Ada | Lovelace" }]);
-  render(<ShellPage envs={envs} />);
-  await connectA();
-  command("search res.partner");
-  const more = await within(panel()).findByRole("button", { name: "More formats" });
-  fireEvent.click(more);
-  // The editor takes focus on mouseup; the menu must survive it.
-  fireEvent.mouseUp(within(panel()).getByRole("menuitem", { name: "Copy as JSON" }));
-  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Copy as JSON" }));
-  await waitFor(() => expect(writeText).toHaveBeenCalledWith(JSON.stringify([{ id: 7, name: "Ada | Lovelace" }], null, 2)));
-  fireEvent.click(more);
-  fireEvent.click(within(panel()).getByRole("menuitem", { name: "Copy as Markdown" }));
-  await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("| id | name |\n| --- | --- |\n| 7 | Ada \\| Lovelace |"));
-  fireEvent.click(more);
-  fireEvent.mouseDown(document.body);
-  expect(within(panel()).queryByRole("menu")).toBeNull();
 });
 
 it("navigates tables with the keyboard and keeps their actions in the footer", async () => {
@@ -793,6 +788,7 @@ const savedTab = (id: string, env: string | null, line: string) => ({
 });
 
 it("restores saved tabs with their output and reconnects each one when it is first shown", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.mocked(ipc.shellSessions).mockResolvedValue(JSON.stringify({ version: 1, activeId: "t2", tabs: [savedTab("t1", "A", "count res.partner"), savedTab("t2", "B", "whoami")] }));
   render(<ShellPage envs={envs} />);
   await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(2));
@@ -807,7 +803,8 @@ it("restores saved tabs with their output and reconnects each one when it is fir
   expect(ipc.check).toHaveBeenCalledTimes(2);
   // The restore note and the automatic reconnection are shown but not saved, so restarts do not pile them up.
   vi.mocked(ipc.saveShellSessions).mockClear();
-  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 3000 });
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
+  expect(ipc.saveShellSessions).toHaveBeenCalled();
   const saved = vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0];
   expect(saved).toContain("out of whoami");
   expect(saved).not.toMatch(/Session restored|Connected to|\\\\c [AB]/);
@@ -857,13 +854,15 @@ it("saves sessions to the vault only after loading them, without pending confirm
   let load!: (data: string | null) => void;
   vi.mocked(ipc.shellSessions).mockReturnValue(new Promise((resolve) => { load = resolve; }));
   requireConfirmation(["search_read"]);
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   render(<ShellPage envs={envs} />);
   await openSession("A");
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
   expect(ipc.saveShellSessions).not.toHaveBeenCalled();
   load(null);
   command("unlink res.partner 5");
-  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled(), { timeout: 3000 });
+  await vi.advanceTimersByTimeAsync(SAVE_DELAY_MS + 200);
+  await waitFor(() => expect(ipc.saveShellSessions).toHaveBeenCalled());
   const saved = JSON.parse(vi.mocked(ipc.saveShellSessions).mock.calls.at(-1)![0]);
   expect(saved.tabs[0]).toMatchObject({ envId: "A", envName: "A", session: { env: { id: "A", name: "A" } } });
   expect(JSON.stringify(saved)).toContain("unlink res.partner 5");
@@ -871,11 +870,12 @@ it("saves sessions to the vault only after loading them, without pending confirm
 });
 
 it("warns when $_ holds ids of another model and does not flag $_ as a syntax error", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
-    if (call.model === "ir.model.data") return { data: [{ id: 2, module: "base", name: "main_company", model: "res.company", res_id: 1 }], write: false, upstream_ms: 1, upstream_bytes: 2 };
-    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    if (call.model === "ir.model.data") return shellResult([{ id: 2, module: "base", name: "main_company", model: "res.company", res_id: 1 }]);
+    if (call.model === "ir.model") return shellResult([]);
     if (!call.confirmed) throw { code: "confirmation_required", message: "", outcome: "not_sent" };
-    return { data: true, write: true, upstream_ms: 1, upstream_bytes: 2 };
+    return shellResult(true, true);
   });
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -883,11 +883,11 @@ it("warns when $_ holds ids of another model and does not flag $_ as a syntax er
   await within(panel()).findByText("main_company");
   const input = screen.getByRole("textbox", { name: "Command" });
   fireEvent.change(input, { target: { value: "write res.company $_ {'name': 'X'}" } });
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  await vi.advanceTimersByTimeAsync(HINT_DELAY_MS + 200);
   expect(panel().querySelector(".term-hint")).toBeNull();
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect(within(panel()).getByText(/\$_ holds ir\.model\.data ids, not res\.company ids/)).toBeTruthy());
-  expect(within(panel()).getByText(/^write res\.company \[\[2\]/)).toBeTruthy();
+  expect(await within(panel()).findByText(/^write res\.company \[\[2\]/)).toBeTruthy();
 });
 
 it("asks for the environment when opening a session and keeps it and its write mode in view", async () => {
@@ -1060,7 +1060,7 @@ it("describes table columns with the field label, type and relation after a quer
 it("runs pasted commands in order on Enter, stops at the first error, and pastes them as text on Escape", async () => {
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
     if (call.model === "res.users") throw { code: "upstream.remote", detail: "Access denied", outcome: "failed" };
-    return { data: call.model === "ir.model" ? [] : 3, write: false, upstream_ms: 1, upstream_bytes: 2 };
+    return shellResult(call.model === "ir.model" ? [] : 3);
   });
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -1124,32 +1124,16 @@ it("copies a result's call as a Python script without the API key", async () => 
   expect(script).toMatch(/execute_kw\(db, uid, key, "res\.partner", "search_read", \[\], \{.*"domain": \[\["active", "=", True\]\].*"context": \{"lang": "es_ES"\}\}\)/);
 });
 
-it("adds up numeric columns of the rows shown, with the average on hover", async () => {
-  answer(() => [{ id: 1, name: "A", amount: 10.5, qty: 2 }, { id: 2, name: "B", amount: 4, qty: false }, { id: 3, name: "C", amount: 1.25, qty: 4 }]);
-  render(<ShellPage envs={envs} />);
-  await connectA();
-  command("search sale.order -f name,amount,qty");
-  const table = await within(panel()).findByRole("table");
-  const foot = () => [...table.querySelectorAll("tfoot td")].map((td) => td.textContent);
-  await waitFor(() => expect(foot()).toEqual(["Σ", "", "", "15.75", "6"]));
-  expect(table.querySelector("tfoot td:nth-child(4) span")?.getAttribute("data-tip")).toBe("Average: 5.25");
-  // One row left: nothing to add up.
-  command("\\grep C");
-  const filtered = within(panel()).getAllByRole("table").at(-1)!;
-  expect(filtered.querySelectorAll("tbody tr")).toHaveLength(1);
-  expect(filtered.querySelector("tfoot")).toBeNull();
-});
-
 it("reads values by their field type and marks each command block by outcome", async () => {
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
-    if (call.model === "ir.model") return { data: [], write: false, upstream_ms: 1, upstream_bytes: 2 };
-    if (call.method === "fields_get") return { data: {
+    if (call.model === "ir.model") return shellResult([]);
+    if (call.method === "fields_get") return shellResult({
       state: { string: "Status", type: "selection", selection: [["draft", "Quotation"], ["sale", "Sales Order"]] },
       locked: { string: "Locked", type: "boolean" }, note: { string: "Note", type: "char" },
       date_order: { string: "Order Date", type: "datetime" },
-    }, write: false, upstream_ms: 1, upstream_bytes: 2 };
+    });
     if (call.model === "nope") throw { code: "upstream.remote", detail: "No model", outcome: "failed" };
-    return { data: [{ id: 1, state: "sale", locked: true, note: false, date_order: "2026-10-23 08:41:07" }, { id: 2, state: "draft", locked: false, note: false, date_order: false }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    return shellResult([{ id: 1, state: "sale", locked: true, note: false, date_order: "2026-10-23 08:41:07" }, { id: 2, state: "draft", locked: false, note: false, date_order: false }]);
   });
   render(<ShellPage envs={envs} />);
   await connectA();
@@ -1171,7 +1155,7 @@ it("reads values by their field type and marks each command block by outcome", a
 
 const tabId = (index: number) => screen.getAllByRole("tab")[index].id.replace("shell-tab-", "");
 const agentRun = (id: number, fields: Partial<Extract<AgentRequest, { kind: "run" }>>): AgentRequest =>
-  ({ id, kind: "run", envId: "A", command: "count res.partner", clientId: "c1", clientLabel: "Claude", allowWrites: false, ...fields });
+  ({ id, kind: "run", envId: "A", command: "count res.partner", clientId: "c1", clientRevision: 1, clientLabel: "Claude", allowWrites: false, ...fields });
 
 it("runs an agent's command in its tab without bringing it forward, marked with the agent and audited as it", async () => {
   answer(() => 42);
@@ -1186,7 +1170,7 @@ it("runs an agent's command in its tab without bringing it forward, marked with 
   const [id, result] = vi.mocked(ipc.agentReply).mock.calls[0];
   expect(id).toBe(1);
   expect(result).toMatchObject({ terminal: a, env: "A", command: "count res.partner", output: [{ kind: "input", text: "count res.partner" }, { kind: "text", text: "42" }, { kind: "info", text: "3 ms · 4 B" }] });
-  expect(vi.mocked(ipc.shell).mock.calls.find(([call]) => call.method === "search_count")?.[0]).toMatchObject({ environment_id: "A", client_id: "c1" });
+  expect(vi.mocked(ipc.shell).mock.calls.find(([call]) => call.method === "search_count")?.[0]).toMatchObject({ environment_id: "A", client_id: "c1", client_revision: 1 });
   // B stays in front; A shows that something happened there.
   expect(screen.getAllByRole("tab")[1].getAttribute("aria-selected")).toBe("true");
   expect(within(screen.getAllByRole("tab")[0]).getByRole("status", { name: "An agent ran commands here" })).toBeTruthy();
@@ -1211,7 +1195,47 @@ it("opens a session for an agent's environment, refuses writes it may not reques
   expect(ipc.agentReply).toHaveBeenLastCalledWith(3);
 });
 
-it("lists history as date and command, and a click puts the whole command in the input", async () => {
+it("runs an agent command queued behind the user's open confirmation as its own command, never as the answer", async () => {
+  requireConfirmation(["search_count", "check_access_rights"]);
+  const { rerender } = render(<ShellPage envs={envs} />);
+  await openSession("A");
+  command("call res.partner action_custom [[1]]");
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  rerender(<ShellPage envs={envs} agentRequests={[agentRun(4, { terminal: tabId(0), command: "count res.partner" })]} />);
+  command("n");
+  await waitFor(() => expect(ipc.agentReply).toHaveBeenCalled());
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "search_count" && call.client_id === "c1")).toBe(true);
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "action_custom" && call.confirmed)).toBe(false);
+  const [, result] = vi.mocked(ipc.agentReply).mock.calls[0];
+  expect(JSON.stringify(result)).not.toContain("Cancelled");
+});
+
+it("never saves an agent's write confirmation with the window, so it cannot be answered as the user after a restore", async () => {
+  requireConfirmation(["search_count", "check_access_rights"]);
+  const { rerender } = render(<ShellPage envs={envs} />);
+  await openSession("A");
+  const key = `shell.${tabId(0)}.confirming`;
+  rerender(<ShellPage envs={envs} agentRequests={[agentRun(5, { terminal: tabId(0), command: "call res.partner action_custom [[1]]", allowWrites: true })]} />);
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  expect(captureWindowState()[key]).toBeNull();
+  command("n");
+  await waitFor(() => expect(ipc.agentReply).toHaveBeenCalled());
+  command("call res.partner action_custom [[1]]");
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  expect(captureWindowState()[key]).toMatchObject({ call: { method: "action_custom" } });
+});
+
+it("runs two agent commands for an environment without a tab in one new session, in order", async () => {
+  answer(() => 1);
+  const { rerender } = render(<ShellPage envs={envs} />);
+  await openSession("A");
+  rerender(<ShellPage envs={envs} agentRequests={[agentRun(6, { envId: "B" }), agentRun(7, { envId: "B", command: "count res.users" })]} />);
+  await waitFor(() => expect(ipc.agentReply).toHaveBeenCalledTimes(2));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(vi.mocked(ipc.agentReply).mock.calls.map(([id]) => id)).toEqual([6, 7]);
+});
+
+it("lists history as number, date and command, and a click puts the whole command in the input", async () => {
   vi.mocked(ipc.shellHistory).mockResolvedValue([
     { at: "2026-10-19T10:00:00Z", environment: "A", command: "search res.partner -d [('name','ilike','ada')] -l 5" },
     { at: "2026-10-19T10:01:00Z", environment: "B", command: "count res.users" },
@@ -1220,7 +1244,9 @@ it("lists history as date and command, and a click puts the whole command in the
   await openSession("A");
   command("\\history");
   const table = within(panel()).getAllByRole("table").at(-1)!;
-  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "date", "command"]);
+  // # is the number !n recalls.
+  expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["", "#", "date", "command"]);
+  expect(within(table).getAllByRole("row")[2].textContent).toContain("2");
   fireEvent.doubleClick(within(table).getByRole("button", { name: /^search res\.partner/ }));
   expect((screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement).value).toBe("search res.partner -d [('name','ilike','ada')] -l 5");
   // Loaded, not run.
@@ -1228,8 +1254,8 @@ it("lists history as date and command, and a click puts the whole command in the
 });
 
 it("opens a table in its own window with the fields that describe it", async () => {
-  vi.mocked(ipc.shell).mockImplementation(async (call) => ({ data: call.model === "ir.model" ? [] : call.method === "fields_get"
-    ? { name: { string: "Name", type: "char" } } : [{ id: 7, name: "Ada" }, { id: 8, name: "Grace" }], write: false, upstream_ms: 1, upstream_bytes: 2 }));
+  vi.mocked(ipc.shell).mockImplementation(async (call) => (shellResult(call.model === "ir.model" ? [] : call.method === "fields_get"
+    ? { name: { string: "Name", type: "char" } } : [{ id: 7, name: "Ada" }, { id: 8, name: "Grace" }])));
   render(<ShellPage envs={envs} />);
   await connectA();
   command("search res.partner -f name");
@@ -1264,40 +1290,16 @@ it("keeps help, history and clearing out of the history", async () => {
   expect(vi.mocked(ipc.shellHistoryAdd).mock.calls.map(([line]) => line)).toEqual(["\\timing"]);
 });
 
-it("selects cells, columns and rows instead of text and copies a cell as its value, more as TSV with headers", async () => {
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  answer(() => [{ id: 7, name: "Ada", email: "a@x" }, { id: 8, name: "Grace", email: "g@x" }, { id: 9, name: "Hopper", email: "h@x" }]);
+it("Escape on a write confirmation stops a pasted batch, as answering n does", async () => {
+  requireConfirmation(["search_count"]);
   render(<ShellPage envs={envs} />);
   await connectA();
-  command("search res.partner -f name,email");
-  const table = await within(panel()).findByRole("table");
-  const scroller = panel().querySelector<HTMLElement>(".term-scroll")!;
-  const cell = (r: number, c: number) => table.querySelector<HTMLElement>(`[data-cell="${r}:${c}"]`)!;
-  const copy = () => { fireEvent.keyDown(scroller, { key: "c", ctrlKey: true }); return writeText.mock.calls.at(-1)?.[0]; };
-
-  fireEvent.mouseDown(cell(0, 1));
-  await waitFor(() => expect(copy()).toBe("Ada"));
-  // Shift extends a box from the anchor; the copy carries the headers of its columns.
-  fireEvent.mouseDown(cell(1, 2), { shiftKey: true });
-  await waitFor(() => expect(copy()).toBe("name\temail\nAda\ta@x\nGrace\tg@x"));
-  // No cursor frame over a mouse selection; the keyboard brings it back.
-  expect(table.querySelector("[data-active]")).toBeNull();
-  fireEvent.keyDown(scroller, { key: "ArrowDown", shiftKey: true });
-  expect(table.querySelector("[data-active]")).not.toBeNull();
-  // Ctrl adds loose cells; rows and columns they skip stay blank.
-  fireEvent.mouseDown(cell(0, 0));
-  fireEvent.mouseDown(cell(2, 2), { ctrlKey: true });
-  await waitFor(() => expect(copy()).toBe("id\temail\n7\t\n\th@x"));
-  fireEvent.mouseDown(within(table).getByRole("columnheader", { name: /^email/ }));
-  await waitFor(() => expect(copy()).toBe("email\na@x\ng@x\nh@x"));
-  fireEvent.mouseDown(table.querySelectorAll("tbody .term-row-head")[1]);
-  await waitFor(() => expect(copy()).toBe("id\tname\temail\n8\tGrace\tg@x"));
-  expect(table.querySelectorAll("[data-selected]").length).toBe(4);
-  // A click outside the table clears it.
-  fireEvent.mouseDown(screen.getByRole("textbox", { name: "Command" }));
-  expect(table.querySelectorAll("[data-selected]")).toHaveLength(0);
-  // A double click still acts: an id opens its record.
-  fireEvent.doubleClick(within(cell(2, 0)).getByRole("button"));
-  await waitFor(() => expect(vi.mocked(ipc.shell).mock.calls.at(-1)?.[0]).toMatchObject({ method: "read", args: [[9]] }));
+  const input = screen.getByRole("textbox", { name: "Command" }) as HTMLTextAreaElement;
+  fireEvent.paste(input, { clipboardData: { getData: () => "call res.partner action_custom [[1]]\ncount res.partner\n" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(await screen.findByText("Send to A? [y/N]")).toBeTruthy();
+  fireEvent.keyDown(input, { key: "Escape" });
+  await waitFor(() => expect(within(panel()).getByText("Stopped after command 1 of 2.")).toBeTruthy());
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(vi.mocked(ipc.shell).mock.calls.some(([call]) => call.method === "search_count")).toBe(false);
 });

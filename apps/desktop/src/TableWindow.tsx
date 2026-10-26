@@ -1,14 +1,17 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { CellActions, TableBlock, cellText, rowsTable, toCsv, toJson, toMarkdown, toTsv, type Table } from "./ShellPage";
+import { CellActions, TableBlock } from "./TableBlock";
+import { cellText, exportName, rowsTable, toCsv, toJson, toMarkdown, toTsv, type Table } from "./table";
 import type { Field } from "./shell/complete";
 import { ipc } from "./ipc";
 import { TooltipLayer } from "./TooltipLayer";
 import { WindowTitleBar } from "./WindowTitleBar";
+import { storedTheme } from "./windowState";
 import SearchField from "./SearchField";
 import { Icon } from "./Icon";
 import { useDismiss } from "./ContextMenu";
+import { MoreMenu } from "./Menu";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 
 /** `envId` and `context` let the window repeat its read to add a column; it can do nothing else with them. */
@@ -33,9 +36,8 @@ export default function TableWindow() {
   useLayoutEffect(() => {
     void taken.then((taken) => { setPayload(taken); setData(taken?.table ?? null); });
     // Same theme as the main window's preference.
-    let stored: string | null = null;
-    try { stored = localStorage.getItem("odx.theme"); } catch { /* Preference only. */ }
-    const theme = stored === "light" || stored === "dark" ? stored : window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    const stored = storedTheme();
+    const theme = stored !== "system" ? stored : window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, []);
@@ -121,24 +123,12 @@ function ColumnPicker({ columns, hidden, fields, toggle }: { columns: string[]; 
 /** The ⋯ menu: copy the rows shown, or save them to Downloads. */
 function Actions({ table, say }: { table: Table; say: (text: string, error?: boolean) => void }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLSpanElement>(null);
-  useDismiss(open, () => root.current, () => setOpen(false));
-  const copy = (format: keyof typeof copies) => {
-    setOpen(false);
+  const copy = (format: keyof typeof copies) =>
     void navigator.clipboard.writeText(copies[format](table)).then(() => say(t("shell.copiedAs", { format })), () => undefined);
-  };
-  const save = (format: keyof typeof saves) => {
-    setOpen(false);
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
-    void ipc.shellExport(`odx-${table.model ?? "table"}-${stamp}.${format.toLowerCase()}`, saves[format](table))
-      .then((path) => say(t("shell.exported", { path })), (reason) => say(formatAppError(normalizeAppError(reason)), true));
-  };
-  return <span className="more-menu" ref={root} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
-    <button type="button" className="btn sm icon-only" aria-haspopup="menu" aria-expanded={open} aria-label={t("environments.moreActions")} data-tip={open ? undefined : t("environments.moreActions")} onClick={() => setOpen(!open)}>⋯</button>
-    {open && <div className="more-menu-list" role="menu" aria-label={t("environments.moreActions")}>
-      {(Object.keys(copies) as (keyof typeof copies)[]).map((format) => <button key={format} type="button" role="menuitem" onClick={() => copy(format)}><Icon name="copy" />{t("shell.copyAs", { format })}</button>)}
-      {(Object.keys(saves) as (keyof typeof saves)[]).map((format) => <button key={format} type="button" role="menuitem" onClick={() => save(format)}><Icon name="external" />{t("shell.saveAs", { format })}</button>)}
-    </div>}
-  </span>;
+  const save = (format: keyof typeof saves) => void ipc.shellExport(exportName(table, format.toLowerCase()), saves[format](table))
+    .then((path) => say(t("shell.exported", { path })), (reason) => say(formatAppError(normalizeAppError(reason)), true));
+  return <MoreMenu label={t("environments.moreActions")} items={[
+    ...(Object.keys(copies) as (keyof typeof copies)[]).map((format) => ({ label: t("shell.copyAs", { format }), icon: "copy" as const, run: () => copy(format) })),
+    ...(Object.keys(saves) as (keyof typeof saves)[]).map((format) => ({ label: t("shell.saveAs", { format }), icon: "external" as const, run: () => save(format) })),
+  ]} />;
 }

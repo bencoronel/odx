@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { ipc } from "./ipc";
+import { shellResult } from "./test/fixtures";
 
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: ({ title }: { title?: string }) => <header>ODX · {title}</header> }));
 vi.mock("./ipc", () => ({ ipc: { shell: vi.fn(), shellExport: vi.fn() } }));
@@ -33,7 +34,7 @@ it("shows a Terminal table with a window's controls: filter, view, columns, copy
   expect(["id", "name", "partner_id", "email"].map((name) => box(name).checked)).toEqual([true, true, true, false]);
   fireEvent.click(box("partner_id"));
   expect(within(screen.getByRole("table")).queryByRole("columnheader", { name: /partner_id/ })).toBeNull();
-  vi.mocked(ipc.shell).mockResolvedValue({ data: [{ id: 8, name: "Grace", partner_id: [1, "Main"], email: "g@x" }, { id: 7, name: "Ada", partner_id: false, email: "a@x" }, { id: 9, name: "Extra", partner_id: false, email: "" }], write: false, upstream_ms: 1, upstream_bytes: 2 });
+  vi.mocked(ipc.shell).mockResolvedValue(shellResult([{ id: 8, name: "Grace", partner_id: [1, "Main"], email: "g@x" }, { id: 7, name: "Ada", partner_id: false, email: "a@x" }, { id: 9, name: "Extra", partner_id: false, email: "" }]));
   fireEvent.click(box("email"));
   await waitFor(() => expect(within(screen.getByRole("table")).getByText("g@x")).toBeTruthy());
   expect(ipc.shell).toHaveBeenCalledWith({ environment_id: "env-1", model: "res.partner", method: "search_read", args: [], kwargs: { fields: ["id", "name", "partner_id", "email"], limit: 3 }, context: { lang: "es_ES" }, confirmed: false });

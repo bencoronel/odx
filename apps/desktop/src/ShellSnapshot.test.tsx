@@ -1,32 +1,24 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import ShellPage from "./ShellPage";
-import { ipc, type Environment } from "./ipc";
+import { ipc } from "./ipc";
 import { captureWindowState, restoreWindowState } from "./windowState";
+import { envFixture, shellResult } from "./test/fixtures";
+import { command, newSession, stubScroll } from "./test/terminal";
 
 let snapshot: string | null = null;
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (command) => command === "desktop_restore" ? snapshot : null) }));
-vi.mock("./ipc", () => ({ ipc: { shellHistory: vi.fn(async () => []), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), shellHistoryAdd: vi.fn(async () => undefined), check: vi.fn(async () => ({ status: "ok", latency_ms: 1 })), shell: vi.fn() } }));
+vi.mock("./ipc", async () => (await import("./test/terminal")).terminalIpc());
 afterEach(cleanup);
-const command = (line: string) => {
-  const input = screen.getByRole("textbox", { name: "Command" });
-  fireEvent.change(input, { target: { value: line } });
-  fireEvent.keyDown(input, { key: "Enter" });
-};
-/** Sessions open from the "+" menu, bound to the chosen environment. */
-const newSession = (env = "A") => {
-  fireEvent.click(screen.getByRole("button", { name: "New Terminal session" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: env }));
-};
 it("restores tabs, results, context, draft input and unconfirmed writes without replaying operations", async () => {
   snapshot = null;
   await restoreWindowState();
-  Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+  stubScroll();
   vi.mocked(ipc.shell).mockImplementation(async (call) => {
     if (call.method === "write" && !call.confirmed) throw { code: "confirmation_required" };
-    return { data: call.model === "ir.model" ? [{ model: "res.partner" }] : [{ id: 1, name: "Ada" }], write: false, upstream_ms: 1, upstream_bytes: 2 };
+    return shellResult(call.model === "ir.model" ? [{ model: "res.partner" }] : [{ id: 1, name: "Ada" }]);
   });
-  const envs: Environment[] = [{ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", protocol: "legacy_jsonrpc", context: {}, write_mode: "approval", has_secret: true, tags: [] }];
+  const envs = [envFixture({ id: "A", name: "A", url: "https://fixture.test", database: "fixture", login: "fixture", write_mode: "approval" })];
   const view = render(<ShellPage envs={envs} />);
   newSession("A");
   await waitFor(() => expect(screen.getByRole("tabpanel").querySelector(".term-mode")).toBeTruthy());

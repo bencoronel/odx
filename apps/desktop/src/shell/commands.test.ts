@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CommandError, parse, tokenize } from "./commands";
+import { CommandError, parse, shellCommand, tokenize, type OdooCall } from "./commands";
 import { parseIds, parseLiteral } from "./literal";
 
 describe("literales", () => {
@@ -122,4 +122,35 @@ it("parses \\prev, \\set, \\alias, \\grep and \\cols, and expands aliases and $n
   expect(substitute("unlink res.partner $vip", undefined, { vip: { ids: [7, 8] } })).toBe("unlink res.partner [7,8]");
   expect(substitute("write res.partner 1 {'name': '$vip'}", undefined, {})).toBe("write res.partner 1 {'name': '$vip'}");
   expect(() => substitute("unlink res.partner $vip", undefined, {})).toThrow(/vip/);
+});
+
+it("count refuses a domain without -d and no option may repeat", () => {
+  expect(() => parse("count res.partner [('active','=',False)]")).toThrow(CommandError);
+  expect(parse("count res.partner -d [('active','=',False)]")).toMatchObject({ call: { method: "search_count", args: [[["active", "=", false]]] } });
+  // An alias's -d followed by the user's own would drop one of the two filters.
+  expect(() => parse("search res.partner -d [('a','=',1)] -d [('b','=',2)]")).toThrow(CommandError);
+});
+
+it("keeps a __proto__ key as data and rejects integers with leading zeros, as Python does", () => {
+  const parsed = parseLiteral("{'__proto__': 1, 'name': 'x'}") as Record<string, unknown>;
+  expect(JSON.stringify(parsed)).toBe('{"__proto__":1,"name":"x"}');
+  expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+  expect(() => parseLiteral("010")).toThrow();
+  expect(parseLiteral("[0, 00, 0.5, 010.5, -3]")).toEqual([0, 0, 0.5, 10.5, -3]);
+});
+
+it("copies commands the Terminal parses back into the same call, without the context", () => {
+  const cases: [OdooCall, string][] = [
+    [{ model: "res.partner", method: "write", args: [[7, 8], { name: "Ana López", active: false }], kwargs: { context: { lang: "es_ES" } } }, "write res.partner 7,8 "],
+    [{ model: "res.partner", method: "unlink", args: [[3]], kwargs: {} }, "unlink res.partner 3"],
+    [{ model: "res.partner", method: "create", args: [[{ name: "A" }, { name: "B" }]], kwargs: {} }, "create res.partner "],
+    [{ model: "account.move", method: "action_post", args: [[55]], kwargs: { context: {} } }, "call account.move action_post "],
+    [{ model: "res.partner", method: "write", args: [], kwargs: { ids: [1], vals: { name: "x" } } }, "call res.partner write "],
+  ];
+  for (const [item, start] of cases) {
+    const text = shellCommand(item);
+    expect(text.startsWith(start)).toBe(true);
+    const { context: _context, ...kwargs } = item.kwargs as Record<string, unknown>;
+    expect(parse(text)).toMatchObject({ kind: "call", call: { model: item.model, method: item.method, args: item.args, kwargs } });
+  }
 });

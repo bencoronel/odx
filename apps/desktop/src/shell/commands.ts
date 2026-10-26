@@ -4,6 +4,23 @@ import { i18n } from "../i18n";
 /** Parsed Odoo call; the session supplies the environment. */
 export type OdooCall = { model: string; method: string; args: unknown[]; kwargs: Record<string, unknown> };
 
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A call as the Terminal command that makes it, to repeat or adjust it by hand: `write`, `unlink` and `create` when the
+ * call has their plain shape, `call` otherwise. The context is left out: the Terminal sets it per session (\context). */
+export function shellCommand(item: { model: string; method: string; args: unknown; kwargs: unknown }): string {
+  const { context: _context, ...kwargs } = isRecord(item.kwargs) ? item.kwargs : {};
+  const args = Array.isArray(item.args) ? item.args : [];
+  const json = JSON.stringify;
+  if (!Object.keys(kwargs).length) {
+    const ids = Array.isArray(args[0]) && args[0].length > 0 && args[0].every(Number.isInteger) ? args[0] as number[] : null;
+    if (item.method === "write" && ids && args.length === 2 && isRecord(args[1])) return `write ${item.model} ${ids.join(",")} ${json(args[1])}`;
+    if (item.method === "unlink" && ids && args.length === 1) return `unlink ${item.model} ${ids.join(",")}`;
+    if (item.method === "create" && args.length === 1) return `create ${item.model} ${json(args[0])}`;
+  }
+  return `call ${item.model} ${item.method} ${json(args)} ${json(kwargs)}`;
+}
+
 export type Command =
   | { kind: "help" }
   | { kind: "list" }
@@ -116,6 +133,8 @@ function options(tokens: string[], allowed: Record<string, string>) {
       if (!key) throw new CommandError(i18n.t("shell.errors.unknownOption", { option: t }));
       const v = tokens[++i];
       if (v === undefined) throw new CommandError(i18n.t("shell.errors.missingOptionValue", { option: t }));
+      // A second -d would silently replace the first (an alias's filter, for one): refuse it.
+      if (key in opts) throw new CommandError(i18n.t("shell.errors.repeatedOption", { option: t }));
       opts[key] = v;
     } else positional.push(t);
   }
@@ -267,6 +286,8 @@ export function parse(line: string): Command | null {
     }
     case "count": {
       const { positional, opts } = options(rest, { "-d": "domain" });
+      // A domain without -d would otherwise be dropped and count every record.
+      if (positional.length > 1) throw new CommandError(i18n.t("shell.errors.unexpectedArgument", { argument: positional[1] }));
       return { kind: "call", display: "value", call: { model: model(positional[0], i18n.t("shell.usage.count")), method: "search_count", args: [domainOf(opts.domain)], kwargs: {} } };
     }
     case "read": {
