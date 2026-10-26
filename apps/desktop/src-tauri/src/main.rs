@@ -1,11 +1,26 @@
+#[macro_use]
+mod command_list;
 mod commands;
 mod desktop;
+mod error;
+mod files;
 mod services;
 use std::sync::Arc;
 use tauri::Manager;
 
 /// Dev builds use their own socket so their connector never reaches a release app, and vice versa.
 pub const SOCKET_DIR: &str = if cfg!(debug_assertions) {
+    "odx-dev"
+} else {
+    "odx"
+};
+/// Dev builds show their own name and register with agent CLIs under their own MCP name, so they run beside a release app.
+pub const APP_NAME: &str = if cfg!(debug_assertions) {
+    "Odx Dev"
+} else {
+    "Odx"
+};
+pub const MCP_NAME: &str = if cfg!(debug_assertions) {
     "odx-dev"
 } else {
     "odx"
@@ -39,104 +54,10 @@ fn mcp_stdio() -> ! {
     std::process::exit(code)
 }
 
-/// Notify new requests. If notifications fail, show availability in the window; requests remain in Approvals and the status bar.
-/// A burst shows its first request, then one summary when the cooldown ends; the tray icon is marked while any wait.
-fn notify_approvals(
-    app: tauri::AppHandle,
-    core: Arc<odx_core::Core>,
-    mut notices: tokio::sync::broadcast::Receiver<odx_core::ApprovalNotice>,
-) {
-    use std::time::Duration;
-    use tauri::Emitter;
-    use tokio::time::Instant;
-    const COOLDOWN: Duration = Duration::from_secs(10);
-    const ATTENTION_CHECK: Duration = Duration::from_secs(5);
-    tauri::async_runtime::spawn(async move {
-        let mut last_shown: Option<Instant> = None;
-        // Requests that arrived during the cooldown, for the summary.
-        let mut held: Vec<String> = Vec::new();
-        let mut attention = false;
-        let mut check = tokio::time::interval(ATTENTION_CHECK);
-        loop {
-            let summary_at = last_shown.map_or_else(Instant::now, |shown| shown + COOLDOWN);
-            tokio::select! {
-                received = notices.recv() => {
-                    let notice = match received {
-                        Ok(notice) => notice,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(_) => break,
-                    };
-                    let _ = app.emit("approvals-changed", &notice.approval_id);
-                    if !attention {
-                        attention = true;
-                        desktop::set_tray_attention(&app, true);
-                    }
-                    if last_shown.is_some_and(|shown| shown.elapsed() < COOLDOWN) {
-                        held.push(notice.approval_id.clone());
-                    } else {
-                        last_shown = Some(Instant::now());
-                        notify_approval(&app, &notice);
-                    }
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window
-                            .request_user_attention(Some(tauri::UserAttentionType::Informational));
-                    }
-                }
-                _ = tokio::time::sleep_until(summary_at), if !held.is_empty() => {
-                    // Only held requests still waiting; decided, expired or already notified ones are no longer news.
-                    let held = std::mem::take(&mut held);
-                    let waiting = core.approvals().await.map_or(0, |pending| {
-                        pending.iter().filter(|p| held.contains(&p.id)).count()
-                    });
-                    if waiting > 0 {
-                        last_shown = Some(Instant::now());
-                        notify_more(&app, waiting);
-                    }
-                }
-                _ = check.tick() => {
-                    let pending = core.approvals().await.is_ok_and(|pending| !pending.is_empty());
-                    if pending != attention {
-                        attention = pending;
-                        desktop::set_tray_attention(&app, pending);
-                    }
-                }
-            }
-        }
-    });
-}
-
-fn notify_approval(app: &tauri::AppHandle, notice: &odx_core::ApprovalNotice) {
-    let who = notice
-        .client_label
-        .as_deref()
-        .unwrap_or(desktop::tr(app, "A client", "Un cliente"));
-    let (method, model, environment) = (&notice.method, &notice.model, &notice.environment_name);
-    let body = if desktop::spanish(app) {
-        format!("{who} solicita {method} en {model} · {environment}")
-    } else {
-        format!("{who} requests {method} on {model} · {environment}")
+macro_rules! register {
+    ($($command:ident),* $(,)?) => {
+        tauri::generate_handler![$(commands::$command),*]
     };
-    desktop::notify(
-        app,
-        desktop::tr(app, "Pending approval", "Aprobación pendiente"),
-        body,
-        Some(notice.approval_id.clone()),
-    );
-}
-
-fn notify_more(app: &tauri::AppHandle, count: usize) {
-    let body = match (desktop::spanish(app), count) {
-        (true, 1) => "Hay 1 aprobación más pendiente".to_string(),
-        (true, n) => format!("Hay {n} aprobaciones más pendientes"),
-        (false, 1) => "1 more approval is pending".to_string(),
-        (false, n) => format!("{n} more approvals are pending"),
-    };
-    desktop::notify(
-        app,
-        desktop::tr(app, "Pending approvals", "Aprobaciones pendientes"),
-        body,
-        None,
-    );
 }
 
 fn main() {
@@ -152,6 +73,13 @@ fn main() {
     if cfg!(debug_assertions) {
         // Separate identifier: own app data (vault, outputs, webview storage) and single-instance name.
         context.config_mut().identifier.push_str(".dev");
+        context.config_mut().product_name = Some(APP_NAME.into());
+        // What the window reads with getName().
+        context.package_info_mut().name = APP_NAME.into();
+        for window in &mut context.config_mut().app.windows {
+            window.title = APP_NAME.into();
+        }
+        context.set_default_window_icon(Some(tauri::include_image!("icons/icon-dev.png")));
     }
     tauri::Builder::default()
         // Check single-instance state before opening a window, vault or socket; focus the existing instance.
@@ -211,84 +139,14 @@ fn main() {
                 tauri::async_runtime::spawn(async move { services.start_socket(core).await });
             }
             app.manage(services);
-            notify_approvals(app.handle().clone(), core.clone(), core.approval_notices());
+            desktop::notify_approvals(app.handle().clone(), core.clone(), core.approval_notices());
             let (agent_requests, agent_queue) = tokio::sync::mpsc::unbounded_channel();
             core.set_desktop(agent_requests);
             desktop::serve_agents(app.handle().clone(), agent_queue);
             app.manage(core);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::desktop_ready,
-            commands::desktop_set_language,
-            commands::agent_setup,
-            commands::agent_install,
-            commands::desktop_take_approval,
-            commands::agent_take,
-            commands::table_window_open,
-            commands::window_keep_above,
-            commands::window_keep_above_supported,
-            commands::table_window_take,
-            commands::agent_reply,
-            commands::desktop_restore,
-            commands::desktop_suspend,
-            commands::desktop_cancel_suspend,
-            commands::desktop_flushed,
-            commands::window_present,
-            commands::context_get,
-            commands::context_set,
-            commands::headers_get,
-            commands::headers_set,
-            commands::proxies_get,
-            commands::proxy_save,
-            commands::proxy_delete,
-            commands::proxy_test,
-            commands::tag_colors_get,
-            commands::tag_color_set,
-            commands::proxy_default_set,
-            commands::environment_proxy_get,
-            commands::environment_proxy_set,
-            commands::vault_status,
-            commands::vault_create,
-            commands::vault_unlock,
-            commands::vault_change_password,
-            commands::vault_lock,
-            commands::vault_reset,
-            commands::service_status,
-            commands::activity_list,
-            commands::shell_call,
-            commands::shell_history_list,
-            commands::shell_history_add,
-            commands::shell_history_clear,
-            commands::shell_export,
-            commands::shell_sessions_load,
-            commands::shell_sessions_save,
-            commands::environments_list,
-            commands::environment_save,
-            commands::environment_update,
-            commands::environment_clone,
-            commands::environment_delete,
-            commands::environment_write_mode,
-            commands::environment_check,
-            commands::environment_check_draft,
-            commands::environment_databases,
-            commands::environment_tags_set,
-            commands::environment_favicon_page,
-            commands::environment_favicon_image,
-            commands::environment_open_url,
-            commands::updates_open_releases,
-            commands::clients_list,
-            commands::client_update,
-            commands::approvals_list,
-            commands::approval_decide,
-            commands::rules_list,
-            commands::rule_save,
-            commands::rule_delete,
-            commands::desktop_status,
-            commands::desktop_restart,
-            commands::settings_get,
-            commands::settings_save
-        ])
+        .invoke_handler(for_each_command!(register))
         .build(context)
         .expect("Odx failed")
         .run(|app, event| {

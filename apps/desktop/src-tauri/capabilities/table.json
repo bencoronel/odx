@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "table-capability",
-  "description": "Window controls for Terminal table windows; no admin access",
+  "description": "Window controls and the Terminal reads, exports and window commands a table window uses; no admin access",
   "windows": [
     "table-*"
   ],
@@ -13,6 +13,12 @@
     "core:window:allow-start-resize-dragging",
     "core:window:allow-close",
     "core:window:allow-show",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "allow-table-window-take",
+    "allow-shell-call",
+    "allow-shell-export",
+    "allow-window-present",
+    "allow-window-keep-above",
+    "allow-window-keep-above-supported"
   ]
 }

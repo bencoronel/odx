@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tauri = { version = "=2.10.3", features = ["tray-icon"] }
+# Not imported: pinned so tauri resolves exactly these runtime and macro versions (reproducible builds).
 tauri-runtime = "=2.10.1"
 tauri-runtime-wry = "=2.10.1"
 tauri-macros = "=2.5.5"

@@ -33,6 +33,7 @@ pub struct ServiceStatus {
     api: Service,
     mcp: Service,
     /// MCP connector launch configuration.
+    mcp_name: &'static str,
     connector_command: String,
     connector_args: [&'static str; 1],
     api_url: String,
@@ -103,13 +104,13 @@ impl Agent {
                 "stdio",
                 "--scope",
                 "user",
-                "odx",
+                crate::MCP_NAME,
             ]
             .map(String::from)
             .to_vec(),
             // Codex starts MCP servers with a reduced environment; the connector needs XDG_RUNTIME_DIR to find the app socket.
             Agent::Codex => {
-                let mut args = ["mcp", "add", "odx"].map(String::from).to_vec();
+                let mut args = ["mcp", "add", crate::MCP_NAME].map(String::from).to_vec();
                 if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
                     args.extend(["--env".into(), format!("XDG_RUNTIME_DIR={dir}")]);
                 }
@@ -122,8 +123,8 @@ impl Agent {
 
     fn remove_args(self) -> &'static [&'static str] {
         match self {
-            Agent::Claude => &["mcp", "remove", "--scope", "user", "odx"],
-            Agent::Codex => &["mcp", "remove", "odx"],
+            Agent::Claude => &["mcp", "remove", "--scope", "user", crate::MCP_NAME],
+            Agent::Codex => &["mcp", "remove", crate::MCP_NAME],
         }
     }
 }
@@ -147,12 +148,12 @@ fn run(cli: &PathBuf, args: &[impl AsRef<std::ffi::OsStr>]) -> std::io::Result<O
     child.wait_with_output()
 }
 
-/// Blocking: runs `<cli> mcp get odx`.
+/// Blocking: runs `<cli> mcp get <MCP_NAME>`.
 pub fn agent_setup(agent: Agent) -> AgentSetup {
     let Some(cli) = agent.cli() else {
         return AgentSetup::NoCli;
     };
-    match run(&cli, &["mcp", "get", "odx"]) {
+    match run(&cli, &["mcp", "get", crate::MCP_NAME]) {
         Ok(out) if out.status.success() => {
             setup_state(&String::from_utf8_lossy(&out.stdout), &connector_command())
         }
@@ -168,7 +169,7 @@ fn setup_state(described: &str, command: &str) -> AgentSetup {
     }
 }
 
-/// Blocking: register `odx` with the agent, replacing an entry that points elsewhere. Errors carry the CLI's own message.
+/// Blocking: register `MCP_NAME` with the agent, replacing an entry that points elsewhere. Errors carry the CLI's own message.
 pub fn agent_install(agent: Agent) -> Result<AgentSetup, String> {
     let cli = agent
         .cli()
@@ -229,6 +230,7 @@ impl Services {
                 address: state.socket_path.clone(),
                 error: state.socket_error.clone(),
             },
+            mcp_name: crate::MCP_NAME,
             connector_command: connector_command(),
             connector_args: ["mcp-stdio"],
             api_url: format!("http://{api_address}/api/v1"),
@@ -244,7 +246,7 @@ mod tests {
     #[test]
     fn agent_commands_and_state() {
         let codex = Agent::Codex.add_args("/opt/Odx.AppImage");
-        assert_eq!(codex[..3], ["mcp", "add", "odx"]);
+        assert_eq!(codex[..3], ["mcp", "add", crate::MCP_NAME]);
         assert_eq!(
             codex[codex.len() - 3..],
             ["--", "/opt/Odx.AppImage", "mcp-stdio"]
