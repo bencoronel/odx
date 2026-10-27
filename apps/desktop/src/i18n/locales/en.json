@@ -268,6 +268,7 @@
     "lockPending_one": "{{count}} pending approval will be revoked.",
     "lockPending_other": "{{count}} pending approvals will be revoked.",
     "rangeError": "Must be between {{min}} and {{max}}",
+    "range": "Between {{min}} and {{max}} {{unit}}",
     "concurrencyError": "Cannot exceed the global limit",
     "limits": "Limits and retention",
     "saved": "Settings saved and applied.",

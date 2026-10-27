@@ -10,6 +10,7 @@ import { Icon, type IconName } from "./Icon";
 import { ipc, type Settings, type SettingsView } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { i18n } from "./i18n";
+import { formatNumber } from "./i18n/format";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { usePreventUnload, type Theme } from "./windowState";
 import { loadEnvironmentDefaults, saveEnvironmentDefaults, type EnvironmentDefaults } from "./EnvironmentForm";
@@ -179,11 +180,11 @@ function LimitsPanel() {
     const error = errors[field.key];
     return <div key={field.key} className={settingRow}>
       <div className="gap-[3px]!"><label htmlFor={id}><strong>{text(field.label)}</strong></label>
-        {/* The input enforces min and max; the error names the range when a value falls outside it. */}
-        {error && <small id={`${id}-hint`} className="text-danger text-xs mt-px">{error}</small>}</div>
+        {/* The input enforces min and max; the error replaces the range when a value falls outside it. */}
+        <small id={`${id}-hint`} className={`text-xs mt-px ${error ? "text-danger" : "text-fg-3"}`}>{error || t("settingsPage.range", { min: formatNumber(min), max: formatNumber(max), unit: text(field.unit) })}</small></div>
       <span className="inline-flex items-center gap-2">
         <input id={id} className="w-30" type="number" inputMode="numeric" min={min} max={max} step={1} value={draft[field.key]}
-          aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-hint` : undefined}
+          aria-invalid={error ? true : undefined} aria-describedby={`${id}-hint`}
           onChange={(e) => { setDraft({ ...draft, [field.key]: e.target.value }); setMessage(null); }} />
         <span className="min-w-[52px] text-fg-3 text-sm" aria-hidden="true">{text(field.unit)}</span>
       </span>

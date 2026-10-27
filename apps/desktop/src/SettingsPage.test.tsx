@@ -105,15 +105,15 @@ it("reports a locked or failing backend instead of showing stale values", async 
   expect(screen.queryAllByRole("spinbutton")).toHaveLength(0);
 });
 
-it("names each limit by its label only, gives the range only when a value is out of it, and switches sections keeping the draft", async () => {
+it("names each limit by its label only, shows its range, swaps it for the error when a value is out of it, and switches sections keeping the draft", async () => {
   openLimits(2);
   await screen.findByRole("form", { name: "Limits and retention" });
   const total = within(form()).getByRole("spinbutton", { name: "Concurrent calls" });
-  expect(total.getAttribute("aria-describedby")).toBeNull();
+  const hint = () => document.getElementById(total.getAttribute("aria-describedby")!)!.textContent;
+  expect(hint()).toBe("Between 1 and 16 calls");
   expect(within(form()).queryByText("Unsaved changes")).toBeNull();
   fireEvent.change(total, { target: { value: "99" } });
-  expect(total.getAttribute("aria-describedby")).toBe("setting-global_concurrency-hint");
-  expect(form().textContent).toContain("between 1 and 16");
+  expect(hint()).toBe("Must be between 1 and 16");
   fireEvent.change(total, { target: { value: "8" } });
   expect(within(form()).getByText("Unsaved changes")).toBeTruthy();
   const nav = screen.getByRole("navigation", { name: "Settings sections" });
