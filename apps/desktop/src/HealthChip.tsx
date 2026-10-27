@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { formatDateTime } from "./i18n/format";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { protocolLabels } from "./EnvironmentForm";
+import { StatusDot } from "./ui";
 
 type Entry = { report?: Health; error?: AppError; at: number; checking?: boolean };
 const FRESH_MS = 60_000;
@@ -79,7 +80,7 @@ export function HealthDot({ env }: { env: Environment }) {
   const { t } = useTranslation();
   const entry = useHealth(env, true);
   const { tone, title, label, detail } = describe(entry, t);
-  return <span className={`health-dot tone-${tone} ${entry?.checking ? "pulse" : ""}`} data-tip={[title, [label !== title ? label : "", detail].filter(Boolean).join(" · ")].filter(Boolean).join("\n")} aria-label={t("health.connectionLabel", { title, label })} />;
+  return <span className={`size-[7px] ml-auto flex-none rounded-full tone-${tone} ${tone === "neutral" ? "bg-line-strong" : "bg-tone"}${entry?.checking ? " pulse animate-pulse" : ""}`} data-tip={[title, [label !== title ? label : "", detail].filter(Boolean).join(" · ")].filter(Boolean).join("\n")} aria-label={t("health.connectionLabel", { title, label })} />;
 }
 
 export function HealthChip({ env }: { env: Environment }) {
@@ -92,17 +93,17 @@ export function HealthChip({ env }: { env: Environment }) {
     : report?.error ?? (entry?.error ? formatAppError(entry.error) : "");
   const when = entry?.at ? formatDateTime(new Date(entry.at), { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 
-  return <button type="button" className={`health tone-${tone}`} disabled={checking} aria-describedby={`health-tip-${env.id}`} aria-label={t("health.stateLabel", { title, label, detail: detail ? `, ${detail}` : "", retry: t("health.retry") })} onClick={() => void checkHealth(env)}>
-    {checking ? <Icon name="refresh" className="spin" /> : <span className="status-dot" />}
+  return <button type="button" className={`tone-${tone} relative inline-flex items-center gap-1.5 h-6 px-[9px] flex-none border border-tone/35 rounded-full bg-tone-soft text-tone text-xs font-medium whitespace-nowrap cursor-pointer enabled:hover:border-tone disabled:cursor-progress`} disabled={checking} aria-describedby={`health-tip-${env.id}`} aria-label={t("health.stateLabel", { title, label, detail: detail ? `, ${detail}` : "", retry: t("health.retry") })} onClick={() => void checkHealth(env)}>
+    {checking ? <Icon name="refresh" className="animate-spin size-3" /> : <StatusDot kind="small" />}
     <span>{label}</span>
-    {detail && <span className="health-detail">{detail}</span>}
+    {detail && <span className="pl-1.5 border-l border-tone/35 text-fg-3 font-mono font-normal">{detail}</span>}
     <span className="tooltip end" role="tooltip" id={`health-tip-${env.id}`}>
       <strong>{title}</strong>
-      {(label !== title || detail) && <span className="tip-mono">{[label !== title ? label : "", detail].filter(Boolean).join(" · ")}</span>}
+      {(label !== title || detail) && <span className="font-mono text-fg">{[label !== title ? label : "", detail].filter(Boolean).join(" · ")}</span>}
       {report?.protocol && protocolLabels[report.protocol] && <span>{t(protocolLabels[report.protocol] as "environmentForm.protocols.auto")}</span>}
       {help && <span>{help}</span>}
-      {error && report?.status !== "ok" && <span className="tip-mono tip-error">{error}</span>}
-      {when && <span className="tip-meta">{t("health.checkedAt", { time: when })}</span>}
+      {error && report?.status !== "ok" && <span className="font-mono text-fg-3 text-2xs wrap-anywhere">{error}</span>}
+      {when && <span className="text-fg-3">{t("health.checkedAt", { time: when })}</span>}
     </span>
   </button>;
 }

@@ -3,8 +3,9 @@ import type { Pending } from "./ipc";
 import { useTranslation } from "react-i18next";
 import { Json } from "./json";
 import { isRecord } from "./shell/commands";
+import { valuesTable, valuesTables, type Tone } from "./ui";
 
-export function methodTone(method: string) {
+export function methodTone(method: string): Tone {
   return method === "unlink" ? "danger" : ["create", "write"].includes(method) ? "warn" : "info";
 }
 
@@ -49,7 +50,7 @@ export function relationSteps(value: unknown): { kind: RelationText; id?: unknow
 
 function RelationSteps({ steps }: { steps: NonNullable<ReturnType<typeof relationSteps>> }) {
   const { t } = useTranslation();
-  return <ul className="relation-steps">{steps.map((step, index) => <li key={index} className={DANGEROUS.has(step.kind) ? "tone-danger" : undefined}>
+  return <ul className="grid gap-0.5">{steps.map((step, index) => <li key={index} className={DANGEROUS.has(step.kind) ? "tone-danger text-tone font-medium" : undefined}>
     {t(`approvals.relation.${step.kind}`, { id: step.id, ids: Array.isArray(step.values) ? step.values.join(", ") : "" })}
     {(step.kind === "create" || step.kind === "update") && <code> <Json value={step.values} /></code>}
   </li>)}</ul>;
@@ -57,8 +58,8 @@ function RelationSteps({ steps }: { steps: NonNullable<ReturnType<typeof relatio
 
 export function ValuesTable({ values }: { values: Record<string, unknown>[] }) {
   const { t } = useTranslation();
-  return <div className="values-tables">
-    {values.slice(0, SHOWN_RECORDS).map((record, index) => <table key={index} className="values-table">
+  return <div className={valuesTables}>
+    {values.slice(0, SHOWN_RECORDS).map((record, index) => <table key={index} className={valuesTable}>
       {values.length > 1 && <caption>{t("approvals.recordNumber", { number: index + 1 })}</caption>}
       <thead><tr><th scope="col">{t("approvals.field")}</th><th scope="col">{t("approvals.value")}</th></tr></thead>
       <tbody>{Object.entries(record).map(([field, value]) => <tr key={field}>
@@ -66,7 +67,7 @@ export function ValuesTable({ values }: { values: Record<string, unknown>[] }) {
         <td>{relationSteps(value) ? <RelationSteps steps={relationSteps(value)!} /> : <code>{typeof value === "string" ? value : <Json value={value} />}</code>}</td>
       </tr>)}</tbody>
     </table>)}
-    {values.length > SHOWN_RECORDS && <p className="hint">{t("approvals.moreRecords", { count: values.length - SHOWN_RECORDS })}</p>}
+    {values.length > SHOWN_RECORDS && <p className="text-fg-3 text-sm">{t("approvals.moreRecords", { count: values.length - SHOWN_RECORDS })}</p>}
   </div>;
 }
 
@@ -74,7 +75,7 @@ export function CallDetails({ item }: { item: Pick<Pending, "args" | "kwargs" | 
   const { t } = useTranslation();
   const rows = ([["arguments", item.args], ["namedArguments", item.kwargs], ["context", item.context]] as const).filter(([, value]) => !isEmpty(value));
   if (!rows.length) return null;
-  return <dl className="call">
+  return <dl className="call grid grid-cols-[92px_minmax(0,1fr)] bg-surface-2 border-t border-line [&_:is(dt,dd)]:py-[5px] [&_:is(dt,dd)]:border-b [&_:is(dt,dd)]:border-line [&_dt]:pl-3.5 [&_dt]:text-fg-3 [&_dt]:text-xs [&_dt]:leading-[18px] [&_dd]:pr-3 [&_dt:nth-last-child(2)]:border-b-0 [&_dd:last-child]:border-b-0 [&_code]:text-sm [&_code]:text-fg [&_code]:wrap-anywhere [&_code]:whitespace-pre-wrap">
     {rows.map(([key, value]) => <Fragment key={key}><dt>{t(`approvals.${key}`)}</dt><dd><code><Json value={value} /></code></dd></Fragment>)}
   </dl>;
 }

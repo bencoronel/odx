@@ -1,6 +1,10 @@
 import { createPortal } from "react-dom";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "./Icon";
+import { cx, selectOption } from "./ui";
+
+/** Looks like an input; the width has zero specificity so a caller's `w-*` wins. The chevron is two gradient triangles. */
+const control = "[:where(&)]:w-full h-7 flex items-center justify-start px-[9px] pr-[30px] border border-line-strong rounded-md text-fg text-base text-left truncate appearance-none cursor-pointer transition-[border-color,box-shadow] duration-120 bg-surface-2 bg-[image:linear-gradient(45deg,transparent_50%,var(--text-2)_50%),linear-gradient(135deg,var(--text-2)_50%,transparent_50%)] bg-[position:calc(100%-13px)_11px,calc(100%-9px)_11px] bg-[size:4px_4px,4px_4px] bg-no-repeat enabled:hover:border-accent focus-visible:border-accent focus-visible:shadow-[0_0_0_3px_var(--accent-soft)] focus-visible:outline-none disabled:opacity-55 disabled:cursor-not-allowed";
 
 export type SelectOption<T extends string> = { value: T; label: string };
 
@@ -90,22 +94,22 @@ export default function Select<T extends string>({
       aria-expanded={open}
       aria-controls={listId}
       aria-activedescendant={open ? `${listId}-${active}` : undefined}
-      className={`select-control ${className}`.trim()}
+      className={cx(control, className)}
       onClick={() => open ? setOpen(false) : show()}
       onBlur={() => setOpen(false)}
       onKeyDown={onKeyDown}
     >{options.find((option) => option.value === value)?.label ?? value}</button>
     {open && placement && createPortal(
-      <div ref={menu} id={listId} className="select-menu" role="listbox" aria-label={label} style={{ top: placement.top ?? "auto", bottom: placement.bottom ?? "auto", left: placement.left, width: placement.width, maxHeight: placement.maxHeight }}>
+      <div ref={menu} id={listId} className="select-menu fixed z-120 overflow-auto p-[3px] border border-line-strong rounded-md bg-surface shadow-pop" role="listbox" aria-label={label} style={{ top: placement.top ?? "auto", bottom: placement.bottom ?? "auto", left: placement.left, width: placement.width, maxHeight: placement.maxHeight }}>
         {options.map((option, index) => <div
           key={option.value}
           id={`${listId}-${index}`}
           role="option"
           aria-selected={option.value === value}
-          className={`select-option${index === active ? " active" : ""}`}
+          className={selectOption(index === active)}
           onMouseEnter={() => setActive(index)}
           onMouseDown={(event) => { event.preventDefault(); choose(index); }}
-        ><span className="select-option-mark" aria-hidden="true">{option.value === value && <Icon name="check" />}</span><span>{option.label}</span></div>)}
+        ><span className="inline-flex items-center w-5 flex-[0_0_20px] text-accent-text [&_.icon]:size-[13px]" aria-hidden="true">{option.value === value && <Icon name="check" />}</span><span>{option.label}</span></div>)}
       </div>,
       document.body,
     )}

@@ -12,6 +12,7 @@ import { shellCommand } from "./shell/commands";
 import CopyButton from "./CopyButton";
 import { RuleDialog, fromApproval } from "./RulesPanel";
 import { modalOpen } from "./modal";
+import { Banner, Button, Props, button, count, countdown, cx, detail, detailHeader, detailPane, empty, emptyIcon, envList, envListText, listEmpty, listEmptyIcon, listPane, listToolbar, method, panel, searchIcon, searchInput, split, tones, valuesTable } from "./ui";
 
 export default function ApprovalsPage({ pending, envs, deciding, decide, decideMany, openInShell, openEnvironment, filter, setFilter, focusId }: {
   pending: Pending[];
@@ -139,16 +140,16 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   }, [selected?.id]);
 
   const remainingOf = (item: Pending) => Date.parse(item.expires_at) - now;
-  const countdown = (item: Pending) => {
+  const countdownOf = (item: Pending) => {
     const remaining = remainingOf(item);
     const expired = remaining <= 0;
-    return <span className={`countdown ${expired ? "tone-danger" : remaining < 60_000 ? "tone-warn" : ""}`} data-tip={t("approvals.validUntil", { time: formatDateTime(new Date(item.expires_at), { hour: "2-digit", minute: "2-digit" }) })}>
+    return <span className={countdown(expired ? "danger" : remaining < 60_000 ? "warn" : undefined)} data-tip={t("approvals.validUntil", { time: formatDateTime(new Date(item.expires_at), { hour: "2-digit", minute: "2-digit" }) })}>
       <Icon name="clock" /><time dateTime={item.expires_at}>{expired ? t("approvals.expired") : formatRemaining(remaining, { hour: t("common.hourShort"), minute: t("common.minuteShort") })}</time>
     </span>;
   };
 
-  const toolbar = <div className="list-toolbar">
-    <SearchField inputRef={search} value={filter} onChange={setFilter} label={t("approvals.filterLabel")} placeholder={t("approvals.filterPlaceholder")} shortcut
+  const toolbar = <div className={listToolbar}>
+    <SearchField className="min-w-0" inputRef={search} value={filter} onChange={setFilter} label={t("approvals.filterLabel")} placeholder={t("approvals.filterPlaceholder")} shortcut
       filtered={!!query} count={{ shown: visible.length, total: pending.length, text: t("approvals.filterCount", { shown: visible.length, total: pending.length }) }}
       inputProps={{ "aria-keyshortcuts": "Control+F /" }} />
   </div>;
@@ -158,16 +159,16 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   const env = item && envs.find((e) => e.id === item.environment_id);
   const ids = item && recordIds(item);
   const values = item && writtenValues(item);
-  return <div className="split" style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
-    <aside className="list-pane" aria-label={t("approvals.listLabel")}>
+  return <div className={split} style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
+    <aside className={listPane} aria-label={t("approvals.listLabel")}>
       <ListResizer width={listWidth} setWidth={setListWidth} label={t("approvals.resizeList")} />
       {toolbar}
-      {pending.length === 0 ? <div className="empty">
-        <span className="empty-icon tone-ok"><Icon name="check" /></span>
+      {pending.length === 0 ? <div className={empty}>
+        <span className={emptyIcon("ok")}><Icon name="check" /></span>
         <h2>{t("approvals.emptyTitle")}</h2>
       </div>
-      : !item ? <ul className="env-list"><li className="list-empty"><span className="list-empty-icon"><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><button type="button" className="btn sm" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</button></li></ul>
-      : <ul className="env-list approval-list" role="listbox" aria-multiselectable="true" aria-label={t("approvals.listLabel")} ref={list}>
+      : !item ? <ul className={envList}><li className={listEmpty}><span className={listEmptyIcon}><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><Button size="sm" className="mt-2" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</Button></li></ul>
+      : <ul className={envList} role="listbox" aria-multiselectable="true" aria-label={t("approvals.listLabel")} ref={list}>
         {visible.map((p) => {
           if (!fresh.current.has(p.id)) fresh.current.set(p.id, mounted.current);
           const remaining = remainingOf(p);
@@ -176,80 +177,80 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
           const tone = remaining <= 0 ? "danger" : remaining < 60_000 ? "warn" : methodTone(p.method);
           return <li key={p.id} role="option" aria-selected={marking ? picked.has(p.id) : p.id === item.id} tabIndex={p.id === item.id ? 0 : -1}
             aria-label={t("approvals.requestLabel", { method: p.method, model: p.model, environment: p.environment_name })}
-            className={`approval-item tone-${methodTone(p.method)}${fresh.current.get(p.id) ? " fresh" : ""}${marking && p.id === item.id ? " cursor" : ""}`}
+            className={`relative pl-3 before:absolute before:left-[3px] before:top-2 before:bottom-2 before:w-[3px] before:rounded-xs before:bg-tone before:content-[''] tone-${methodTone(p.method)}${fresh.current.get(p.id) ? " animate-[arrive_.35s_ease-out]" : ""}${marking && p.id === item.id ? " cursor shadow-[inset_0_0_0_1px_var(--accent)]" : ""}`}
             // WebKit also clicks a focused option on Space (detail 0); the key handler already marked it.
             onClick={(event) => { if (event.detail) choose(p.id, event.shiftKey ? "range" : event.ctrlKey || event.metaKey ? "toggle" : "single"); }}>
-            <code className={`method tone-${methodTone(p.method)}`}>{p.method}</code>
-            <span className="env-list-text">
+            <code className={method(methodTone(p.method))}>{p.method}</code>
+            <span className={envListText}>
               <strong className="mono">{p.model}</strong>
               <small>{p.environment_name} · {p.client_label ?? t("approvals.local")} · {relativeTime(p.created_at, now)}</small>
             </span>
-            {deciding.has(p.id) ? <Icon name="refresh" className="spin ml-auto" /> : <span className="ml-auto">{countdown(p)}</span>}
+            {deciding.has(p.id) ? <Icon name="refresh" className="animate-spin ml-auto size-3.5 text-fg-3" /> : <span className="ml-auto">{countdownOf(p)}</span>}
             {/* Remaining validity; color warns as expiry approaches. */}
-            <span className={`expiry-bar tone-${tone}`} style={{ "--left": Number.isFinite(left) ? left : 1 } as CSSProperties} aria-hidden="true" />
+            <span className={`absolute left-3 right-2 bottom-0.5 h-0.5 rounded-[1px] bg-tone opacity-70 origin-left [transition:transform_1s_linear,background-color_.3s] tone-${tone}`} style={{ transform: `scaleX(${Number.isFinite(left) ? left : 1})` }} aria-hidden="true" />
           </li>;
         })}
       </ul>}
-      <div className="hint keys-hint">
-        {showKeys && <div id="approval-keys" className="keys-grid">
+      <div className="px-3 py-2 border-t border-line text-fg-3 text-xs">
+        {showKeys && <div id="approval-keys" className="grid gap-2 mb-2 pb-2 border-b border-line">
           {KEY_GROUPS.map(([group, keys]) => <section key={group}>
-            <p className="keys-group">{t(`approvals.keys.${group}`)}</p>
-            <dl>{keys.map(([combo, action]) => <div key={action}><dt>{combo.map((k) => <kbd key={k}>{k === "Space" ? t("approvals.keys.space") : k}</kbd>)}</dt><dd>{t(`approvals.keys.${action}`)}</dd></div>)}</dl>
+            <p className="mb-0.5 text-fg-3 font-medium uppercase tracking-[.04em] text-2xs">{t(`approvals.keys.${group}`)}</p>
+            <dl>{keys.map(([combo, action]) => <div key={action} className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-2 py-px"><dt>{combo.map((k) => <kbd key={k}>{k === "Space" ? t("approvals.keys.space") : k}</kbd>)}</dt><dd className="text-fg-2">{t(`approvals.keys.${action}`)}</dd></div>)}</dl>
           </section>)}
         </div>}
-        <div className="row gap-2">
+        <div className="flex items-center gap-2 flex-wrap gap-y-1">
           <span><kbd>↑</kbd><kbd>↓</kbd> {t("approvals.keys.move")}</span>
           <span><kbd>A</kbd> {t("approvals.keys.approve")}</span>
           <span><kbd>R</kbd> {t("approvals.keys.reject")}</span>
-          <button type="button" className="keys-toggle ml-auto" aria-expanded={showKeys} aria-controls="approval-keys" aria-keyshortcuts="?" onClick={() => setShowKeys((open) => !open)}>
+          <button type="button" className="ml-auto cursor-pointer hover:text-fg" aria-expanded={showKeys} aria-controls="approval-keys" aria-keyshortcuts="?" onClick={() => setShowKeys((open) => !open)}>
             <kbd>?</kbd> {t(showKeys ? "approvals.keys.hide" : "approvals.keys.all")}
           </button>
         </div>
       </div>
     </aside>
-    <section className="detail-pane">
+    <section className={detailPane}>
       {multi ? <BatchDetail batch={batch} deciding={deciding} now={now} decideMany={decideMany} clear={() => setPicked(new Set())} />
-      : item && <div className={`detail approval-detail tone-${methodTone(item.method)}`} aria-busy={busy}>
-        <header className="detail-header">
-          <code className={`method tone-${methodTone(item.method)}`}>{item.method}</code>
+      : item && <div className={cx(detail, tones[methodTone(item.method)])} aria-busy={busy}>
+        <header className={detailHeader}>
+          <code className={method(methodTone(item.method))}>{item.method}</code>
           <strong className="mono truncate">{item.model}</strong>
-          <span className="row gap-2 ml-auto">
-            <button className="btn danger-ghost sm icon-only" disabled={busy} onClick={() => setRejecting(true)} aria-label={t("approvals.rejectWithReason")} aria-keyshortcuts="Shift+R" data-tip={`${t("approvals.rejectWithReason")} · ⇧R`}><Icon name="pencil" /></button>
-            <button className="btn danger-ghost sm" disabled={busy} onClick={() => decide(item, false)} aria-keyshortcuts="R"><Icon name="x" />{t("approvals.reject")}</button>
-            <button className="btn primary sm" disabled={busy || expired} onClick={() => decide(item, true)}><Icon name="check" />{busy ? t("common.processing") : t("approvals.approve")}</button>
+          <span className="flex items-center gap-2 ml-auto">
+            <Button variant="dangerGhost" size="sm" iconOnly disabled={busy} onClick={() => setRejecting(true)} aria-label={t("approvals.rejectWithReason")} aria-keyshortcuts="Shift+R" data-tip={`${t("approvals.rejectWithReason")} · ⇧R`}><Icon name="pencil" /></Button>
+            <Button variant="dangerGhost" size="sm" disabled={busy} onClick={() => decide(item, false)} aria-keyshortcuts="R"><Icon name="x" />{t("approvals.reject")}</Button>
+            <Button variant="primary" size="sm" disabled={busy || expired} onClick={() => decide(item, true)}><Icon name="check" />{busy ? t("common.processing") : t("approvals.approve")}</Button>
           </span>
         </header>
-        {rejecting && <div className="reject-reason row gap-2">
-          <label className="search grow"><Icon name="pencil" />
-            <input autoFocus value={reason} maxLength={500} disabled={busy} placeholder={t("approvals.reasonPlaceholder")} aria-label={t("approvals.reasonLabel")}
+        {rejecting && <div className="flex items-center gap-2 w-full">
+          <label className="relative block grow"><Icon name="pencil" className={searchIcon} />
+            <input className={searchInput} autoFocus value={reason} maxLength={500} disabled={busy} placeholder={t("approvals.reasonPlaceholder")} aria-label={t("approvals.reasonLabel")}
               onChange={(event) => setReason(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !busy) { event.preventDefault(); decide(item, false, reason); }
                 else if (event.key === "Escape") { event.preventDefault(); setRejecting(false); setReason(""); }
               }} />
           </label>
-          <button className="btn danger sm" disabled={busy} onClick={() => decide(item, false, reason)}>{t("approvals.reject")}</button>
-          <button className="btn ghost sm" onClick={() => { setRejecting(false); setReason(""); }}>{t("common.cancel")}</button>
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => decide(item, false, reason)}>{t("approvals.reject")}</Button>
+          <Button variant="ghost" size="sm" onClick={() => { setRejecting(false); setReason(""); }}>{t("common.cancel")}</Button>
         </div>}
-        {expired && <p key={nudge} className={`banner warn compact${nudge ? " nudge" : ""}`} role="status"><Icon name="clock" />{t("approvals.expiredHint")}</p>}
-        <div className="panel">
-          <dl className="props compact">
-            <div><dt>{t("common.environment")}</dt><dd className="row gap-2">{env
-              ? <button type="button" className="link-btn row gap-2" onClick={() => openEnvironment(env.id)} data-tip={t("approvals.openEnvironment")}><EnvIcon env={env} />{item.environment_name}</button>
+        {expired && <Banner key={nudge} tone="warn" compact className={nudge ? "animate-[nudge_.3s_ease-in-out]" : undefined} role="status"><Icon name="clock" />{t("approvals.expiredHint")}</Banner>}
+        <div className={cx(panel, "border-l-[3px] border-l-tone", busy && "opacity-60")}>
+          <Props compact>
+            <div><dt>{t("common.environment")}</dt><dd className="flex items-center gap-2">{env
+              ? <button type="button" className="flex items-center gap-2 cursor-pointer hover:text-accent-text hover:underline" onClick={() => openEnvironment(env.id)} data-tip={t("approvals.openEnvironment")}><EnvIcon env={env} />{item.environment_name}</button>
               : <><Icon name="server" />{item.environment_name}</>}</dd></div>
-            <div><dt>{t("approvals.requestedBy")}</dt><dd className="row gap-2" data-tip={item.client_label ? t("approvals.clientRequest") : t("approvals.localRequest")}><Icon name="clients" />{item.client_label ?? t("approvals.local")}</dd></div>
+            <div><dt>{t("approvals.requestedBy")}</dt><dd className="flex items-center gap-2" data-tip={item.client_label ? t("approvals.clientRequest") : t("approvals.localRequest")}><Icon name="clients" />{item.client_label ?? t("approvals.local")}</dd></div>
             <div><dt>{t("approvals.requestedAt")}</dt><dd><time dateTime={item.created_at} data-tip={formatDateTime(new Date(item.created_at), { hour: "2-digit", minute: "2-digit", second: "2-digit" })}>{relativeTime(item.created_at, now)}</time></dd></div>
-            <div><dt>{t("approvals.expires")}</dt><dd>{countdown(item)}</dd></div>
-            {ids && <div><dt>{t("approvals.records", { count: ids.length })}</dt><dd className="record-ids">
-              <strong className={ids.length > 1 ? `count tone-${methodTone(item.method)}` : "count"}>{ids.length}</strong>
-              <button type="button" className="btn sm" onClick={() => openInShell(item, readCommand(item, ids, values))} aria-keyshortcuts="V" data-tip={`${t("approvals.viewRecordsHint")} · V`}><Icon name="terminal" />{t("approvals.viewRecords", { count: ids.length })}</button>
+            <div><dt>{t("approvals.expires")}</dt><dd>{countdownOf(item)}</dd></div>
+            {ids && <div><dt>{t("approvals.records", { count: ids.length })}</dt><dd className="flex flex-wrap items-center gap-1">
+              <strong className={cx(count(ids.length > 1 && methodTone(item.method) === "warn" ? "warn" : undefined), "mr-1")}>{ids.length}</strong>
+              <Button size="sm" onClick={() => openInShell(item, readCommand(item, ids, values))} aria-keyshortcuts="V" data-tip={`${t("approvals.viewRecordsHint")} · V`}><Icon name="terminal" />{t("approvals.viewRecords", { count: ids.length })}</Button>
             </dd></div>}
-          </dl>
+          </Props>
           {values && <ValuesTable values={values} />}
-          {values ? <details className="raw-call"><summary>{t("approvals.rawCall")}</summary><CallDetails item={item} /></details> : <CallDetails item={item} />}
-          <div className="copy-command">
-            {item.method !== "unlink" && <button type="button" className="btn ghost sm" disabled={busy || expired} onClick={() => setRuleFor(item)}><Icon name="shield" />{t("rules.create")}</button>}
-            <CopyButton text={() => shellCommand(item)} label={t("approvals.copyCommand")} className="btn ghost sm" />
+          {values ? <details className="border-t border-line"><summary className="px-3 py-1.5 text-fg-3 text-xs cursor-pointer">{t("approvals.rawCall")}</summary><CallDetails item={item} /></details> : <CallDetails item={item} />}
+          <div className="flex justify-end gap-1.5 px-2 py-1.5 border-t border-line">
+            {item.method !== "unlink" && <Button variant="ghost" size="sm" disabled={busy || expired} onClick={() => setRuleFor(item)}><Icon name="shield" />{t("rules.create")}</Button>}
+            <CopyButton text={() => shellCommand(item)} label={t("approvals.copyCommand")} className={button({ variant: "ghost", size: "sm" })} />
           </div>
         </div>
       </div>}
@@ -280,24 +281,24 @@ function BatchDetail({ batch, deciding, now, decideMany, clear }: {
   const { t } = useTranslation();
   const ready = batch.filter((p) => !deciding.has(p.id));
   const approvable = ready.filter((p) => Date.parse(p.expires_at) > now);
-  return <div className="detail approval-detail">
-    <header className="detail-header">
+  return <div className={detail}>
+    <header className={detailHeader}>
       <strong>{t("approvals.selectedCount", { count: batch.length })}</strong>
-      <span className="row gap-2 ml-auto">
-        <button className="btn ghost sm" onClick={clear}>{t("approvals.clearSelection")}</button>
-        <button className="btn danger-ghost sm" disabled={!ready.length} onClick={() => decideMany(ready, false)} aria-keyshortcuts="R"><Icon name="x" />{t("approvals.rejectAll", { count: ready.length })}</button>
-        <button className="btn primary sm" disabled={!approvable.length} onClick={() => decideMany(approvable, true)} aria-keyshortcuts="A"><Icon name="check" />{t("approvals.approveAll", { count: approvable.length })}</button>
+      <span className="flex items-center gap-2 ml-auto">
+        <Button variant="ghost" size="sm" onClick={clear}>{t("approvals.clearSelection")}</Button>
+        <Button variant="dangerGhost" size="sm" disabled={!ready.length} onClick={() => decideMany(ready, false)} aria-keyshortcuts="R"><Icon name="x" />{t("approvals.rejectAll", { count: ready.length })}</Button>
+        <Button variant="primary" size="sm" disabled={!approvable.length} onClick={() => decideMany(approvable, true)} aria-keyshortcuts="A"><Icon name="check" />{t("approvals.approveAll", { count: approvable.length })}</Button>
       </span>
     </header>
-    {approvable.length < ready.length && <p className="banner warn compact" role="status"><Icon name="clock" />{t("approvals.expiredSkipped", { count: ready.length - approvable.length })}</p>}
-    <div className="panel">
-      <table className="values-table batch-table">
+    {approvable.length < ready.length && <Banner tone="warn" compact role="status"><Icon name="clock" />{t("approvals.expiredSkipped", { count: ready.length - approvable.length })}</Banner>}
+    <div className={panel}>
+      <table className={cx(valuesTable, "[&_tbody_td]:align-middle")}>
         <thead><tr><th scope="col">{t("approvals.method")}</th><th scope="col">{t("approvals.model")}</th><th scope="col">{t("common.environment")}</th><th scope="col">{t("approvals.recordsColumn")}</th></tr></thead>
         <tbody>{batch.map((p) => <tr key={p.id}>
-          <td><code className={`method tone-${methodTone(p.method)}`}>{p.method}</code></td>
+          <td><code className={method(methodTone(p.method))}>{p.method}</code></td>
           <td className="mono">{p.model}</td>
           <td>{p.environment_name}</td>
-          <td>{deciding.has(p.id) ? <Icon name="refresh" className="spin" /> : recordIds(p)?.length ?? "—"}</td>
+          <td>{deciding.has(p.id) ? <Icon name="refresh" className="animate-spin" /> : recordIds(p)?.length ?? "—"}</td>
         </tr>)}</tbody>
       </table>
     </div>

@@ -14,6 +14,7 @@ import { PageLoadBoundary } from "./PageLoadBoundary";
 import { WindowTitleBar } from "./WindowTitleBar";
 import { TooltipLayer } from "./TooltipLayer";
 import { Icon } from "./Icon";
+import { Banner, Button, Chip, IconButton, Props, appWindow, banner, field, method } from "./ui";
 import Sidebar, { PAGE_ORDER, type Page } from "./Sidebar";
 import ServiceStatusBar from "./ServiceStatus";
 import DesktopNotices from "./DesktopNotices";
@@ -271,22 +272,22 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const themeToggle = <button type="button" className="icon-btn" aria-label={shown === "dark" ? t("app.theme.useLight") : t("app.theme.useDark")} data-tip={shown === "dark" ? t("app.theme.light") : t("app.theme.dark")} onClick={() => setTheme(shown === "dark" ? "light" : "dark")}><Icon name={shown === "dark" ? "sun" : "moon"} /></button>;
+  const themeToggle = <IconButton aria-label={shown === "dark" ? t("app.theme.useLight") : t("app.theme.useDark")} data-tip={shown === "dark" ? t("app.theme.light") : t("app.theme.dark")} onClick={() => setTheme(shown === "dark" ? "light" : "dark")}><Icon name={shown === "dark" ? "sun" : "moon"} /></IconButton>;
 
   if (status !== "unlocked") {
-    return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices />
+    return <div className={appWindow}><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices />
       <UnlockScreen status={status} busy={busy} error={error} retry={() => void run()} submit={(password) => run(() => status === "absent" ? ipc.create(password) : ipc.unlock(password))} reset={() => run(ipc.reset)} />
       <ServiceStatusBar vault={status} services={services} />
     </div>;
   }
 
 
-  return <div className="app-window"><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="app-frame">
+  return <div className={appWindow}><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="flex flex-1 min-h-0 overflow-clip">
     <Sidebar page={page} setPage={setPage} busy={busy} lock={lock} openPalette={() => setPaletteOpen(true)}
       counts={{ environments: envs.length, approvals: pending.length }} />
-    <main className="main" id="main-content" aria-busy={busy}>
-      {error && <div className="banner danger page-banner" role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><button className="icon-btn sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></button></div>}
-      <div className="shell-workspace" hidden={page !== "shell"}>
+    <main className="flex-1 min-w-0 min-h-0 flex flex-col" id="main-content" aria-busy={busy}>
+      {error && <div className={banner({ tone: "danger", page: true })} role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><IconButton size="sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></IconButton></div>}
+      <div className="flex flex-col flex-1 min-h-0 min-w-0" hidden={page !== "shell"}>
         {shellVisited && <PageLoadBoundary>
           <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget?.env} command={shellTarget?.command} onConnectHandled={() => setShellTarget(null)}
             agentRequests={agentRequests} onAgentHandled={agentHandled} />
@@ -359,18 +360,18 @@ export default function App() {
         setModeDecision(null);
       }}
     >
-      {modeDecision && <dl className="props compact">
+      {modeDecision && <Props compact>
         <div><dt>{t("common.environment")}</dt><dd>{modeDecision.environment.name}</dd></div>
         <div><dt>{t("common.database")}</dt><dd className="mono">{modeDecision.environment.database}</dd></div>
         <div><dt>URL</dt><dd className="mono">{modeDecision.environment.url}</dd></div>
-      </dl>}
-      {modeDecision?.mode === "temporary" && <label className="field" htmlFor="write-minutes"><span>{t("app.writeMode.durationMinutes")}</span>
-        <div className="row gap-2">
+      </Props>}
+      {modeDecision?.mode === "temporary" && <label className={field} htmlFor="write-minutes"><span>{t("app.writeMode.durationMinutes")}</span>
+        <div className="flex items-center gap-2">
           <input id="write-minutes" className="w-28" type="number" min={1} max={4_294_967_295} step={1} value={minutes} disabled={busy} onChange={(event) => setMinutes(event.target.value)} />
-          {[15, 60, 240].map((value) => <button key={value} type="button" className="btn sm" aria-pressed={minutes === String(value)} disabled={busy} onClick={() => setMinutes(String(value))}>{value < 60 ? `${value} min` : `${value / 60} h`}</button>)}
+          {[15, 60, 240].map((value) => <Button key={value} size="sm" aria-pressed={minutes === String(value)} disabled={busy} onClick={() => setMinutes(String(value))}>{value < 60 ? `${value} min` : `${value / 60} h`}</Button>)}
         </div>
       </label>}
-      <p className="banner info compact"><Icon name="shield" />{t("app.writeMode.warning")}</p>
+      <Banner tone="info" compact><Icon name="shield" />{t("app.writeMode.warning")}</Banner>
     </ConfirmDialog>
     <ConfirmDialog
       open={decision !== null}
@@ -386,20 +387,20 @@ export default function App() {
       initialFocus={decision?.approve === false ? batchReasonInput : undefined}
       onConfirm={async () => { if (decision) void decideAll(decision.approvals, decision.approve, decision.approve ? undefined : batchReason); }}
     >
-      {decision?.approvals.length === 1 && <div className="call-box">
-        <div className="row gap-2"><code className={`method tone-${methodTone(decision.approvals[0].method)}`}>{decision.approvals[0].method}</code><strong className="mono">{decision.approvals[0].model}</strong><span className="chip ml-auto"><Icon name="server" />{decision.approvals[0].environment_name}</span></div>
+      {decision?.approvals.length === 1 && <div className="grid border border-line rounded-md overflow-hidden [&_.call_dt]:pl-2.5">
+        <div className="flex items-center gap-2 px-2.5 py-2"><code className={method(methodTone(decision.approvals[0].method))}>{decision.approvals[0].method}</code><strong className="mono">{decision.approvals[0].model}</strong><Chip className="ml-auto"><Icon name="server" />{decision.approvals[0].environment_name}</Chip></div>
         <CallDetails item={decision.approvals[0]} />
       </div>}
-      {decision && decision.approvals.length > 1 && <ul className="batch-list">
-        {decision.approvals.map((a) => <li key={a.id}><code className={`method tone-${methodTone(a.method)}`}>{a.method}</code><span className="mono">{a.model}</span><span className="chip ml-auto"><Icon name="server" />{a.environment_name}</span></li>)}
+      {decision && decision.approvals.length > 1 && <ul className="grid max-h-[220px] overflow-auto border border-line rounded-md">
+        {decision.approvals.map((a) => <li key={a.id} className="flex items-center gap-2 px-2 py-[5px] border-t border-line first:border-t-0 text-sm"><code className={method(methodTone(a.method))}>{a.method}</code><span className="mono">{a.model}</span><Chip className="ml-auto"><Icon name="server" />{a.environment_name}</Chip></li>)}
       </ul>}
-      {decision?.approve === false && <label className="field"><span>{t("approvals.reasonLabel")}</span>
+      {decision?.approve === false && <label className={field}><span>{t("approvals.reasonLabel")}</span>
         <input ref={batchReasonInput} value={batchReason} maxLength={500} placeholder={t("approvals.batchReasonPlaceholder")} onChange={(event) => setBatchReason(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void decideAll(decision.approvals, false, batchReason); setDecision(null); } }} /></label>}
     </ConfirmDialog>
-    {notice && <div className="toast" role="status"><Icon name="check" /><span>{notice.text}</span>
-      {notice.activity && <button type="button" className="btn ghost sm" onClick={() => { setNotice(null); setPage("activity"); }}>{t("approvals.viewActivity")}</button>}
-      <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={() => setNotice(null)}><Icon name="x" /></button>
+    {notice && <div className="fixed right-4 bottom-10 z-50 flex items-center gap-2 py-2 pr-2 pl-3 border border-line rounded-lg bg-surface shadow-pop text-sm animate-[arrive_.25s_ease-out]" role="status"><Icon name="check" className="text-ok" /><span>{notice.text}</span>
+      {notice.activity && <Button variant="ghost" size="sm" onClick={() => { setNotice(null); setPage("activity"); }}>{t("approvals.viewActivity")}</Button>}
+      <IconButton size="sm" aria-label={t("common.close")} onClick={() => setNotice(null)}><Icon name="x" /></IconButton>
     </div>}
   </div>;
 }

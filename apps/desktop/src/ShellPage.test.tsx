@@ -68,7 +68,7 @@ it("keeps a running call in its original tab while another session connects else
   command("read res.partner 1");
   const close = screen.getByRole("button", { name: /Close session/ }) as HTMLButtonElement;
   expect(close.disabled).toBe(true);
-  expect(firstTab.querySelector(".spin")).not.toBeNull();
+  expect(firstTab.querySelector(".animate-spin")).not.toBeNull();
   fireEvent(firstTab, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
   expect(screen.getByRole("tab")).toBe(firstTab);
   await openSession("B");
@@ -76,7 +76,7 @@ it("keeps a running call in its original tab while another session connects else
   await waitFor(() => expect(close.disabled).toBe(false));
   expect(within(panel()).queryByText("result from A")).toBeNull();
   // Finished behind another tab: the tab is marked until shown.
-  expect(firstTab.querySelector(".spin")).toBeNull();
+  expect(firstTab.querySelector(".animate-spin")).toBeNull();
   expect(within(firstTab).getByRole("status", { name: "Finished while you were away" })).toBeTruthy();
   fireEvent.click(firstTab);
   expect(within(firstTab).queryByRole("status")).toBeNull();

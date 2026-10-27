@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { ipc } from "./ipc";
+import type { Tone } from "./ui";
 
 /** Theme tones a tag can use; "neutral" is the default look. */
 export const TAG_COLORS = ["neutral", "info", "ok", "warn", "danger", "accent"] as const;
@@ -38,5 +39,5 @@ export function setTagColor(tag: string, color: TagColor) {
   ipc.setTagColor(tag, color === "neutral" ? null : color).catch(() => publish(previous));
 }
 export const tagColor = (all: Colors, tag: string): TagColor => all[tag.toLowerCase()] ?? "neutral";
-/** Extra chip classes for a tag's color. */
-export const tagTone = (all: Colors, tag: string) => { const color = tagColor(all, tag); return color === "neutral" ? "" : ` chip-tone tone-${color}`; };
+/** A tag's chip tone; none for the default look. */
+export const tagTone = (all: Colors, tag: string): Tone | undefined => { const color = tagColor(all, tag); return color === "neutral" ? undefined : color; };

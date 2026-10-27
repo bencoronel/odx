@@ -13,15 +13,16 @@ import { i18n } from "./i18n";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { usePreventUnload, type Theme } from "./windowState";
 import { loadEnvironmentDefaults, saveEnvironmentDefaults, type EnvironmentDefaults } from "./EnvironmentForm";
+import { Banner, Button, PanelHeader, Props, Segment, Segmented, navItem, panel, panelBody, settingRow } from "./ui";
 
 
 function ThemeSelector({ theme, change }: { theme: Theme; change: (theme: Theme) => void }) {
   const { t } = useTranslation();
-  return <div className="segmented" role="group" aria-label={t("settingsPage.themeLabel")}>
-    <button type="button" aria-pressed={theme === "light"} onClick={() => change("light")}><Icon name="sun" />{t("settingsPage.light")}</button>
-    <button type="button" aria-pressed={theme === "dark"} onClick={() => change("dark")}><Icon name="moon" />{t("settingsPage.dark")}</button>
-    <button type="button" aria-pressed={theme === "system"} onClick={() => change("system")}><Icon name="monitor" />{t("settingsPage.system")}</button>
-  </div>;
+  return <Segmented role="group" aria-label={t("settingsPage.themeLabel")}>
+    <Segment aria-pressed={theme === "light"} onClick={() => change("light")}><Icon name="sun" />{t("settingsPage.light")}</Segment>
+    <Segment aria-pressed={theme === "dark"} onClick={() => change("dark")}><Icon name="moon" />{t("settingsPage.dark")}</Segment>
+    <Segment aria-pressed={theme === "system"} onClick={() => change("system")}><Icon name="monitor" />{t("settingsPage.system")}</Segment>
+  </Segmented>;
 }
 
 export default function SettingsPage({ theme, setTheme, busy, pendingCount, onContextSaved, onHeadersSaved, lock, changePassword }: {
@@ -37,21 +38,21 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
   const { t } = useTranslation();
   const [active, setActive] = useState<SectionId>("general");
   // Hidden, not unmounted, so unsaved drafts survive switching sections.
-  const section = (id: SectionId) => ({ className: "settings-group", "aria-labelledby": `${id}-title`, hidden: active !== id });
-  const title = (id: SectionId) => <header className="settings-head">
-    <h2 id={`${id}-title`}>{t(sections.find(([key]) => key === id)![1])}</h2>
+  const section = (id: SectionId) => ({ className: "grid gap-3.5", "aria-labelledby": `${id}-title`, hidden: active !== id });
+  const title = (id: SectionId) => <header className="grid gap-[3px] mb-1">
+    <h2 className="text-fg" id={`${id}-title`}>{t(sections.find(([key]) => key === id)![1])}</h2>
   </header>;
-  return <div className="settings-layout">
-    <nav className="settings-nav" aria-label={t("settingsPage.sections")}>
-      {sections.map(([id, key, icon]) => <button key={id} type="button" className="nav-item" aria-current={active === id ? "page" : undefined} onClick={() => setActive(id)}><Icon name={icon} /><span>{t(key)}</span></button>)}
+  return <div className="flex-1 min-h-0 grid grid-cols-[200px_minmax(0,1fr)] max-sm:grid-cols-1 max-sm:grid-rows-[auto_1fr]">
+    <nav className="grid content-start gap-px px-2 py-3 border-r border-line bg-bg overflow-y-auto max-sm:grid-flow-col max-sm:auto-cols-max max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b" aria-label={t("settingsPage.sections")}>
+      {sections.map(([id, key, icon]) => <button key={id} type="button" className={navItem} aria-current={active === id ? "page" : undefined} onClick={() => setActive(id)}><Icon name={icon} /><span className="flex-1 max-md:hidden">{t(key)}</span></button>)}
     </nav>
-    <div className="page-scroll"><div className="settings">
+    <div className="page-scroll flex-1 min-h-0 overflow-auto overscroll-contain px-7 pt-5 pb-8 max-sm:p-4"><div className="settings max-w-[760px]">
       <section {...section("general")}>
         {title("general")}
-        <section className="panel">
-          <header className="panel-header"><h3>{t("settingsPage.appearance")}</h3></header>
-          <div className="setting-row"><strong>{t("settings.language.label")}</strong><LanguageSelect className="setting-control" /></div>
-          <div className="setting-row"><strong>{t("settingsPage.theme")}</strong><ThemeSelector theme={theme} change={setTheme} /></div>
+        <section className={panel}>
+          <PanelHeader><h3>{t("settingsPage.appearance")}</h3></PanelHeader>
+          <div className={settingRow}><strong>{t("settings.language.label")}</strong><LanguageSelect className="w-[260px] max-sm:w-full" /></div>
+          <div className={settingRow}><strong>{t("settingsPage.theme")}</strong><ThemeSelector theme={theme} change={setTheme} /></div>
         </section>
         <UpdatesPanel />
       </section>
@@ -69,9 +70,9 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
       </section>
       <section {...section("security")}>
         {title("security")}
-        <section className="panel">
-          <header className="panel-header"><h3>{t("unlock.vault")}</h3></header>
-          <div className="setting-row"><div><strong>{t("settingsPage.lockNow")}</strong>{pendingCount > 0 && <p className="hint">{t("settingsPage.lockPending", { count: pendingCount })}</p>}</div><button className="btn" disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</button></div>
+        <section className={panel}>
+          <PanelHeader><h3>{t("unlock.vault")}</h3></PanelHeader>
+          <div className={settingRow}><div><strong>{t("settingsPage.lockNow")}</strong>{pendingCount > 0 && <p className="text-fg-3 text-sm mt-px">{t("settingsPage.lockPending", { count: pendingCount })}</p>}</div><Button disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</Button></div>
         </section>
         <PasswordPage busy={busy} change={changePassword} />
       </section>
@@ -87,10 +88,10 @@ function EnvironmentDefaultsPanel() {
     setDefaults(next);
     saveEnvironmentDefaults(next);
   };
-  return <section className="panel">
-    <header className="panel-header"><h3>{t("settingsPage.environmentDefaults")}</h3></header>
-    <label className="setting-row"><strong>{t("environmentForm.user")}</strong><input className="setting-control" autoComplete="off" value={defaults.login} onChange={set("login")} /></label>
-    <label className="setting-row"><strong>{t("common.database")}</strong><input className="setting-control" autoComplete="off" value={defaults.database} onChange={set("database")} /></label>
+  return <section className={panel}>
+    <PanelHeader><h3>{t("settingsPage.environmentDefaults")}</h3></PanelHeader>
+    <label className={settingRow}><strong>{t("environmentForm.user")}</strong><input className="w-[260px] max-sm:w-full" autoComplete="off" value={defaults.login} onChange={set("login")} /></label>
+    <label className={settingRow}><strong>{t("common.database")}</strong><input className="w-[260px] max-sm:w-full" autoComplete="off" value={defaults.database} onChange={set("database")} /></label>
   </section>;
 }
 
@@ -144,9 +145,9 @@ function LimitsPanel() {
   useEffect(() => {
     ipc.settings().then((v) => { setView(v); setDraft(toDraft(v.settings)); }).catch((e) => setLoadError(normalizeAppError(e)));
   }, []);
-  if (loadError) return <section className="panel"><header className="panel-header"><h3>{t("settingsPage.limits")}</h3></header>
-    <p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(loadError)}</p></section>;
-  if (!view || !draft) return <section className="panel" aria-busy="true"><header className="panel-header"><h3>{t("settingsPage.limits")}</h3></header></section>;
+  if (loadError) return <section className={panel}><PanelHeader><h3>{t("settingsPage.limits")}</h3></PanelHeader>
+    <Banner tone="danger" role="alert"><Icon name="alert" />{formatAppError(loadError)}</Banner></section>;
+  if (!view || !draft) return <section className={panel} aria-busy="true"><PanelHeader><h3>{t("settingsPage.limits")}</h3></PanelHeader></section>;
 
   const errors = Object.fromEntries(Object.keys(draft).map((k) => [k, fieldError(view, draft, k as keyof Settings)])) as Record<keyof Settings, string>;
   const valid = Object.values(errors).every((e) => !e);
@@ -176,39 +177,39 @@ function LimitsPanel() {
     const { min, max } = view.bounds[field.key];
     const id = `setting-${field.key}`;
     const error = errors[field.key];
-    return <div key={field.key} className="setting-row">
-      <div><label htmlFor={id}><strong>{text(field.label)}</strong></label>
+    return <div key={field.key} className={settingRow}>
+      <div className="gap-[3px]!"><label htmlFor={id}><strong>{text(field.label)}</strong></label>
         {/* The input enforces min and max; the error names the range when a value falls outside it. */}
-        {error && <small id={`${id}-hint`} className="hint text-danger">{error}</small>}</div>
-      <span className="input-unit">
-        <input id={id} className="setting-number" type="number" inputMode="numeric" min={min} max={max} step={1} value={draft[field.key]}
+        {error && <small id={`${id}-hint`} className="text-danger text-xs mt-px">{error}</small>}</div>
+      <span className="inline-flex items-center gap-2">
+        <input id={id} className="w-30" type="number" inputMode="numeric" min={min} max={max} step={1} value={draft[field.key]}
           aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-hint` : undefined}
           onChange={(e) => { setDraft({ ...draft, [field.key]: e.target.value }); setMessage(null); }} />
-        <span aria-hidden="true">{text(field.unit)}</span>
+        <span className="min-w-[52px] text-fg-3 text-sm" aria-hidden="true">{text(field.unit)}</span>
       </span>
     </div>;
   };
 
-  return <form className="limits-form" aria-label={t("settingsPage.limits")} onSubmit={(event) => {
+  return <form className="grid gap-3.5" aria-label={t("settingsPage.limits")} onSubmit={(event) => {
     event.preventDefault();
     if (!changed || saving) return;
     if (shrinks) setConfirming(true); else void save().catch(() => undefined);
   }}>
-    {cards.map((card) => <fieldset key={card.id} className="panel" disabled={saving} aria-labelledby={`limits-${card.id}`}>
-      <header className="panel-header"><h3 id={`limits-${card.id}`}>{text(card.title)}</h3></header>
+    {cards.map((card) => <fieldset key={card.id} className={panel} disabled={saving} aria-labelledby={`limits-${card.id}`}>
+      <PanelHeader><h3 id={`limits-${card.id}`}>{text(card.title)}</h3></PanelHeader>
       {card.groups.map((group, index) => group.title
-        ? <fieldset key={index} className="limits-group" aria-labelledby={`limits-${card.id}-${index}`}>
-          <div className="limits-group-head"><strong id={`limits-${card.id}-${index}`}>{text(group.title)}</strong></div>
+        ? <fieldset key={index} className="border-t border-line" aria-labelledby={`limits-${card.id}-${index}`}>
+          <div className="grid gap-0.5 px-3.5 pt-3 pb-0.5"><strong className="text-sm font-semibold text-fg-2" id={`limits-${card.id}-${index}`}>{text(group.title)}</strong></div>
           {group.fields.map(row)}
         </fieldset>
         : <div key={index}>{group.fields.map(row)}</div>)}
     </fieldset>)}
-    {(dirty || message) && <div className="limits-savebar" role="group" aria-label={t("common.save")}>
+    {(dirty || message) && <div className="sticky bottom-0 z-2 flex items-center gap-2 px-3.5 py-2.5 border border-line-strong rounded-lg bg-surface shadow-pop [&_.icon]:size-3.5" role="group" aria-label={t("common.save")}>
       {message
-        ? <p className={`grow ${"error" in message ? "text-danger" : "text-ok"}`} role={"error" in message ? "alert" : "status"}><Icon name={"error" in message ? "alert" : "check"} />{"error" in message ? formatAppError(message.error) : t(message.key)}</p>
-        : <span className="grow hint">{t("common.unsaved")}</span>}
-      <button type="button" className="btn sm" disabled={saving || !dirty} onClick={() => { setDraft(toDraft(view.settings)); setMessage(null); }}>{t("common.discard")}</button>
-      <button type="submit" className="btn sm primary" disabled={saving || !valid || !changed}>{saving ? t("common.saving") : t("common.save")}</button>
+        ? <p className={`grow flex items-center gap-1.5 text-sm ${"error" in message ? "text-danger" : "text-ok"}`} role={"error" in message ? "alert" : "status"}><Icon name={"error" in message ? "alert" : "check"} />{"error" in message ? formatAppError(message.error) : t(message.key)}</p>
+        : <span className="grow text-fg-3 text-sm">{t("common.unsaved")}</span>}
+      <Button size="sm" disabled={saving || !dirty} onClick={() => { setDraft(toDraft(view.settings)); setMessage(null); }}>{t("common.discard")}</Button>
+      <Button type="submit" variant="primary" size="sm" disabled={saving || !valid || !changed}>{saving ? t("common.saving") : t("common.save")}</Button>
     </div>}
     <ConfirmDialog
       open={confirming}
@@ -232,10 +233,10 @@ const fixed = [
 function FixedLimits() {
   const { t } = useTranslation();
   const [collapsed, setCollapsed] = useCollapsed("settings-fixed-limits");
-  return <section className="panel" aria-label={t("settingsPage.fixedLimits")}>
-    <header className="panel-header"><div><PanelTitle title={t("settingsPage.fixedLimits")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /></div></header>
-    {!collapsed && <div className="panel-body">
-      <dl className="props compact">{fixed.map((key) => <div key={key}><dt>{t(`settingsPage.fixed.${key}`)}</dt><dd>{t(`settingsPage.fixedValues.${key}`)}</dd></div>)}</dl>
+  return <section className={panel} aria-label={t("settingsPage.fixedLimits")}>
+    <PanelHeader><div className="flex-auto min-w-0"><PanelTitle title={t("settingsPage.fixedLimits")} collapsed={collapsed} toggle={() => setCollapsed(!collapsed)} /></div></PanelHeader>
+    {!collapsed && <div className={panelBody}>
+      <Props compact className="[&>div]:grid-cols-[170px_minmax(0,1fr)]!">{fixed.map((key) => <div key={key}><dt>{t(`settingsPage.fixed.${key}`)}</dt><dd>{t(`settingsPage.fixedValues.${key}`)}</dd></div>)}</Props>
     </div>}
   </section>;
 }

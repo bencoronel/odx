@@ -7,6 +7,7 @@ import { Icon } from "./Icon";
 import Select from "./Select";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { Banner, Button, PanelHeader, cx, detail, detailHeader, field, panel, panelBody, tile } from "./ui";
 
 export type Protocol = EnvironmentDraft["protocol"];
 export type ConnectionValues = { name: string; url: string; database: string; login: string; secret: string; protocol: Protocol };
@@ -49,31 +50,31 @@ function ConnectionFields({ idPrefix, values, change, autoFocus, databases, load
   const set = (key: keyof ConnectionValues) => (event: ChangeEvent<HTMLInputElement>) => change({ ...values, [key]: event.target.value });
   // The URL comes first because the database list depends on it; the host is a sensible default name.
   const suggestName = () => { if (!values.name.trim() && !urlError(values.url)) change({ ...values, name: new URL(values.url.trim()).host }); };
-  const section = (title: string, body: ReactNode) => <section className="panel form-section">
-    <header className="panel-header"><h3>{title}</h3></header>
-    <div className="panel-body form-grid">{body}</div>
+  const section = (title: string, body: ReactNode) => <section className={panel}>
+    <PanelHeader><h3>{title}</h3></PanelHeader>
+    <div className={cx(panelBody, "grid grid-cols-2 gap-x-3.5 gap-y-3 max-sm:grid-cols-1 pt-3.5 pb-3.5")}>{body}</div>
   </section>;
   return <>
     {section(t("environmentForm.serverTitle"), <>
-        <label className="field span-2"><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
-        <div className="field span-2"><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
-          <span className="row gap-2">
+        <label className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
+        <div className={cx(field, "col-span-2 max-sm:col-auto")}><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
+          <span className="flex items-center gap-2">
             <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll caseSensitive
               aria-describedby={databases?.length !== 0 ? `${idPrefix}-database-help` : undefined} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
-            <button type="button" className="btn icon-only" disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></button>
+            <Button iconOnly disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></Button>
           </span>
-          {databases?.length !== 0 && <small className="hint" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : t("environmentForm.databasesFound", { count: databases.length })}</small>}</div>
-        <details className="protocol-options span-2">
-          <summary>{t("environmentForm.advancedOptions")}</summary>
-          <label className="field"><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
+          {databases?.length !== 0 && <small className="text-fg-3 text-xs" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : t("environmentForm.databasesFound", { count: databases.length })}</small>}</div>
+        <details className="group/advanced col-span-2 max-sm:col-auto">
+          <summary className="cursor-pointer text-fg-2 text-sm group-open/advanced:mb-2">{t("environmentForm.advancedOptions")}</summary>
+          <label className={field}><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
         </details>
     </>)}
     {section(t("environmentForm.accessTitle"), <>
-        <label className="field"><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
-        <label className="field"><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required autoComplete="new-password" value={values.secret} onChange={set("secret")} /></label>
+        <label className={field}><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
+        <label className={field}><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required autoComplete="new-password" value={values.secret} onChange={set("secret")} /></label>
     </>)}
     {section(t("environmentForm.identityTitle"), <>
-        <label className="field"><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
+        <label className={field}><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
       {children}
     </>)}
   </>;
@@ -162,7 +163,7 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     finally { setTesting(false); }
   }
 
-  return <form className="detail" aria-labelledby="create-environment-title" autoComplete="off" onSubmit={async (event) => {
+  return <form className={detail} aria-labelledby="create-environment-title" autoComplete="off" onSubmit={async (event) => {
     event.preventDefault();
     if (busy) return;
     setError("");
@@ -173,26 +174,26 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
       setValues((current) => ({ ...current, secret: "" }));
     } catch (reason) { setError(normalizeAppError(reason)); }
   }}>
-    <header className="detail-header">
-      <span className="tile"><Icon name="plus" /></span>
+    <header className={detailHeader}>
+      <span className={tile()}><Icon name="plus" /></span>
       <h2 id="create-environment-title" className="grow">{t("environmentForm.createTitle")}</h2>
     </header>
-    <fieldset disabled={busy} className="form-sections">
+    <fieldset disabled={busy} className="grid gap-3 min-w-0 m-0 p-0 border-0">
       <ConnectionFields idPrefix="environment" values={values} change={change} autoFocus databases={databases} loadDatabases={loadDatabases}>
-        <div className="field"><span id="environment-proxy-label">{t("proxy.title")}</span>
-          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span className="hint">…</span>}</div>
-        <div className="field span-2"><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>
+        <div className={field}><span id="environment-proxy-label">{t("proxy.title")}</span>
+          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span>…</span>}</div>
+        <div className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>
       </ConnectionFields>
     </fieldset>
-    {error && <p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p>}
+    {error && <Banner tone="danger" role="alert"><Icon name="alert" />{formatAppError(error)}</Banner>}
     {test && (test.status === "ok"
-      ? <p className="banner ok" role="status"><Icon name="check" />{t("environmentForm.testOk", { latency: test.latency_ms, version: test.server_version ?? "?" })}</p>
-      : <p className="banner danger" role="alert"><Icon name="alert" />{test.error_code ? formatAppError({ code: test.error_code, params: test.error_params ?? undefined, detail: test.error ?? undefined }) : t("health.offline")}</p>)}
-    <footer className="row gap-2 justify-end">
-      <button type="button" className="btn" disabled={busy || testing || !canTest} onClick={() => void testConnection()} data-tip={canTest ? undefined : t("environmentForm.testNeeds")}>{testing ? <Icon name="refresh" className="spin" /> : <Icon name="plug" />}{t("environmentForm.testConnection")}</button>
+      ? <Banner tone="ok" role="status"><Icon name="check" />{t("environmentForm.testOk", { latency: test.latency_ms, version: test.server_version ?? "?" })}</Banner>
+      : <Banner tone="danger" role="alert"><Icon name="alert" />{test.error_code ? formatAppError({ code: test.error_code, params: test.error_params ?? undefined, detail: test.error ?? undefined }) : t("health.offline")}</Banner>)}
+    <footer className="flex items-center gap-2 justify-end">
+      <Button disabled={busy || testing || !canTest} onClick={() => void testConnection()} data-tip={canTest ? undefined : t("environmentForm.testNeeds")}>{testing ? <Icon name="refresh" className="animate-spin" /> : <Icon name="plug" />}{t("environmentForm.testConnection")}</Button>
       <span className="grow" />
-      <button type="button" className="btn" disabled={busy} onClick={cancel}>{t("common.cancel")}</button>
-      <button className="btn primary" disabled={busy}>{busy ? t("common.saving") : t("environmentForm.createAction")}</button>
+      <Button disabled={busy} onClick={cancel}>{t("common.cancel")}</Button>
+      <Button type="submit" variant="primary" disabled={busy}>{busy ? t("common.saving") : t("environmentForm.createAction")}</Button>
     </footer>
   </form>;
 }

@@ -76,5 +76,5 @@ export function EnvIcon({ env }: { env: IconEnvironment }) {
   }, [key, env.id, env.url, env.database]);
   const src = state.key === key ? state.src : null;
   if (!src) return <Icon name="server" />;
-  return <img className="favicon" src={src} alt="" draggable={false} />;
+  return <img className="favicon object-contain rounded-[3px]" src={src} alt="" draggable={false} />;
 }

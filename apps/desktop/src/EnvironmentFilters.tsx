@@ -6,6 +6,7 @@ import { modeIcons, modeLabels, modeTone } from "./ModeSelect";
 import { sameTag, uniqueTags } from "./TagEditor";
 import { tagColor, useTagColors } from "./tagColors";
 import { useDismiss } from "./ContextMenu";
+import { Button, filterBadge, filterCount, filterHeading, filterOption, filterOptions, filterPanel, filterSection, searchIcon, searchInput } from "./ui";
 
 export const WRITE_MODES: WriteMode[] = ["read_only", "approval", "temporary", "permanent"];
 
@@ -31,35 +32,35 @@ export default function EnvironmentFilters({ envs, tags, setTags, modes, setMode
   const active = tags.length + modes.length;
   const toggle = (tag: string) => setTags(checked(tag) ? tags.filter((other) => !sameTag(other, tag)) : [...tags, tag]);
 
-  return <div className="filter-menu" ref={root} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
-    <button type="button" className={`btn sm icon-only${active ? " filter-active" : ""}`} aria-expanded={open} aria-haspopup="dialog"
+  return <div className="flex-none" ref={root} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
+    <Button size="sm" iconOnly variant={active ? "accent" : "default"} className="relative" aria-expanded={open} aria-haspopup="dialog"
       aria-label={t("environments.filters")} data-tip={t("environments.filters")} onClick={() => setOpen(!open)}>
-      <Icon name="filter" />{active > 0 && <span className="filter-badge" aria-hidden="true">{active}</span>}
-    </button>
-    {open && <div className="filter-panel" role="dialog" aria-label={t("environments.filters")}>
-      <div className="filter-section">
-        <span className="filter-heading">{t("environments.tags")}</span>
-        {allTags.length > 8 && <label className="search"><Icon name="search" /><input autoFocus type="search" value={query} placeholder={t("environments.searchTags")} aria-label={t("environments.searchTags")} onChange={(e) => setQuery(e.target.value)} /></label>}
-        {allTags.length === 0 ? <p className="hint">{t("environments.noTagsYet")}</p>
-          : <ul className="filter-options" aria-label={t("environments.tagFilter")}>
-            {listed.map((tag) => <li key={tag}><label className="filter-option">
+      <Icon name="filter" />{active > 0 && <span className={filterBadge} aria-hidden="true">{active}</span>}
+    </Button>
+    {open && <div className={filterPanel} role="dialog" aria-label={t("environments.filters")}>
+      <div className={filterSection}>
+        <span className={filterHeading}>{t("environments.tags")}</span>
+        {allTags.length > 8 && <label className="relative block"><Icon name="search" className={searchIcon} /><input className={searchInput} autoFocus type="search" value={query} placeholder={t("environments.searchTags")} aria-label={t("environments.searchTags")} onChange={(e) => setQuery(e.target.value)} /></label>}
+        {allTags.length === 0 ? <p className="text-fg-3 text-sm">{t("environments.noTagsYet")}</p>
+          : <ul className={filterOptions} aria-label={t("environments.tagFilter")}>
+            {listed.map((tag) => <li key={tag}><label className={filterOption}>
               <input type="checkbox" checked={checked(tag)} onChange={() => toggle(tag)} />
-              <span className={`tag-dot tone-${tagColor(colors, tag)}`} aria-hidden="true" /><span className="truncate">{tag}</span><span className="filter-count">{count(tag)}</span>
+              <span className={`size-2 flex-none rounded-full tone-${tagColor(colors, tag)} ${tagColor(colors, tag) === "neutral" ? "bg-line-strong" : "bg-tone"}`} aria-hidden="true" /><span className="truncate">{tag}</span><span className={filterCount}>{count(tag)}</span>
             </label></li>)}
-            {listed.length === 0 && <li className="hint">{t("environments.noMatches")}</li>}
+            {listed.length === 0 && <li className="text-fg-3 text-sm">{t("environments.noMatches")}</li>}
           </ul>}
       </div>
-      <div className="filter-section">
-        <span className="filter-heading">{t("environments.writeMode")}</span>
-        <ul className="filter-options" aria-label={t("environments.modeFilter")}>
-          {WRITE_MODES.map((mode) => <li key={mode}><label className="filter-option">
+      <div className={filterSection}>
+        <span className={filterHeading}>{t("environments.writeMode")}</span>
+        <ul className={filterOptions} aria-label={t("environments.modeFilter")}>
+          {WRITE_MODES.map((mode) => <li key={mode}><label className={filterOption}>
             <input type="checkbox" checked={modes.includes(mode)} onChange={() => setModes(modes.includes(mode) ? modes.filter((m) => m !== mode) : [...modes, mode])} />
-            <span className={`filter-mode tone-${modeTone[mode]}`} aria-hidden="true"><Icon name={modeIcons[mode]} /></span>
-            <span className="truncate">{t(modeLabels[mode] as "mode.readOnly")}</span><span className="filter-count">{envs.filter((env) => env.write_mode === mode).length}</span>
+            <span className={`inline-grid place-items-center w-3.5 text-tone tone-${modeTone[mode]}`} aria-hidden="true"><Icon name={modeIcons[mode]} className="size-[13px]" /></span>
+            <span className="truncate">{t(modeLabels[mode] as "mode.readOnly")}</span><span className={filterCount}>{envs.filter((env) => env.write_mode === mode).length}</span>
           </label></li>)}
         </ul>
       </div>
-      {active > 0 && <div className="filter-footer"><button type="button" className="btn sm ghost" onClick={() => { setTags([]); setModes([]); }}>{t("environments.clearFilters")}</button></div>}
+      {active > 0 && <div className="flex justify-end px-2 py-1.5 border-t border-line"><Button size="sm" variant="ghost" onClick={() => { setTags([]); setModes([]); }}>{t("environments.clearFilters")}</Button></div>}
     </div>}
   </div>;
 }

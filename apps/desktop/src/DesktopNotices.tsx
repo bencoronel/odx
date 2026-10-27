@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Icon } from "./Icon";
 import { UpdateNotice } from "./Updates";
 import { useTranslation } from "react-i18next";
+import { banner } from "./ui";
 
 export type DesktopStatus = { tray: boolean; tray_error?: string | null; notifications_error?: string | null };
 
@@ -15,8 +16,8 @@ export function DesktopNoticeList({ status }: { status: DesktopStatus | null }) 
   if (!status.tray) notices.push(t("desktop.trayUnavailable"));
   if (status.notifications_error) notices.push(t("desktop.notificationsUnavailable"));
   if (!notices.length) return null;
-  return <div className="desktop-notices">
-    {notices.map((text) => <div key={text} className="banner info page-banner" role="status"><Icon name="alert" /><span className="grow">{text}</span></div>)}
+  return <div className="flex flex-none flex-col pb-2.5">
+    {notices.map((text) => <div key={text} className={banner({ tone: "info", page: true })} role="status"><Icon name="alert" /><span className="grow">{text}</span></div>)}
   </div>;
 }
 

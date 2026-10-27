@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { contextMenu } from "./ui";
 
 /** Close a popup on a mouse press outside `inside()`; WebKit does not focus clicked buttons, so blur cannot do this. */
 export function useDismiss(open: boolean, inside: () => Element | null | undefined, close: () => void) {
@@ -92,7 +93,7 @@ export default function ContextMenu({ dev }: { dev: boolean }) {
       <span>{t(`contextMenu.${command}`)}</span><kbd>{keys}</kbd>
     </button>;
   // preventDefault on mousedown keeps the field focused and the text selected while clicking an item.
-  return <div ref={ref} className="context-menu" role="menu" aria-label={t("contextMenu.label")} style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.preventDefault()}>
+  return <div ref={ref} className={contextMenu} role="menu" aria-label={t("contextMenu.label")} style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.preventDefault()}>
     {menu.field
       ? [item("cut", menu.canCut, "Ctrl+X"), item("copy", menu.canCopy, "Ctrl+C"), item("paste", menu.canPaste, "Ctrl+V"), <hr key="sep" />, item("selectAll", true, "Ctrl+A")]
       : item("copy", menu.canCopy, "Ctrl+C")}

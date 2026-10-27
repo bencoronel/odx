@@ -252,7 +252,7 @@ it("spells out relational commands and marks every one that can remove records",
   const steps = [...cell.querySelectorAll("li")].map((li) => li.textContent);
   expect(steps).toEqual(["Replace with 3, 4 (may delete records)", "Link 5", "Unlink 7 (may delete records)", "Delete 8 (removes the record)", "Unlink all (may delete records)"]);
   // Only link is safe here; the rest can remove records, as odx-core counts them.
-  expect([...cell.querySelectorAll("li")].map((li) => li.className)).toEqual(["tone-danger", "", "tone-danger", "tone-danger", "tone-danger"]);
+  expect([...cell.querySelectorAll("li")].map((li) => li.classList.contains("tone-danger"))).toEqual([true, false, true, true, true]);
 });
 
 it("opens the records in the Terminal with V", () => {

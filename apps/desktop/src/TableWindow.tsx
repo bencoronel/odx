@@ -13,6 +13,7 @@ import { Icon } from "./Icon";
 import { useDismiss } from "./ContextMenu";
 import { MoreMenu } from "./Menu";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { IconButton, Segment, Segmented, appWindow, cx, empty, filterCount, filterOption, filterOptions, searchIcon, searchInput } from "./ui";
 
 /** `envId` and `context` let the window repeat its read to add a column; it can do nothing else with them. */
 type Payload = { table: Table; footer?: string; fields?: Field[]; title?: string; envId?: string; context?: Record<string, unknown> };
@@ -62,33 +63,33 @@ export default function TableWindow() {
     } catch (reason) { say(formatAppError(normalizeAppError(reason) as ErrorState), true); }
   }
   const fetchable = !!data?.call && FETCHABLE.includes(data.call.method) && Array.isArray(data.call.kwargs.fields) && !!payload?.envId;
-  return <div className="app-window">
+  return <div className={appWindow}>
     <TooltipLayer />
     <WindowTitleBar title={payload?.title} />
     {payload && data && table ? <>
-      <div className="table-window-bar">
-        <SearchField value={query} onChange={setQuery} label={t("tableWindow.filter")} placeholder={t("tableWindow.filter")}
+      <div className="flex items-center gap-2 px-2.5 py-2 border-b border-line bg-surface font-sans">
+        <SearchField className="flex-[0_1_360px] min-w-40" value={query} onChange={setQuery} label={t("tableWindow.filter")} placeholder={t("tableWindow.filter")}
           filtered={!!q} count={{ shown: table.rows.length, total: data.rows.length, text: t("shell.filtered", { shown: table.rows.length, count: data.rows.length }) }} />
-        {note && <span className={`hint ${note.error ? "text-danger" : "text-ok"}`} role={note.error ? "alert" : "status"}>{note.text}</span>}
-        <span className="row gap-2 ml-auto">
-          {!q && <span className="hint">{t("shell.row", { count: table.rows.length })}</span>}
-          <div className="segmented" role="radiogroup" aria-label={t("tableWindow.view")}>
-            <button type="button" role="radio" aria-checked={!expanded} aria-pressed={!expanded} onClick={() => setExpanded(false)}><Icon name="table" />{t("tableWindow.table")}</button>
-            <button type="button" role="radio" aria-checked={expanded} aria-pressed={expanded} onClick={() => setExpanded(true)}><Icon name="rows" />{t("tableWindow.records")}</button>
-          </div>
+        {note && <span className={note.error ? "text-danger text-sm" : "text-ok text-sm"} role={note.error ? "alert" : "status"}>{note.text}</span>}
+        <span className="flex items-center gap-2 ml-auto">
+          {!q && <span className="text-fg-3 text-sm">{t("shell.row", { count: table.rows.length })}</span>}
+          <Segmented role="radiogroup" aria-label={t("tableWindow.view")}>
+            <Segment role="radio" aria-checked={!expanded} aria-pressed={!expanded} onClick={() => setExpanded(false)}><Icon name="table" />{t("tableWindow.table")}</Segment>
+            <Segment role="radio" aria-checked={expanded} aria-pressed={expanded} onClick={() => setExpanded(true)}><Icon name="rows" />{t("tableWindow.records")}</Segment>
+          </Segmented>
           <Actions table={table} say={say} />
         </span>
       </div>
-      <div className="term table-window">
+      <div className="table-window relative flex flex-1 flex-col min-h-0 bg-surface-2 font-mono text-sm overflow-hidden cursor-text">
         <CellActions.Provider value={{ fields: () => payload.fields }}>
-          <div className="term-out">
+          <div className="term-out relative flex flex-1 flex-col min-h-0 overflow-auto leading-[1.55] [scrollbar-width:thin] [scrollbar-color:var(--border-strong)_transparent]">
             <TableBlock table={table} expanded={expanded} onToggle={() => setExpanded(!expanded)} bare
               headerEnd={<ColumnPicker columns={data.columns} hidden={hidden} fields={fetchable ? payload.fields ?? [] : []}
                 toggle={(name) => data.columns.includes(name) ? setHidden(hidden.includes(name) ? hidden.filter((c) => c !== name) : [...hidden, name]) : void addColumn(name)} />} />
           </div>
         </CellActions.Provider>
       </div>
-    </> : <p className="empty">{t("shell.tableGone")}</p>}
+    </> : <p className={empty}>{t("shell.tableGone")}</p>}
   </div>;
 }
 
@@ -104,17 +105,17 @@ function ColumnPicker({ columns, hidden, fields, toggle }: { columns: string[]; 
   const names = [...columns, ...fields.map((f) => f.name).filter((name) => !columns.includes(name)).sort()];
   const q = query.trim().toLowerCase();
   const listed = names.filter((name) => !q || name.toLowerCase().includes(q) || (label(name) ?? "").toLowerCase().includes(q));
-  return <div className="table-columns" ref={root} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(null); } }}>
-    <button type="button" className="icon-btn sm" aria-haspopup="dialog" aria-expanded={!!open} aria-label={t("tableWindow.columns")} data-tip={open ? undefined : t("tableWindow.columns")}
+  return <div ref={root} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(null); } }}>
+    <IconButton size="sm" aria-haspopup="dialog" aria-expanded={!!open} aria-label={t("tableWindow.columns")} data-tip={open ? undefined : t("tableWindow.columns")}
       onClick={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
         setOpen(open ? null : { top: rect.bottom + 4, right: window.innerWidth - rect.right });
-      }}><Icon name="eye" /></button>
-    {open && <div className="filter-panel" role="dialog" aria-label={t("tableWindow.columns")} style={open}>
-      <label className="search"><Icon name="search" /><input autoFocus type="search" value={query} placeholder={t("tableWindow.findColumn")} aria-label={t("tableWindow.findColumn")} onChange={(e) => setQuery(e.target.value)} /></label>
-      <ul className="filter-options">{listed.map((name) => <li key={name}><label className="filter-option">
+      }}><Icon name="eye" /></IconButton>
+    {open && <div className="fixed z-20 grid w-[300px] max-h-[60vh] overflow-auto border border-line-strong rounded-md bg-surface shadow-pop" role="dialog" aria-label={t("tableWindow.columns")} style={open}>
+      <label className="relative block"><Icon name="search" className={searchIcon} /><input autoFocus type="search" className={searchInput} value={query} placeholder={t("tableWindow.findColumn")} aria-label={t("tableWindow.findColumn")} onChange={(e) => setQuery(e.target.value)} /></label>
+      <ul className={filterOptions}>{listed.map((name) => <li key={name}><label className={filterOption}>
         <input type="checkbox" checked={columns.includes(name) && !hidden.includes(name)} onChange={() => toggle(name)} />
-        <span className="truncate mono">{name}</span>{label(name) && <span className="filter-count truncate">{label(name)}</span>}
+        <span className="truncate mono">{name}</span>{label(name) && <span className={cx(filterCount, "truncate")}>{label(name)}</span>}
       </label></li>)}</ul>
     </div>}
   </div>;

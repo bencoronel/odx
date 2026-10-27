@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
+import { cx, termMenu, termMenuDetail, termMenuValue } from "./ui";
 
 // IANA permanent HTTP fields, retrieved 2026-10-16.
 // https://www.iana.org/assignments/http-fields/field-names.csv
@@ -42,7 +43,7 @@ export default function HeaderInput({ value, suggestions, disabledSuggestions = 
     if (expanded && active >= 0) menu.current?.children[active]?.scrollIntoView?.({ block: "nearest" });
   }, [expanded, active]);
   const choose = (suggestion: string) => { if (disabled(suggestion)) return; (onPick ?? onChange)(suggestion); setOpen(false); setActive(-1); };
-  return <div className="header-input">
+  return <div className="header-input relative min-w-0">
     <input {...props} value={value} role="combobox" aria-autocomplete="list" aria-expanded={expanded}
       aria-controls={expanded ? id : undefined} aria-activedescendant={expanded && active >= 0 && active < matches.length ? `${id}-${active}` : undefined}
       onFocus={() => { setOpen(showAll); setActive(-1); }}
@@ -59,11 +60,11 @@ export default function HeaderInput({ value, suggestions, disabledSuggestions = 
           e.preventDefault(); e.stopPropagation(); choose(matches[active]);
         }
       }} />
-    {expanded && <ul id={id} ref={menu} className="term-menu header-suggestions" role="listbox" aria-label={t("headerInput.suggestionsFor", { field: props["aria-label"] })}>
-      {matches.map((suggestion, index) => <li key={suggestion} id={`${id}-${index}`} role="option" aria-label={suggestion} aria-description={disabled(suggestion) ? t("headerInput.managedAutomatically") : undefined} aria-selected={index === active} aria-disabled={disabled(suggestion)}
+    {expanded && <ul id={id} ref={menu} className={termMenu("suggestions")} role="listbox" aria-label={t("headerInput.suggestionsFor", { field: props["aria-label"] })}>
+      {matches.map((suggestion, index) => <li key={suggestion} id={`${id}-${index}`} role="option" aria-label={suggestion} aria-description={disabled(suggestion) ? t("headerInput.managedAutomatically") : undefined} aria-selected={index === active} aria-disabled={disabled(suggestion)} className="h-[26px] leading-[26px] aria-disabled:opacity-45 aria-disabled:cursor-default"
         onMouseEnter={() => { if (!disabled(suggestion)) setActive(index); }} onMouseDown={(e) => { e.preventDefault(); choose(suggestion); }}>
-        <span className="term-menu-value">{suggestion}</span>
-        {disabled(suggestion) && <span className="term-menu-detail">{t("headerInput.managedAutomatically")}</span>}
+        <span className={cx(termMenuValue, "overflow-hidden text-ellipsis font-mono")}>{suggestion}</span>
+        {disabled(suggestion) && <span className={termMenuDetail}>{t("headerInput.managedAutomatically")}</span>}
       </li>)}
     </ul>}
   </div>;

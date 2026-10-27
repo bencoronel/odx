@@ -7,6 +7,7 @@ import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { ScopeFields, Snippet, scopeChanged, scopeOf, scopeValid, type SaveClient } from "./clientParts";
 import { relativeTime, useNow } from "./time";
 import { usePreventUnload } from "./windowState";
+import { Banner, Button, PanelHeader, Segment, Segmented, StatusDot, banner, cx, panel, panelBody, settingRow } from "./ui";
 
 export default function McpLocalPage({ clients, services, envs, busy, update }: {
   clients: Client[];
@@ -20,9 +21,9 @@ export default function McpLocalPage({ clients, services, envs, busy, update }: 
   // Until an agent has connected, connecting is the task; afterwards it is the permissions.
   const used = !!local?.last_used_at;
   const connect = services && <Connect services={services} />;
-  return <div className="page-scroll"><div className="clients">
-    <header className="settings-head mcp-head"><h2>{t("mcpLocal.title")}</h2>{used && <Status local={local!} services={services} />}</header>
-    {services?.mcp.state === "error" && <p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError({ code: services.mcp.error ?? "unknown" })}</p>}
+  return <div className="page-scroll flex-1 min-h-0 overflow-auto overscroll-contain px-5 pt-4 pb-6"><div className="grid gap-3 max-w-[980px]">
+    <header className="grid gap-[3px] mb-1"><h2 className="text-fg">{t("mcpLocal.title")}</h2>{used && <Status local={local!} services={services} />}</header>
+    {services?.mcp.state === "error" && <Banner tone="danger" compact role="alert"><Icon name="alert" />{formatAppError({ code: services.mcp.error ?? "unknown" })}</Banner>}
     {!used && connect}
     {local && <Connections connections={services?.connections.filter((connection) => connection.client_id === local.id) ?? []} />}
     {/* Remount after each save so the form starts from the stored permissions. */}
@@ -36,8 +37,8 @@ function Status({ local, services }: { local: Client; services: ServiceStatus | 
   const { t } = useTranslation();
   const connections = services?.connections.filter((connection) => connection.client_id === local.id).length ?? 0;
   const now = useNow(true, 30_000);
-  return <p className="mcp-status" role="status" aria-label={t("mcpLocal.status")}>
-    <span className={`status-dot tone-${connections ? "ok" : "neutral"}`} />
+  return <p className="inline-flex items-center gap-1.5 text-fg-2 text-sm" role="status" aria-label={t("mcpLocal.status")}>
+    <StatusDot tone={connections ? "ok" : "neutral"} />
     {t("mcpLocal.connectedAgents", { count: connections })} · {relativeTime(local.last_used_at!, now)}
   </p>;
 }
@@ -48,24 +49,24 @@ function Connections({ connections }: { connections: McpConnection[] }) {
   const [closing, setClosing] = useState<number[]>([]);
   const [error, setError] = useState<ErrorState>("");
   if (!connections.length) return null;
-  return <section className="panel" aria-labelledby="mcp-connections-title">
-    <header className="panel-header"><h3 id="mcp-connections-title">{t("mcpLocal.connections")}</h3></header>
-    {connections.map((connection) => <div key={connection.id} className="setting-row">
+  return <section className={panel} aria-labelledby="mcp-connections-title">
+    <PanelHeader><h3 id="mcp-connections-title">{t("mcpLocal.connections")}</h3></PanelHeader>
+    {connections.map((connection) => <div key={connection.id} className={settingRow}>
       <div>
         <strong className="truncate" title={connection.cwd ?? undefined}>{connection.cwd ?? t("mcpLocal.unknownAgent")}</strong>
-        <span className="hint truncate" title={connection.command ?? undefined}>{[connection.command, connection.pid != null && `PID ${connection.pid}`,
+        <span className="mt-px text-fg-3 text-sm truncate" title={connection.command ?? undefined}>{[connection.command, connection.pid != null && `PID ${connection.pid}`,
           t("mcpLocal.calls", { count: connection.calls }), t("mcpLocal.since", { time: formatDateTime(new Date(connection.since), { hour: "2-digit", minute: "2-digit" }) })].filter(Boolean).join(" · ")}</span>
       </div>
-      <button type="button" className="btn sm" disabled={closing.includes(connection.id)} data-tip={t("mcpLocal.disconnectHint")} onClick={() => {
+      <Button size="sm" disabled={closing.includes(connection.id)} data-tip={t("mcpLocal.disconnectHint")} onClick={() => {
         setClosing((ids) => [...ids, connection.id]);
         setError("");
         ipc.mcpDisconnect(connection.id).catch((reason) => {
           setError(normalizeAppError(reason));
           setClosing((ids) => ids.filter((id) => id !== connection.id));
         });
-      }}>{closing.includes(connection.id) ? t("mcpLocal.disconnecting") : t("mcpLocal.disconnect")}</button>
+      }}>{closing.includes(connection.id) ? t("mcpLocal.disconnecting") : t("mcpLocal.disconnect")}</Button>
     </div>)}
-    {error && <div className="panel-body"><p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
+    {error && <div className={panelBody}><Banner tone="danger" compact role="alert"><Icon name="alert" />{formatAppError(error)}</Banner></div>}
   </section>;
 }
 
@@ -82,24 +83,24 @@ function Permissions({ local, envs, busy, save }: {
   const changed = scopeChanged(scope, local);
   const locked = busy || saving;
   usePreventUnload(changed || locked);
-  return <form className="panel" aria-label={t("mcpLocal.permissions")} onSubmit={async (event) => {
+  return <form className={panel} aria-label={t("mcpLocal.permissions")} onSubmit={async (event) => {
     event.preventDefault();
     if (locked || !changed || !scopeValid(scope)) return;
     setSaving(true);
     setError("");
     try { await save(scope.allEnvs ? null : scope.selected, scope.caps); } catch (reason) { setError(normalizeAppError(reason)); } finally { setSaving(false); }
   }}>
-    <header className="panel-header"><h3>{t("mcpLocal.permissions")}</h3>
-      {changed && <span className="row gap-2">
-        <button type="button" className="btn sm" disabled={locked} onClick={() => { setScope(scopeOf(local)); setError(""); }}>{t("common.discard")}</button>
-        <button type="submit" className="btn sm primary" disabled={locked || !scopeValid(scope)}>{saving ? t("common.saving") : t("common.save")}</button>
+    <PanelHeader><h3>{t("mcpLocal.permissions")}</h3>
+      {changed && <span className="flex flex-none items-center gap-2">
+        <Button size="sm" disabled={locked} onClick={() => { setScope(scopeOf(local)); setError(""); }}>{t("common.discard")}</Button>
+        <Button type="submit" size="sm" variant="primary" disabled={locked || !scopeValid(scope)}>{saving ? t("common.saving") : t("common.save")}</Button>
       </span>}
-    </header>
-    <fieldset className="panel-body stack-sm" disabled={locked}>
-      {envs.length === 0 && <p className="banner warn compact"><Icon name="alert" />{t("clients.noEnvironmentsYet")}</p>}
+    </PanelHeader>
+    <fieldset className={cx(panelBody, "grid gap-2.5")} disabled={locked}>
+      {envs.length === 0 && <Banner tone="warn" compact><Icon name="alert" />{t("clients.noEnvironmentsYet")}</Banner>}
       <ScopeFields scope={scope} change={setScope} envs={envs} />
-      {changed && <p className="hint">{t("mcpLocal.saveRevokes")}</p>}
-      {error && <p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p>}
+      {changed && <p className="text-fg-3 text-sm">{t("mcpLocal.saveRevokes")}</p>}
+      {error && <Banner tone="danger" role="alert"><Icon name="alert" />{formatAppError(error)}</Banner>}
     </fieldset>
   </form>;
 }
@@ -124,12 +125,12 @@ function Connect({ services }: { services: ServiceStatus }) {
   useEffect(() => {
     for (const agent of agents) ipc.agentSetup(agent).then((state) => setSetup((current) => ({ ...current, [agent]: state })), () => undefined);
   }, []);
-  return <section className="panel" aria-labelledby="mcp-connect-title">
-    <header className="panel-header"><h3 id="mcp-connect-title">{t("mcpLocal.connect")}</h3></header>
-    <div className="panel-body stack-sm">
-      <div className="segmented mcp-targets" role="radiogroup" aria-label={t("mcpLocal.client")}>
-        {(Object.keys(targets) as (keyof typeof targets)[]).map((key) => <button key={key} type="button" role="radio" aria-checked={target === key} aria-pressed={target === key} onClick={() => setTarget(key)}>{targets[key].label}</button>)}
-      </div>
+  return <section className={panel} aria-labelledby="mcp-connect-title">
+    <PanelHeader><h3 id="mcp-connect-title">{t("mcpLocal.connect")}</h3></PanelHeader>
+    <div className={cx(panelBody, "grid gap-2.5")}>
+      <Segmented className="justify-self-start" role="radiogroup" aria-label={t("mcpLocal.client")}>
+        {(Object.keys(targets) as (keyof typeof targets)[]).map((key) => <Segment key={key} role="radio" aria-checked={target === key} aria-pressed={target === key} onClick={() => setTarget(key)}>{targets[key].label}</Segment>)}
+      </Segmented>
       {target !== "json" && <Install agent={target} name={targets[target].label} state={setup[target]} done={(state) => setSetup((current) => ({ ...current, [target]: state }))} />}
       <Snippet text={targets[target].text(services)} />
     </div>
@@ -141,20 +142,20 @@ function Install({ agent, name, state, done }: { agent: Agent; name: string; sta
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorState>("");
-  if (!state) return <p className="hint" role="status">{t("mcpLocal.checking")}</p>;
+  if (!state) return <p className="text-fg-3 text-sm" role="status">{t("mcpLocal.checking")}</p>;
   if (state === "no_cli") return null;
-  if (state === "added") return <p className="banner ok compact" role="status"><Icon name="check" />{t("mcpLocal.added", { agent: name })}</p>;
+  if (state === "added") return <Banner tone="ok" compact role="status"><Icon name="check" />{t("mcpLocal.added", { agent: name })}</Banner>;
   const outdated = state === "outdated";
   // Same shape as the update notice: what was found, then the action.
-  return <div className="stack-sm">
-    <div className={`banner compact ${outdated ? "warn" : "info"}`} role="status">
+  return <div className="grid gap-2.5">
+    <div className={banner({ tone: outdated ? "warn" : "info", compact: true })} role="status">
       <Icon name={outdated ? "alert" : "plug"} /><span className="grow">{t(outdated ? "mcpLocal.outdated" : "mcpLocal.detected", { agent: name })}</span>
-      <button type="button" className={`btn sm ${outdated ? "" : "primary"}`} disabled={busy} onClick={() => {
+      <Button size="sm" variant={outdated ? "default" : "primary"} disabled={busy} onClick={() => {
         setBusy(true);
         setError("");
         ipc.agentInstall(agent).then(done, (reason) => setError(normalizeAppError(reason))).finally(() => setBusy(false));
-      }}><Icon name={outdated ? "refresh" : "plus"} />{busy ? t("common.processing") : t(outdated ? "mcpLocal.update" : "mcpLocal.add")}</button>
+      }}><Icon name={outdated ? "refresh" : "plus"} />{busy ? t("common.processing") : t(outdated ? "mcpLocal.update" : "mcpLocal.add")}</Button>
     </div>
-    {error && <p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError(error)}</p>}
+    {error && <Banner tone="danger" compact role="alert"><Icon name="alert" />{formatAppError(error)}</Banner>}
   </div>;
 }

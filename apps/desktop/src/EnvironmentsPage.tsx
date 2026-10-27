@@ -1,4 +1,4 @@
-import PanelTitle, { useCollapsed } from "./PanelTitle";
+import PanelTitle, { chevron, panelToggle, useCollapsed } from "./PanelTitle";
 import SettingsTable from "./SettingsTable";
 import RulesPanel from "./RulesPanel";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -23,6 +23,7 @@ import EnvironmentFilters from "./EnvironmentFilters";
 import { groupByHost, hostOf } from "./hosts";
 import { FloatingMenu, MenuItems, MoreMenu } from "./Menu";
 import { modalOpen } from "./modal";
+import { Banner, Button, IconButton, PanelHeader, Props, StatusDot, type Tone, chip, countdown, cx, detail, detailHeader, detailPane, empty, emptyIcon, envAvatar, envList, envListText, field, inlineInput, listEmpty, listEmptyIcon, listPane, listToolbar, moreMenu, panel, panelBody, panelSummary, secretMask, split, tile, titleWarn, tones } from "./ui";
 
 export default function EnvironmentsPage({ envs, pending = [], focusId, refresh, busy, creating, setCreating, save, update, remove, clone, openShell, changeMode, draftRef }: {
   envs: Environment[];
@@ -109,13 +110,13 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
     // Our own menu instead of the app-wide text menu.
     onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); select(env.id); setListMenu({ env, x: e.clientX, y: e.clientY }); }}
   >
-    <span className="env-avatar"><EnvIcon env={env} /><span className={`status-dot tone-${modeTone[env.write_mode]}`} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} /></span>
+    <span className={envAvatar()}><EnvIcon env={env} /><StatusDot kind="badge" tone={modeTone[env.write_mode]} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} /></span>
     {/* Tags share the name's line so every row has the same height. */}
-    <span className="env-list-text"><span className="env-list-title"><strong>{env.name}</strong>
-      {env.tags.length > 0 && <span className="env-list-tags">
-        {env.tags.slice(0, LIST_TAGS).map((tag) => <span key={tag} className={`chip${tagTone(tagColors, tag)}${activeTags.some((active) => sameTag(active, tag)) ? " match" : ""}`}
+    <span className={envListText}><span className="flex items-center gap-1.5 min-w-0"><strong className="flex-initial min-w-0">{env.name}</strong>
+      {env.tags.length > 0 && <span className="flex flex-[0_1000_auto] gap-0.75 min-w-0 overflow-hidden">
+        {env.tags.slice(0, LIST_TAGS).map((tag) => <span key={tag} className={listChip(tagTone(tagColors, tag), activeTags.some((active) => sameTag(active, tag)))}
           data-tip={t("environments.filterByTag")} onClick={(e) => { if (activeTags.some((active) => sameTag(active, tag))) return; e.stopPropagation(); setTagFilter([...activeTags, tag]); }}>{tag}</span>)}
-        {env.tags.length > LIST_TAGS && <span className="chip" data-tip={env.tags.slice(LIST_TAGS).join(", ")}>+{env.tags.length - LIST_TAGS}</span>}
+        {env.tags.length > LIST_TAGS && <span className={listChip()} data-tip={env.tags.slice(LIST_TAGS).join(", ")}>+{env.tags.length - LIST_TAGS}</span>}
       </span>}</span>
       {/* In a group the header names the host; the login tells apart two users of one database. */}
       <small>{grouped ? `${env.database} · ${env.login}` : `${hostOf(env.url)} · ${env.database}`}</small>
@@ -146,28 +147,28 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, creating, setCreating]);
 
-  if (envs.length === 0 && !creating) return <div className="empty">
-    <span className="empty-icon"><Icon name="server" /></span>
+  if (envs.length === 0 && !creating) return <div className={empty}>
+    <span className={emptyIcon()}><Icon name="server" /></span>
     <h2>{t("environments.emptyTitle")}</h2>
-    <div className="row gap-2">
-      <button className="btn primary" disabled={busy} onClick={() => setCreating(true)}><Icon name="plus" />{t("environmentForm.createAction")}</button>
+    <div className="flex items-center gap-2 mt-2">
+      <Button variant="primary" disabled={busy} onClick={() => setCreating(true)}><Icon name="plus" />{t("environmentForm.createAction")}</Button>
     </div>
   </div>;
 
-  return <div className="split" style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
-    <aside className="list-pane" aria-label={t("environments.listLabel")}>
+  return <div className={split} style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
+    <aside className={listPane} aria-label={t("environments.listLabel")}>
       <ListResizer width={listWidth} setWidth={setListWidth} label={t("environments.resizeList")} />
-      <div className="list-toolbar">
-        <div className="row gap-2">
+      <div className={listToolbar}>
+        <div className="flex items-center gap-2">
           {/* Active filters are chips inside the field, so filtering never adds rows above the list. */}
-          <SearchField className="grow" inputRef={search} value={filter} label={t("environments.filterLabel")} shortcut
+          <SearchField className="grow min-w-0" inputRef={search} value={filter} label={t("environments.filterLabel")} shortcut
             placeholder={activeTags.length || modeFilter.length ? "" : t("environments.filterPlaceholder")}
             filtered={filtered} onClear={clearFilters} clearLabel={t("environments.clearFilters")} onChange={(value) => { setFilter(value); setTagIndex(0); }}
             count={{ shown: visible.length, total: envs.length, text: t("environments.filterCount", { shown: visible.length, total: envs.length }) }}
             chips={activeTags.length > 0 || modeFilter.length > 0 ? <>
-              {activeTags.map((tag) => <span key={tag} className={`chip token${tagTone(tagColors, tag)}`}>{tag}
+              {activeTags.map((tag) => <span key={tag} className={chip({ token: true, tone: tagTone(tagColors, tag) })}>{tag}
                 <button type="button" aria-label={t("environments.removeTagFilter", { tag })} onClick={() => setTagFilter(activeTags.filter((x) => x !== tag))}><Icon name="x" /></button></span>)}
-              {modeFilter.map((mode) => <span key={mode} className={`chip token chip-tone tone-${modeTone[mode]}`}><Icon name={modeIcons[mode]} />{t(modeShortLabels[mode] as "mode.readOnlyShort")}
+              {modeFilter.map((mode) => <span key={mode} className={chip({ token: true, tone: modeTone[mode] })}><Icon name={modeIcons[mode]} />{t(modeShortLabels[mode] as "mode.readOnlyShort")}
                 <button type="button" aria-label={t("environments.removeModeFilter", { mode: t(modeLabels[mode] as "mode.readOnly") })} onClick={() => setModeFilter(modeFilter.filter((m) => m !== mode))}><Icon name="x" /></button></span>)}
             </> : undefined}
             inputProps={{ "aria-keyshortcuts": "Control+F /", role: "combobox", "aria-expanded": tagMatches.length > 0, "aria-controls": "tag-suggestions", "aria-autocomplete": "list", onKeyDown: (e) => {
@@ -176,16 +177,16 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
               else if (e.key === "Backspace" && !filter && (modeFilter.length || activeTags.length)) { if (modeFilter.length) setModeFilter(modeFilter.slice(0, -1)); else setTagFilter(activeTags.slice(0, -1)); }
             } }} />
           <EnvironmentFilters envs={envs} tags={activeTags} setTags={setTagFilter} modes={modeFilter} setModes={setModeFilter} />
-          <button type="button" className="btn sm icon-only" disabled={rechecking} onClick={() => void recheckAll()} aria-label={t("environments.checkAll")} data-tip={t("environments.checkAll")}><Icon name="refresh" className={rechecking ? "spin" : undefined} /></button>
-          <button type="button" className="btn primary sm icon-only" disabled={busy || creating} onClick={() => setCreating(true)} aria-label={t("environments.newEnvironment")} aria-keyshortcuts="Control+N" data-tip={`${t("environments.newEnvironment")} · Ctrl+N`}><Icon name="plus" /></button>
+          <Button size="sm" iconOnly className="flex-none" disabled={rechecking} onClick={() => void recheckAll()} aria-label={t("environments.checkAll")} data-tip={t("environments.checkAll")}><Icon name="refresh" className={rechecking ? "animate-spin" : undefined} /></Button>
+          <Button variant="primary" size="sm" iconOnly className="flex-none" disabled={busy || creating} onClick={() => setCreating(true)} aria-label={t("environments.newEnvironment")} aria-keyshortcuts="Control+N" data-tip={`${t("environments.newEnvironment")} · Ctrl+N`}><Icon name="plus" /></Button>
         </div>
-        {tagQuery !== null && <ul id="tag-suggestions" className="token-suggestions" role="listbox" aria-label={t("environments.tagFilter")}>
-          {tagMatches.map((tag, i) => <li key={tag} role="option" aria-selected={i === Math.min(tagIndex, tagMatches.length - 1)} onMouseDown={(e) => { e.preventDefault(); addTagFilter(tag); }}>
-            <span className={`tag-dot tone-${tagColor(tagColors, tag)}`} aria-hidden="true" />{tag}</li>)}
-          {tagMatches.length === 0 && <li className="hint">{allTags.length ? t("environments.noMatches") : t("environments.noTagsYet")}</li>}
+        {tagQuery !== null && <ul id="tag-suggestions" className="absolute z-20 top-[calc(100%-4px)] inset-x-2 max-h-[220px] overflow-auto p-0.75 border border-line-strong rounded-md bg-surface shadow-pop" role="listbox" aria-label={t("environments.tagFilter")}>
+          {tagMatches.map((tag, i) => <li key={tag} role="option" className={`${SUGGESTION} cursor-pointer hover:bg-accent-soft hover:text-fg aria-selected:bg-accent-soft aria-selected:text-fg`} aria-selected={i === Math.min(tagIndex, tagMatches.length - 1)} onMouseDown={(e) => { e.preventDefault(); addTagFilter(tag); }}>
+            <span className={`size-2 flex-none rounded-full tone-${tagColor(tagColors, tag)} ${tagColor(tagColors, tag) === "neutral" ? "bg-line-strong" : "bg-tone"}`} aria-hidden="true" />{tag}</li>)}
+          {tagMatches.length === 0 && <li className={`${SUGGESTION} cursor-default`}>{allTags.length ? t("environments.noMatches") : t("environments.noTagsYet")}</li>}
         </ul>}
       </div>
-      <ul className="env-list" role="listbox" aria-label={t("environments.environments")} aria-keyshortcuts="Delete F2 Control+D" onKeyDown={(e) => {
+      <ul className={envList} role="listbox" aria-label={t("environments.environments")} aria-keyshortcuts="Delete F2 Control+D" onKeyDown={(e) => {
         // Desktop list keys act on the focused environment: Delete, F2 to rename, Ctrl+D to duplicate.
         const command = e.ctrlKey || e.metaKey;
         const onOption = (e.target as HTMLElement).getAttribute("role") === "option";
@@ -200,32 +201,32 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
         next.focus();
         select(next.dataset.id!);
       }}>
-        {groups.map(([host, list]) => list.length === 1 ? row(list[0], false) : <li key={host} role="group" aria-label={host} className="env-group">
-          <div className="env-group-header">
-            <button type="button" className="panel-toggle" aria-expanded={filtered || !collapsed.includes(host)} disabled={filtered}
+        {groups.map(([host, list]) => list.length === 1 ? row(list[0], false) : <li key={host} role="group" aria-label={host} className="block p-0 cursor-default hover:bg-transparent [li+&]:mt-1 [&+li]:mt-1">
+          <div className="flex items-center gap-1 pt-1 pr-1 pb-0.5 pl-2 text-fg-3 text-xs [&_.favicon]:size-3.5">
+            <button type="button" className={`${panelToggle} flex-1 min-w-0 font-mono hover:text-fg`} aria-expanded={filtered || !collapsed.includes(host)} disabled={filtered}
               onClick={() => setCollapsed(collapsed.includes(host) ? collapsed.filter((h) => h !== host) : [...collapsed, host])}>
-              <Icon name="chevron" /><EnvIcon env={list[0]} /><span className="truncate">{host}</span>
+              <Icon name="chevron" className={chevron} /><EnvIcon env={list[0]} /><span className="truncate">{host}</span>
             </button>
-            <span className="env-group-count">{list.length}</span>
-            <button type="button" className="icon-btn sm" disabled={busy || creating} onClick={() => void addDatabase(list[0])}
-              aria-label={t("environments.addDatabase")} data-tip={t("environments.addDatabase")}><Icon name="plus" /></button>
+            <span className="px-1.25 rounded-[7px] bg-neutral-soft tabular-nums">{list.length}</span>
+            <IconButton size="sm" disabled={busy || creating} onClick={() => void addDatabase(list[0])}
+              aria-label={t("environments.addDatabase")} data-tip={t("environments.addDatabase")}><Icon name="plus" /></IconButton>
           </div>
-          {(filtered || !collapsed.includes(host)) && <ul role="none">{list.map((env) => row(env, true))}</ul>}
+          {(filtered || !collapsed.includes(host)) && <ul role="none" className="pl-2.5">{list.map((env) => row(env, true))}</ul>}
         </li>)}
-        {visible.length === 0 && envs.length > 0 && <li className="list-empty">
-          <span className="list-empty-icon"><Icon name="search" /></span>
+        {visible.length === 0 && envs.length > 0 && <li className={listEmpty}>
+          <span className={listEmptyIcon}><Icon name="search" /></span>
           <strong>{t("environments.noEnvironmentMatches")}</strong>
-          {filtered && <button type="button" className="btn sm" onClick={clearFilters}><Icon name="x" />{t("environments.clearFilters")}</button>}</li>}
+          {filtered && <Button size="sm" className="mt-2" onClick={clearFilters}><Icon name="x" />{t("environments.clearFilters")}</Button>}</li>}
       </ul>
     </aside>
-    {listMenu && <FloatingMenu at={{ left: listMenu.x, top: listMenu.y }} label={listMenu.env.name} className="more-menu-list floating" close={closeListMenu}><MenuItems close={closeListMenu} items={[
+    {listMenu && <FloatingMenu at={{ left: listMenu.x, top: listMenu.y }} label={listMenu.env.name} className={moreMenu} close={closeListMenu}><MenuItems close={closeListMenu} items={[
       { label: t("environments.openShell"), icon: "terminal", run: () => openShell(listMenu.env) },
       { label: t("environments.cloneEnvironment"), icon: "copy", run: () => setDetailAction("clone") },
       ...creating ? [] : [{ label: t("environments.addDatabase"), icon: "database" as const, run: () => void addDatabase(listMenu.env) }],
       { label: t("environments.deleteEnvironment"), icon: "trash", danger: true, run: () => setDetailAction("delete") },
     ]} /></FloatingMenu>}
-    <section className="detail-pane">
-      {creating && focusHint && <p className="banner info compact" role="status"><Icon name="alert" />{t("environments.focusWhileCreating", { name: envs.find((env) => env.id === focusHint)?.name ?? "" })}</p>}
+    <section className={detailPane}>
+      {creating && focusHint && <Banner tone="info" compact role="status"><Icon name="alert" />{t("environments.focusWhileCreating", { name: envs.find((env) => env.id === focusHint)?.name ?? "" })}</Banner>}
       {creating ? <EnvironmentForm busy={busy} tagSuggestions={allTags} draftRef={draftRef} cancel={() => setCreating(false)} save={async (draft, tags, proxy) => { setSelectedId((await save(draft, tags, proxy)).id); }} />
         : selected && <EnvironmentDetail key={selected.id} env={selected} action={detailAction} actionHandled={() => setDetailAction(null)} busy={busy} pendingCount={pending.filter((p) => p.environment_id === selected.id).length} envNames={envs.map((e) => e.name)} allTags={allTags}
           refresh={refresh}
@@ -239,6 +240,10 @@ export default function EnvironmentsPage({ envs, pending = [], focusId, refresh,
 }
 
 const LIST_TAGS = 3;
+/** Smaller than chip(): its height, padding, size and colors all differ. */
+const listChip = (tone?: Tone, selected?: boolean) => cx("inline-flex items-center gap-[5px] h-4 px-1.25 max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap flex-none border rounded-sm text-2xs font-medium cursor-pointer",
+  tone ? cx(tones[tone], "text-tone bg-tone-soft") : "text-fg-3 bg-surface-2", selected ? "border-accent" : tone ? "border-transparent" : "border-line");
+const SUGGESTION = "flex items-center gap-2 px-1.5 py-1.25 rounded-sm text-sm text-fg-2";
 
 /** Build a saved environment draft; an empty credential preserves it. Context is edited separately and ignored on update. */
 function draftFrom(env: Environment, changes: Partial<EnvironmentDraft>): EnvironmentDraft {
@@ -296,30 +301,30 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
     return name;
   };
 
-  return <div className="detail">
-    <header className="detail-header">
-      <span className="tile"><EnvIcon env={env} /></span>
-      <div className="grow min-w-0 detail-title">
-        <h2 className="row gap-2 min-w-0"><span className="truncate">{env.name}</span>
-          <button type="button" className="icon-btn sm open-link" onClick={() => void ipc.openUrl(env.id).catch(() => undefined)} data-tip={t("environments.openBrowserTip", { url: env.url })} aria-label={t("environments.openBrowser")}><Icon name="external" /></button>
+  return <div className={detail}>
+    <header className={detailHeader}>
+      <span className={tile()}><EnvIcon env={env} /></span>
+      <div className="min-w-0 flex-[1_1_220px]">
+        <h2 className="flex items-center gap-2 min-w-0"><span className="truncate">{env.name}</span>
+          <IconButton size="sm" className="flex-none hover:text-accent-text!" onClick={() => void ipc.openUrl(env.id).catch(() => undefined)} data-tip={t("environments.openBrowserTip", { url: env.url })} aria-label={t("environments.openBrowser")}><Icon name="external" /></IconButton>
         </h2>
-        <p className="hint mono truncate detail-subtitle">{hostOf(env.url)} · {env.database} · {env.login}</p>
+        <p className="text-fg-3 text-sm mono truncate mt-px mb-0.5">{hostOf(env.url)} · {env.database} · {env.login}</p>
         <TagEditor tags={tags} suggestions={allTags} disabled={busy} collapsed onChange={saveTags} />
-        {tagError && <small className="hint text-danger" role="alert">{formatAppError(tagError)}</small>}
+        {tagError && <small className="text-danger text-xs mt-px" role="alert">{formatAppError(tagError)}</small>}
       </div>
       <HealthChip env={env} />
-      <button className="btn sm" disabled={busy} onClick={openShell}><Icon name="terminal" />{t("environments.openShell")}</button>
+      <Button size="sm" disabled={busy} onClick={openShell}><Icon name="terminal" />{t("environments.openShell")}</Button>
       <MoreMenu label={t("environments.moreActions")} disabled={busy} items={[
         { label: t("environments.cloneEnvironment"), icon: "copy", run: () => setCloneName(suggestedName()) },
         { label: t("environments.deleteEnvironment"), icon: "trash", danger: true, run: () => setDeleting(true) },
       ]} />
     </header>
 
-    <section className="panel">
-      <header className="panel-header"><h3>{t("environments.writeMode")}</h3>
-        {Number.isFinite(until) && <span className="row gap-2"><span className="countdown tone-warn" data-tip={t("environments.readOnlyAt", { time: formatDateTime(new Date(until), { hour: "2-digit", minute: "2-digit" }) })}><Icon name="clock" /><time dateTime={env.write_until!}>{formatRemaining(until - now, { hour: t("common.hourShort"), minute: t("common.minuteShort") })}</time></span><button className="btn sm" disabled={busy} onClick={() => changeMode("temporary")}>{t("environments.changeDeadline")}</button></span>}
-      </header>
-      <div className="panel-body">
+    <section className={panel}>
+      <PanelHeader><h3>{t("environments.writeMode")}</h3>
+        {Number.isFinite(until) && <span className="flex items-center gap-2 flex-none"><span className={countdown("warn")} data-tip={t("environments.readOnlyAt", { time: formatDateTime(new Date(until), { hour: "2-digit", minute: "2-digit" }) })}><Icon name="clock" /><time dateTime={env.write_until!}>{formatRemaining(until - now, { hour: t("common.hourShort"), minute: t("common.minuteShort") })}</time></span><Button size="sm" disabled={busy} onClick={() => changeMode("temporary")}>{t("environments.changeDeadline")}</Button></span>}
+      </PanelHeader>
+      <div className={panelBody}>
         <ModeSelect id={`mode-${env.id}`} value={env.write_mode} disabled={busy} onValueChange={changeMode} />
       </div>
     </section>
@@ -339,9 +344,9 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
       onOpenChange={(open) => { if (!open && !busy) setCloneName(null); }}
       onConfirm={async () => { if (cloneName) await clone(cloneName.trim()); setCloneName(null); }}
     >
-      <label className="field"><span>{t("environments.copyNameLabel")}</span>
+      <label className={field}><span>{t("environments.copyNameLabel")}</span>
         <input autoFocus value={cloneName ?? ""} maxLength={200} onChange={(e) => setCloneName(e.target.value)} />
-        {cloneName && envNames.includes(cloneName.trim()) && <small className="hint text-danger">{t("environments.nameExists")}</small>}
+        {cloneName && envNames.includes(cloneName.trim()) && <small className="text-danger text-xs">{t("environments.nameExists")}</small>}
       </label>
     </ConfirmDialog>
     <ConfirmDialog
@@ -354,10 +359,10 @@ function EnvironmentDetail({ env, action, actionHandled, pendingCount, refresh, 
       onOpenChange={(open) => { if (!open && !busy) setDeleting(false); }}
       onConfirm={async () => { if (!(await remove())) throw { code: "app.environment_delete_failed" }; }}
     >
-      <dl className="props compact">
+      <Props compact>
         <div><dt>{t("common.database")}</dt><dd className="mono">{env.database}</dd></div>
         <div><dt>URL</dt><dd className="mono">{env.url}</dd></div>
-      </dl>
+      </Props>
     </ConfirmDialog>
   </div>;
 }
@@ -366,7 +371,7 @@ type DetailAction = "clone" | "delete" | "rename";
 /** Show the editing notice beside the title without shifting content. */
 function RevokeNotice() {
   const { t } = useTranslation();
-  return <span className="title-warn tone-warn" tabIndex={0} aria-label={t("environments.saveWarning")}>
+  return <span className={titleWarn} tabIndex={0} aria-label={t("environments.saveWarning")}>
     <Icon name="alert" />
     <span className="tooltip start" role="tooltip"><strong>{t("settingsTable.onSave")}</strong>{t("environments.revokePending")}</span>
   </span>;
@@ -374,10 +379,10 @@ function RevokeNotice() {
 
 function PanelActions({ busy, editing, start, cancel, canSave }: { busy: boolean; editing: boolean; start: () => void; cancel: () => void; canSave: boolean }) {
   const { t } = useTranslation();
-  return editing ? <span className="row gap-2">
-    <button type="button" className="btn sm" disabled={busy} onClick={cancel}>{t("common.cancel")}</button>
-    <button type="submit" className="btn sm primary" disabled={busy || !canSave}>{busy ? t("common.saving") : t("common.save")}</button>
-  </span> : <button type="button" className="btn sm" disabled={busy} onClick={start}><Icon name="pencil" />{t("common.edit")}</button>;
+  return editing ? <span className="flex items-center gap-2 flex-none">
+    <Button size="sm" disabled={busy} onClick={cancel}>{t("common.cancel")}</Button>
+    <Button type="submit" size="sm" variant="primary" disabled={busy || !canSave}>{busy ? t("common.saving") : t("common.save")}</Button>
+  </span> : <Button size="sm" disabled={busy} onClick={start}><Icon name="pencil" />{t("common.edit")}</Button>;
 }
 
 /** Select value: "inherit", "direct" or the id of a named proxy prefixed with "p:". */
@@ -416,6 +421,7 @@ function ConnectionPanel({ env, busy, pendingCount, update, renaming = 0 }: { en
   const protocolName = (p: string) => protocolLabels[p] ? t(protocolLabels[p] as "environmentForm.protocols.legacy_jsonrpc") : p;
   const protocolText = env.protocol === "auto" && env.detected_protocol && protocolLabels[env.detected_protocol]
     ? `${protocolName(env.protocol)} · ${protocolName(env.detected_protocol)}` : protocolName(env.protocol);
+  const summary = collapsed && !values;
   const proxyLabel = proxyView && proxies ? proxyOptions(proxies).find((o) => o.value === proxyValue(proxyView))?.label ?? t("environments.missingProxy") : "";
 
   async function save() {
@@ -431,7 +437,7 @@ function ConnectionPanel({ env, busy, pendingCount, update, renaming = 0 }: { en
     } catch (reason) { setError(normalizeAppError(reason)); throw reason; }
   }
 
-  return <form className="panel" autoComplete="off" aria-label={t("environmentForm.connection")} onSubmit={(event) => {
+  return <form className={panel} autoComplete="off" aria-label={t("environmentForm.connection")} onSubmit={(event) => {
     event.preventDefault();
     if (!values || busy || !changed) return;
     const invalidUrl = urlError(values.url);
@@ -439,11 +445,11 @@ function ConnectionPanel({ env, busy, pendingCount, update, renaming = 0 }: { en
     setError("");
     if (pendingCount > 0) setConfirming(true); else void save().catch(() => undefined);
   }}>
-    <header className="panel-header"><div><PanelTitle title={t("environmentForm.connection")} collapsed={collapsed && !values} toggle={() => setCollapsed(!collapsed)}>{values && <RevokeNotice />}</PanelTitle>
+    <PanelHeader className={summary ? "flex-wrap gap-y-1" : undefined}><div className={cx("flex-auto min-w-0", summary && "basis-[260px]")}><PanelTitle title={t("environmentForm.connection")} collapsed={collapsed && !values} toggle={() => setCollapsed(!collapsed)}>{values && <RevokeNotice />}</PanelTitle>
 </div>
-      {collapsed && !values && <span className="panel-summary">{protocolText}{proxyView && proxies && <> · {t("environments.proxySummary", { proxy: proxyLabel })}</>}</span>}
+      {summary && <span className={panelSummary}>{protocolText}{proxyView && proxies && <> · {t("environments.proxySummary", { proxy: proxyLabel })}</>}</span>}
       {(!collapsed || values !== null) && <PanelActions busy={busy} editing={values !== null} start={start} cancel={cancel} canSave={changed && values !== null && connectionComplete(values, retarget)} />}
-    </header>
+    </PanelHeader>
     <ConfirmDialog open={confirming} busy={busy} tone="warn"
       title={t("environments.saveConnection")}
       description={t("environments.saveConnectionWarning", { count: pendingCount })}
@@ -451,31 +457,31 @@ function ConnectionPanel({ env, busy, pendingCount, update, renaming = 0 }: { en
       onOpenChange={(open) => { if (!open) setConfirming(false); }}
       onConfirm={save} />
     {/* Keep rows stable; editing changes only the value control. */}
-    {(!collapsed || values) && <fieldset disabled={busy} className="props-fieldset">
-      <dl className={`props ${values ? "editing" : ""}`}>
+    {(!collapsed || values) && <fieldset disabled={busy}>
+      <Props editing={!!values}>
         {/* The header already shows the name; the row only appears to edit it. */}
         {values && <div><dt><Icon name="pencil" />{t("environmentForm.name")}</dt><dd>
-          <input className="inline-input" aria-label={t("environmentForm.name")} autoFocus required maxLength={200} value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} /></dd></div>}
+          <input className={inlineInput()} aria-label={t("environmentForm.name")} autoFocus required maxLength={200} value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} /></dd></div>}
         <div><dt><Icon name="globe" />{t("common.url")}</dt><dd className="mono">{values
-          ? <input className="inline-input mono" aria-label={t("environmentForm.odooUrl")} type="url" required value={values.url} onChange={(e) => setValues({ ...values, url: e.target.value })} />
+          ? <input className={inlineInput(true)} aria-label={t("environmentForm.odooUrl")} type="url" required value={values.url} onChange={(e) => setValues({ ...values, url: e.target.value })} />
           : env.url}</dd></div>
         <div><dt><Icon name="database" />{t("common.database")}</dt><dd className="mono">{values
-          ? <input className="inline-input mono" aria-label={t("common.database")} required value={values.database} onChange={(e) => setValues({ ...values, database: e.target.value })} />
+          ? <input className={inlineInput(true)} aria-label={t("common.database")} required value={values.database} onChange={(e) => setValues({ ...values, database: e.target.value })} />
           : env.database}</dd></div>
         <div><dt><Icon name="user" />{t("environmentForm.user")}</dt><dd>{values
-          ? <input className="inline-input" aria-label={t("environmentForm.user")} required autoComplete="off" value={values.login} onChange={(e) => setValues({ ...values, login: e.target.value })} />
+          ? <input className={inlineInput()} aria-label={t("environmentForm.user")} required autoComplete="off" value={values.login} onChange={(e) => setValues({ ...values, login: e.target.value })} />
           : env.login}</dd></div>
         <div><dt><Icon name="plug" />{t("environmentForm.protocol")}</dt><dd>{values
-          ? <ProtocolSelect className="inline-input" value={values.protocol} onChange={(protocol) => setValues({ ...values, protocol })} />
+          ? <ProtocolSelect className={inlineInput()} value={values.protocol} onChange={(protocol) => setValues({ ...values, protocol })} />
           : protocolText}</dd></div>
         <div><dt><Icon name="key" />{t("environmentForm.credential")}</dt><dd>{values
-          ? <input className="inline-input" aria-label={t("environmentForm.apiKey")} type="password" autoComplete="new-password" required={retarget} placeholder={t(retarget ? "environmentForm.newTargetSecretPlaceholder" : "environmentForm.keepSecretPlaceholder")} value={values.secret} onChange={(e) => setValues({ ...values, secret: e.target.value })} />
-          : env.has_secret ? <span className="secret-mask" aria-label={t("environmentForm.savedCredential")} data-tip={t("environmentForm.savedCredentialHint")}>••••••••••••</span> : <span className="text-warn">{t("environmentForm.noCredential")}</span>}</dd></div>
+          ? <input className={inlineInput()} aria-label={t("environmentForm.apiKey")} type="password" autoComplete="new-password" required={retarget} placeholder={t(retarget ? "environmentForm.newTargetSecretPlaceholder" : "environmentForm.keepSecretPlaceholder")} value={values.secret} onChange={(e) => setValues({ ...values, secret: e.target.value })} />
+          : env.has_secret ? <span className={secretMask} aria-label={t("environmentForm.savedCredential")} data-tip={t("environmentForm.savedCredentialHint")}>••••••••••••</span> : <span className="text-warn">{t("environmentForm.noCredential")}</span>}</dd></div>
         <div><dt><Icon name="shield" />{t("proxy.title")}</dt><dd>{values && proxy && proxyView && proxies
-          ? <Select className="inline-input" label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={setProxy} />
+          ? <Select className={inlineInput()} label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={setProxy} />
           : proxyView && proxies ? <span>{proxyLabel}</span> : "…"}</dd></div>
-      </dl>
-      {values && error && <div className="panel-body panel-foot"><p className="banner danger" role="alert"><Icon name="alert" />{formatAppError(error)}</p></div>}
+      </Props>
+      {values && error && <div className={cx(panelBody, "border-t")}><Banner tone="danger" role="alert"><Icon name="alert" />{formatAppError(error)}</Banner></div>}
     </fieldset>}
   </form>;
 }

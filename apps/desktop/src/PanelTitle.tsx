@@ -15,11 +15,15 @@ export function useCollapsed(key: string, fallback = true): [boolean, (v: boolea
   return [collapsed, update];
 }
 
+/** The collapse button's look, also used by the environment list's host groups; the chevron gets `chevron`. */
+export const panelToggle = "group/toggle inline-flex items-center gap-1.5 -ml-1 px-1 py-0.5 border-0 rounded-sm bg-transparent text-inherit cursor-pointer hover:[&_h3]:text-fg [&_.icon]:size-3 [&_.icon]:text-fg-3 hover:[&_.icon]:text-fg";
+export const chevron = "transition-transform duration-120 rotate-90 group-aria-[expanded=false]/toggle:rotate-0";
+
 export default function PanelTitle({ title, collapsed, toggle, children }: { title: string; collapsed: boolean; toggle: () => void; children?: ReactNode }) {
   const { t } = useTranslation();
-  return <span className="row gap-2">
-    <button type="button" className="panel-toggle" aria-expanded={!collapsed} aria-label={`${collapsed ? t("common.expand") : t("common.collapse")} ${title}`} onClick={toggle}>
-      <Icon name="chevron" /><h3>{title}</h3>
+  return <span className="flex items-center gap-2">
+    <button type="button" className={panelToggle} aria-expanded={!collapsed} aria-label={`${collapsed ? t("common.expand") : t("common.collapse")} ${title}`} onClick={toggle}>
+      <Icon name="chevron" className={chevron} /><h3>{title}</h3>
     </button>
     {children}
   </span>;

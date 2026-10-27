@@ -8,6 +8,7 @@ import { recordIds, writtenValues } from "./ApprovalDetails";
 import { Json } from "./json";
 import { formatDateTime } from "./i18n/format";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
+import { Banner, IconButton, PanelHeader, cx, field, panel, panelBody, valuesTable, valuesTables } from "./ui";
 
 type Expiry = "keep" | "never" | "hour" | "day" | "week" | "month";
 const EXPIRY_MS: Record<Exclude<Expiry, "keep" | "never">, number> = { hour: 3_600_000, day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000 };
@@ -85,28 +86,28 @@ export function RuleDialog({ initial, open, onOpenChange, approve, onSaved }: {
     description={editing ? t("rules.editDescription") : t("rules.createDescription", { environment: target.environment_name })}
     confirmLabel={editing ? t("common.save") : t("rules.create")}
     confirmDisabled={maxRecords < 1 || (kind === "fields" && !fieldList.length) || (kind === "values" && !valuesValid)}>
-    {payloadMethod && <label className="field"><span>{t("rules.kind")}</span>
+    {payloadMethod && <label className={field}><span>{t("rules.kind")}</span>
       <Select label={t("rules.kind")} value={kind} onChange={setKind} options={KINDS.map((value) => ({ value, label: t(`rules.kinds.${value}`) }))} />
     </label>}
-    {kind === "fields" && <label className="field"><span>{t("rules.fields")}</span>
+    {kind === "fields" && <label className={field}><span>{t("rules.fields")}</span>
       <input value={fields} onChange={(e) => setFields(e.target.value)} className="mono" />
-      <small className="hint">{t("rules.fieldsHint")}</small>
+      <small className="text-fg-3 text-xs">{t("rules.fieldsHint")}</small>
     </label>}
-    {kind === "values" && <label className="field"><span>{t("rules.values")}</span>
+    {kind === "values" && <label className={field}><span>{t("rules.values")}</span>
       <textarea rows={6} value={valuesText} onChange={(e) => setValuesText(e.target.value)} />
-      {!valuesValid && <small className="hint text-danger">{t("rules.valuesInvalid")}</small>}
+      {!valuesValid && <small className="text-danger text-xs">{t("rules.valuesInvalid")}</small>}
     </label>}
-    <div className="row gap-2">
-      <label className="field grow"><span>{t("rules.maxRecords")}</span>
+    <div className="flex items-center gap-2">
+      <label className={cx(field, "grow")}><span>{t("rules.maxRecords")}</span>
         <input type="number" min={1} max={1000} value={maxRecords} onChange={(e) => setMaxRecords(Number(e.target.value))} />
       </label>
-      <label className="field grow"><span>{t("rules.expires")}</span>
+      <label className={cx(field, "grow")}><span>{t("rules.expires")}</span>
         <Select label={t("rules.expires")} value={expiry} onChange={setExpiry}
           options={expiries.map((value) => ({ value, label: value === "keep" ? t("rules.until", { time: formatDateTime(new Date(initial.expiresAt!), { dateStyle: "short", timeStyle: "short" }) }) : t(`rules.expiry.${value}`) }))} />
       </label>
     </div>
-    <div className="field"><span>{t("rules.context")}</span><code className="mono"><Json value={target.context} /></code></div>
-    {approve && <label className="check"><input type="checkbox" checked={approveToo} onChange={() => setApproveToo(!approveToo)} />{t("rules.approveToo")}</label>}
+    <div className={field}><span>{t("rules.context")}</span><code className="mono"><Json value={target.context} /></code></div>
+    {approve && <label className="flex gap-2 items-start text-fg-2 text-sm cursor-pointer"><input type="checkbox" checked={approveToo} onChange={() => setApproveToo(!approveToo)} />{t("rules.approveToo")}</label>}
   </ConfirmDialog>;
 }
 
@@ -121,21 +122,21 @@ export default function RulesPanel({ env }: { env: Environment }) {
   const [editing, setEditing] = useState<Rule | null>(null);
   const condition = (rule: Rule) => rule.kind === "fields" ? rule.fields?.join(", ") : rule.kind === "values" ? <Json value={rule.values} /> : t("rules.kinds.method");
 
-  return <section className="panel" aria-label={t("rules.title")}>
-    <header className="panel-header"><h3>{t("rules.title")}</h3>
-      {env.write_mode !== "approval" && <span className="hint">{t("rules.onlyApproval")}</span>}
-    </header>
-    {error && <p className="banner danger compact" role="alert"><Icon name="alert" />{formatAppError(error)}</p>}
-    {rules && !rules.length && <p className="panel-body hint">{t("rules.empty")}</p>}
-    {rules && rules.length > 0 && <div className="values-tables"><table className="values-table rules-table">
-      <tbody>{rules.map((rule) => <tr key={rule.id} className={rule.expired ? "rule-expired" : undefined}>
+  return <section className={panel} aria-label={t("rules.title")}>
+    <PanelHeader><h3>{t("rules.title")}</h3>
+      {env.write_mode !== "approval" && <span className="text-fg-3 text-xs">{t("rules.onlyApproval")}</span>}
+    </PanelHeader>
+    {error && <Banner tone="danger" compact role="alert"><Icon name="alert" />{formatAppError(error)}</Banner>}
+    {rules && !rules.length && <p className={cx(panelBody, "text-fg-3 text-sm")}>{t("rules.empty")}</p>}
+    {rules && rules.length > 0 && <div className={valuesTables}><table className={valuesTable}>
+      <tbody>{rules.map((rule) => <tr key={rule.id} className={rule.expired ? "opacity-55" : undefined}>
         <th scope="row" className="mono">{rule.method} {rule.model}</th>
         <td><code>{condition(rule)}</code>
-          <small className="hint"> · {t("rules.records", { count: rule.max_records })} · {rule.expired ? t("rules.expired")
+          <small className="text-fg-3 text-xs"> · {t("rules.records", { count: rule.max_records })} · {rule.expired ? t("rules.expired")
             : rule.expires_at ? t("rules.until", { time: formatDateTime(new Date(rule.expires_at), { dateStyle: "short", timeStyle: "short" }) }) : t("rules.expiry.never")}</small>
         </td>
-        <td><button type="button" className="icon-btn sm" aria-label={t("rules.edit")} data-tip={t("rules.edit")} onClick={() => setEditing(rule)}><Icon name="pencil" /></button>
-          <button type="button" className="icon-btn sm" aria-label={t("rules.delete")} data-tip={t("rules.delete")} onClick={() => void remove(rule.id)}><Icon name="trash" /></button></td>
+        <td className="w-[1%] text-right!"><IconButton size="sm" aria-label={t("rules.edit")} data-tip={t("rules.edit")} onClick={() => setEditing(rule)}><Icon name="pencil" /></IconButton>
+          <IconButton size="sm" aria-label={t("rules.delete")} data-tip={t("rules.delete")} onClick={() => void remove(rule.id)}><Icon name="trash" /></IconButton></td>
       </tr>)}</tbody>
     </table></div>}
     {editing && <RuleDialog key={editing.id} initial={fromRule(editing, env.name)} open onOpenChange={(open) => { if (!open) setEditing(null); }} onSaved={() => void load()} />}

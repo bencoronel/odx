@@ -7,6 +7,8 @@ import type { Environment } from "./ipc";
 import { modeTone } from "./ModeSelect";
 import { hostOf } from "./hosts";
 import { modalOpen } from "./modal";
+import { dialogContent, dialogOverlay } from "./ConfirmDialog";
+import { Button, cx, searchIcon, selectOption, tones } from "./ui";
 
 type Group = "pages" | "environments" | "actions";
 /** `env` rows show the server and offer the Terminal as a second action (Ctrl+Enter). */
@@ -67,20 +69,20 @@ export default function CommandPalette({ open, setOpen, envs, setPage, showEnvir
 
   return <Dialog.Root open={open} onOpenChange={setOpen}>
     <Dialog.Portal>
-      <Dialog.Overlay className="dialog-overlay" />
-      <Dialog.Content className="dialog-content palette" aria-describedby={undefined}>
+      <Dialog.Overlay className={dialogOverlay} />
+      <Dialog.Content className={`${dialogContent} w-[min(560px,calc(100%-32px))] gap-2 p-2.5`} aria-describedby={undefined}>
         <Dialog.Title className="sr-only">{t("palette.title")}</Dialog.Title>
-        <label className="search"><Icon name="search" />
-          <input role="combobox" aria-expanded="true" aria-controls="palette-list" aria-label={t("palette.description")} aria-activedescendant={active ? `palette-${active.id}` : undefined} aria-autocomplete="list"
+        <label className="relative block"><Icon name="search" className={searchIcon} />
+          <input role="combobox" aria-expanded="true" aria-controls="palette-list" aria-label={t("palette.description")} aria-activedescendant={active ? `palette-${active.id}` : undefined} aria-autocomplete="list" className="pl-[27px] h-7 text-base"
             placeholder={t("palette.placeholder")} value={query} onChange={(event) => { setQuery(event.target.value); setIndex(0); }} onKeyDown={onKeyDown} />
         </label>
-        <ul id="palette-list" className="palette-list" role="listbox" aria-label={t("palette.results")}>
+        <ul id="palette-list" className="grid gap-px max-h-[min(360px,60dvh)] overflow-auto" role="listbox" aria-label={t("palette.results")}>
           {shown.map((action, i) => <PaletteRow key={action.id} action={action} active={action === active}
             heading={shown[i - 1]?.group !== action.group ? t(`palette.groups.${action.group}`) : undefined}
             hover={() => setIndex(i)} choose={(alt) => choose(action, alt)} />)}
-          {!shown.length && <li className="hint" role="presentation">{t("palette.empty")}</li>}
+          {!shown.length && <li className="text-fg-3 text-sm px-2 py-1.5" role="presentation">{t("palette.empty")}</li>}
         </ul>
-        <footer className="palette-keys" aria-hidden="true">
+        <footer className="flex gap-3.5 pt-1.5 px-1 border-t border-line text-fg-3 text-xs [&>span]:inline-flex [&>span]:items-center [&>span]:gap-1 [&_kbd]:min-w-4 [&_kbd]:border [&_kbd]:[font:500_10px/14px_var(--font-mono)]" aria-hidden="true">
           <span><kbd>↑</kbd><kbd>↓</kbd>{t("palette.keysMove")}</span>
           <span><kbd>↵</kbd>{t("palette.keysOpen")}</span>
           {active?.alt && <span><kbd>Ctrl</kbd><kbd>↵</kbd>{t("palette.keysShell")}</span>}
@@ -94,17 +96,17 @@ function PaletteRow({ action, active, heading, hover, choose }: { action: Action
   const { t } = useTranslation();
   const env = action.env;
   return <>
-    {heading && <li className="palette-heading" role="presentation">{heading}</li>}
+    {heading && <li className="px-2 pt-2 pb-[3px] first:pt-0.5 text-fg-3 text-2xs font-semibold tracking-[.06em] uppercase" role="presentation">{heading}</li>}
     <li id={`palette-${action.id}`} role="option" aria-selected={active} aria-label={action.label}
-      className={`select-option palette-row ${active ? "active" : ""}`} onMouseMove={hover} onClick={() => choose(false)}>
+      className={cx(selectOption(active), "group gap-2 min-h-8! pt-[5px] pb-[5px]")} onMouseMove={hover} onClick={() => choose(false)}>
       {env
-        ? <span className="palette-env-icon"><Icon name="server" /><span className={`status-dot tone-${modeTone[env.write_mode]}`} /></span>
+        ? <span className="relative inline-grid place-items-center flex-none"><Icon name="server" /><span className={cx("size-[7px] rounded-full bg-tone flex-none absolute -right-[3px] -bottom-[3px] shadow-[0_0_0_2px_var(--surface)]", tones[modeTone[env.write_mode]])} /></span>
         : <Icon name={action.icon} />}
-      <span className="palette-text"><span className="truncate">{action.label}</span>
-        {env && <small className="truncate">{hostOf(env.url)} · {env.database}</small>}</span>
+      <span className="flex-1 grid min-w-0 leading-[1.3]"><span className="truncate">{action.label}</span>
+        {env && <small className="truncate text-fg-3 font-mono text-xs">{hostOf(env.url)} · {env.database}</small>}</span>
       {action.hint && <kbd>{action.hint}</kbd>}
-      {action.alt && <button type="button" className="btn sm ghost palette-alt" tabIndex={-1} aria-label={t("palette.openInShell", { name: action.label })}
-        onClick={(event) => { event.stopPropagation(); choose(true); }}><Icon name="terminal" />{t("palette.shell")}</button>}
+      {action.alt && <Button variant="ghost" size="sm" className={cx("flex-none", !active && "opacity-0 group-hover:opacity-100")} tabIndex={-1} aria-label={t("palette.openInShell", { name: action.label })}
+        onClick={(event) => { event.stopPropagation(); choose(true); }}><Icon name="terminal" />{t("palette.shell")}</Button>}
     </li>
   </>;
 }

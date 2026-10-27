@@ -17,7 +17,7 @@ export function useListWidth(storageKey: string): [number, (width: number, persi
 
 /** Drag, arrow keys or double-click (reset) to resize the list. */
 export function ListResizer({ width, setWidth, label }: { width: number; setWidth: (width: number, persist?: boolean) => void; label: string }) {
-  return <div className="list-resizer" role="separator" aria-orientation="vertical" tabIndex={0}
+  return <div className="absolute z-3 inset-y-0 -right-1 w-[7px] cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-[3px] after:w-px after:bg-transparent after:transition-colors after:duration-120 focus-visible:outline-none focus-visible:after:left-0.5 focus-visible:after:w-[3px] focus-visible:after:bg-accent max-sm:hidden" role="separator" aria-orientation="vertical" tabIndex={0}
     aria-label={label} aria-valuemin={LIST_WIDTH.min} aria-valuemax={LIST_WIDTH.max} aria-valuenow={width}
     onPointerDown={(e) => {
       e.preventDefault();

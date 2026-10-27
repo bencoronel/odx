@@ -7,6 +7,7 @@ import type { Field } from "./shell/complete";
 import type { OdooCall } from "./shell/commands";
 import { formatDateTime, formatNumber } from "./i18n/format";
 import { useDismiss } from "./ContextMenu";
+import { termMenu } from "./ui";
 import { cellText, isIds, isM2o, toJson, toMarkdown, toTsv, type Link, type Table } from "./table";
 
 /** Cell clicks: follow a record or relation, or open a long value. */
@@ -67,11 +68,11 @@ function Cell({ value, column, model, row, pos, active, selected, edges, pin }: 
     || (model === "ir.model.data" && column === "res_id" && typeof value === "number" && typeof row.model === "string")
     || (column !== "id" && (isM2o(value) || isIds(value))));
   // A click selects the cell (see TableBlock); a double click acts on it.
-  if (linked) return <td className={className} {...cell}><button type="button" className="term-link" tabIndex={-1} data-tip={t("shell.openRecord")}
+  if (linked) return <td className={className} {...cell}><button type="button" className="text-accent-text underline-offset-2 cursor-pointer hover:underline [text-align:inherit]" tabIndex={-1} data-tip={t("shell.openRecord")}
     onDoubleClick={(event) => follow({ model, column, value, row }, event.ctrlKey || event.metaKey)}>{short}</button></td>;
   const inspect = actions?.inspect;
   if (inspect && (short !== text || (value !== null && typeof value === "object"))) return <td className={className} {...cell}>
-    <button type="button" className="term-more" tabIndex={-1} data-tip={t("shell.inspectValue")}
+    <button type="button" className="cursor-pointer hover:underline hover:decoration-dotted [text-align:inherit]" tabIndex={-1} data-tip={t("shell.inspectValue")}
       onDoubleClick={() => inspect(`${model ? `${model} ` : ""}${row.id !== undefined ? `${cellText(row.id)} · ` : ""}${column}`, value)}>{short}</button>
   </td>;
   return <td className={className} {...cell} data-tip={typed?.tip ?? (short !== text ? text : undefined)}>{short}</td>;
@@ -232,8 +233,8 @@ export function TableBlock({ table, expanded, footer, onToggle, bare, headerEnd 
     }
   }
 
-  return <div className={bare ? "term-block bare" : "term-block"}>
-    <div className="term-scroll" ref={scroller} tabIndex={expanded ? undefined : 0} data-pinned={pinned || undefined}
+  return <div className={`term-block relative max-w-full min-w-[min(100%,420px)] ${bare ? "flex flex-1 flex-col min-h-0" : "w-fit mt-1 mb-2"}`}>
+    <div className={`term-scroll overflow-auto bg-surface-2 [scrollbar-width:thin] [scrollbar-color:var(--border-strong)_transparent] scroll-pt-[2em] data-pinned:scroll-pl-[6ch] focus:outline-none ${bare ? "flex-1" : "border border-line rounded-md focus-visible:border-accent"}`} ref={scroller} tabIndex={expanded ? undefined : 0} data-pinned={pinned || undefined}
       aria-label={t("shell.tableNavigation")} onKeyDown={onKey}
       onFocus={() => { if (!active) setActive({ r: 0, c: 0 }); }}
       onMouseDown={(event) => {
@@ -273,7 +274,7 @@ export function TableBlock({ table, expanded, footer, onToggle, bare, headerEnd 
             const edges = edgesOf(i, j);
             return table.code?.includes(j)
               ? <td key={j} data-cell={pos} data-active={on || undefined} data-selected={selected || undefined} style={edges ? { boxShadow: edges } : undefined}>{actions?.insert
-                ? <button type="button" className="term-link term-command" tabIndex={-1} data-tip={t("shell.editCommand")} onDoubleClick={() => actions.insert?.(String(v))}>{highlight(String(v), aliases)}</button>
+                ? <button type="button" className="underline-offset-2 cursor-pointer hover:underline [text-align:inherit]" tabIndex={-1} data-tip={t("shell.editCommand")} onDoubleClick={() => actions.insert?.(String(v))}>{highlight(String(v), aliases)}</button>
                 : highlight(String(v), aliases)}</td>
               : <Cell key={j} value={v} column={table.columns[j]} model={table.model} row={values} pos={pos} active={on} selected={selected} edges={edges} pin={pinned && j === 0} />;
           })}{headerEnd && <td className="term-header-end" />}</tr>; })}</tbody>
@@ -282,10 +283,10 @@ export function TableBlock({ table, expanded, footer, onToggle, bare, headerEnd 
           </td>)}{headerEnd && <td className="term-header-end" />}</tr></tfoot>}
         </table>}
     </div>
-    {shown.length < rows.length && <button type="button" className="term-show-all" onClick={() => setAll(true)}>{t("shell.showAllRows", { shown: shown.length, count: rows.length })}</button>}
-    {!bare && <div className="term-foot">
-      <span className="term-foot-info">{footer ? `(${footer})` : ""}{copied ? ` · ${t("common.copied")}` : ""}</span>
-      <span className="term-foot-actions">
+    {shown.length < rows.length && <button type="button" className="block mt-1 py-0.5 text-accent-text text-xs cursor-pointer hover:underline" onClick={() => setAll(true)}>{t("shell.showAllRows", { shown: shown.length, count: rows.length })}</button>}
+    {!bare && <div className="term-foot flex items-center gap-3 min-h-6 pt-0.5 text-fg-3">
+      <span className="flex-1 min-w-0 truncate">{footer ? `(${footer})` : ""}{copied ? ` · ${t("common.copied")}` : ""}</span>
+      <span className="inline-flex flex-none items-center gap-1.5 select-none">
         <button type="button" className="term-copy" aria-label={t(expanded ? "shell.collapseTable" : "shell.expandTable")} data-tip={t(expanded ? "shell.collapseTable" : "shell.expandTable")}
           aria-pressed={expanded} onClick={onToggle}><Icon name={expanded ? "table" : "rows"} /></button>
         {actions?.popOut && <button type="button" className="term-copy" aria-label={t("shell.openInWindow")} data-tip={t("shell.openInWindow")} onClick={() => actions.popOut?.(table, footer)}><Icon name="external" /></button>}
@@ -294,6 +295,8 @@ export function TableBlock({ table, expanded, footer, onToggle, bare, headerEnd 
     </div>}
   </div>;
 }
+
+const menuItem = "h-6 px-2 rounded-sm text-fg font-sans text-xs text-left cursor-pointer hover:bg-accent-soft focus-visible:bg-accent-soft";
 
 /** TSV for spreadsheets one click away; other formats behind a small menu. */
 function CopyTable({ table }: { table: Table }) {
@@ -311,17 +314,17 @@ function CopyTable({ table }: { table: Table }) {
   };
   return <>
     <CopyButton text={() => toTsv(table)} className="term-copy" tip={t("shell.copyTsvTip")} ariaLabel={t("shell.copyTsvLabel")} label="TSV" />
-    <span className="term-table-menu" ref={menu} onMouseDown={(e) => e.preventDefault()}
+    <span className="relative inline-flex" ref={menu} onMouseDown={(e) => e.preventDefault()}
       onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setOpen(false); } }}>
       <button type="button" className="term-copy" aria-haspopup="menu" aria-expanded={open} aria-label={t("shell.moreTableActions")} data-tip={copied ? t("shell.copiedAs", { format: copied }) : t("shell.moreTableActions")}
         onClick={() => setOpen(!open)}>{copied ? <Icon name="check" /> : "⋯"}</button>
-      {open && <div className="term-menu term-table-actions" role="menu">
-        <button type="button" role="menuitem" onClick={() => copy("JSON", toJson(table))}>{t("shell.copyAs", { format: "JSON" })}</button>
-        <button type="button" role="menuitem" onClick={() => copy("Markdown", toMarkdown(table))}>{t("shell.copyAs", { format: "Markdown" })}</button>
-        {code && <button type="button" role="menuitem" onClick={() => copy("Python", code)}>{t("shell.copyAs", { format: "Python" })}</button>}
+      {open && <div className={termMenu("table")} role="menu">
+        <button type="button" role="menuitem" className={menuItem} onClick={() => copy("JSON", toJson(table))}>{t("shell.copyAs", { format: "JSON" })}</button>
+        <button type="button" role="menuitem" className={menuItem} onClick={() => copy("Markdown", toMarkdown(table))}>{t("shell.copyAs", { format: "Markdown" })}</button>
+        {code && <button type="button" role="menuitem" className={menuItem} onClick={() => copy("Python", code)}>{t("shell.copyAs", { format: "Python" })}</button>}
         {actions?.exportTable && <>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); actions.exportTable?.(table, "csv"); }}>{t("shell.saveAs", { format: "CSV" })}</button>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); actions.exportTable?.(table, "json"); }}>{t("shell.saveAs", { format: "JSON" })}</button>
+          <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.exportTable?.(table, "csv"); }}>{t("shell.saveAs", { format: "CSV" })}</button>
+          <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.exportTable?.(table, "json"); }}>{t("shell.saveAs", { format: "JSON" })}</button>
         </>}
       </div>}
     </span>

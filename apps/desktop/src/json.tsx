@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from "react";
 /** JSON with the Terminal's syntax colors. Indented unless `compact`; strings with line breaks open as a block under their key. */
 export function jsonNodes(value: unknown, indent = "", compact = false): ReactNode {
   if (typeof value === "string") return value.includes("\n")
-    ? <span className="json-block">{value.replace(/\n$/, "")}</span>
+    ? <span className="json-block inline-block max-w-full align-top pl-2 border-l-2 border-line-strong text-ok">{value.replace(/\n$/, "")}</span>
     : <span className="hl-str">{JSON.stringify(value)}</span>;
   if (typeof value === "number") return <span className="hl-num">{String(value)}</span>;
   if (value === null || typeof value === "boolean") return <span className="hl-kw">{String(value)}</span>;

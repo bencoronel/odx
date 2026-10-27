@@ -8,6 +8,7 @@ import { Icon } from "./Icon";
 import { formatAppError, normalizeAppError } from "./appError";
 import { ipc } from "./ipc";
 import { flushShellSessions } from "./shellFlush";
+import { Button, IconButton, PanelHeader, banner, panel, settingRow } from "./ui";
 
 type Found = { update: Update; installable: boolean; bundle: BundleType | null };
 
@@ -60,8 +61,8 @@ function UpdateAction({ found }: { found: Found }) {
   return <>
     {error && <span className="text-danger" role="alert">{error}</span>}
     {found.installable
-      ? <button type="button" className="btn sm primary" disabled={installing} onClick={() => void install()}><Icon name="refresh" />{installing ? t("updates.installing") : t("updates.install")}</button>
-      : <button type="button" className="btn sm" onClick={open}><Icon name="external" />{t("updates.openReleases")}</button>}
+      ? <Button variant="primary" size="sm" disabled={installing} onClick={() => void install()}><Icon name="refresh" />{installing ? t("updates.installing") : t("updates.install")}</Button>
+      : <Button size="sm" onClick={open}><Icon name="external" />{t("updates.openReleases")}</Button>}
   </>;
 }
 
@@ -81,10 +82,10 @@ export function UpdateNotice() {
   }, []);
   // Dismissing hides this version only; a newer one shows again.
   if (!found || dismissed === found.update.version) return null;
-  return <div className="desktop-notices"><div className="banner info page-banner" role="status">
+  return <div className="flex flex-none flex-col pb-2.5"><div className={banner({ tone: "info", page: true })} role="status">
     <Icon name="refresh" /><span className="grow">{t("updates.available", { version: found.update.version })}</span>
     <UpdateAction found={found} />
-    <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={() => setDismissed(found.update.version)}><Icon name="x" /></button>
+    <IconButton size="sm" aria-label={t("common.close")} onClick={() => setDismissed(found.update.version)}><Icon name="x" /></IconButton>
   </div></div>;
 }
 
@@ -97,19 +98,19 @@ export function UpdatesPanel() {
   const run = () => { setResult("checking"); find().then((f) => setResult(f ?? "none"), () => setResult("failed")); };
   const found = typeof result === "object" ? result : null;
   const command = found && !found.installable ? installCommand(found.bundle, found.update.version) : null;
-  return <section className="panel" aria-labelledby="settings-updates">
-    <header className="panel-header"><div><h3 id="settings-updates">{t("updates.title")}</h3></div></header>
-    <div className="setting-row">
+  return <section className={panel} aria-labelledby="settings-updates">
+    <PanelHeader><div className="flex-auto min-w-0"><h3 id="settings-updates">{t("updates.title")}</h3></div></PanelHeader>
+    <div className={settingRow}>
       <div><strong>{version && t("updates.version", { version })}</strong>
-        {result === "none" && <p className="hint" role="status">{t("updates.upToDate")}</p>}
-        {result === "failed" && <p className="hint text-danger" role="alert">{t("updates.checkFailed")}</p>}
-        {found && <p className="hint" role="status">{t("updates.available", { version: found.update.version })}{!found.installable && ` ${t("updates.manual")}`}</p>}
-        {command && <><p className="hint">{t("updates.command")}</p>
-          <div className="row gap-2"><pre className="update-command grow">{command}</pre><CopyButton text={command} /></div></>}
+        {result === "none" && <p className="text-fg-3 text-sm mt-px" role="status">{t("updates.upToDate")}</p>}
+        {result === "failed" && <p className="text-danger text-sm mt-px" role="alert">{t("updates.checkFailed")}</p>}
+        {found && <p className="text-fg-3 text-sm mt-px" role="status">{t("updates.available", { version: found.update.version })}{!found.installable && ` ${t("updates.manual")}`}</p>}
+        {command && <><p className="text-fg-3 text-sm mt-px">{t("updates.command")}</p>
+          <div className="flex items-center gap-2"><pre className="grow m-0 whitespace-pre-wrap wrap-anywhere">{command}</pre><CopyButton text={command} /></div></>}
       </div>
-      <span className="row gap-2">
+      <span className="flex items-center gap-2">
         {found && <UpdateAction found={found} />}
-        <button type="button" className="btn" disabled={result === "checking"} onClick={run}>{result === "checking" ? t("updates.checking") : t("updates.check")}</button>
+        <Button disabled={result === "checking"} onClick={run}>{result === "checking" ? t("updates.checking") : t("updates.check")}</Button>
       </span>
     </div>
   </section>;

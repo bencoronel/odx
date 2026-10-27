@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 import { placeInWindow } from "./ContextMenu";
+import { Button, contextMenu, moreMenu } from "./ui";
 
 /** A menu entry; `null` is a separator. */
 export type MenuItem = { label: string; icon?: IconName; keys?: string; danger?: boolean; disabled?: boolean; run: () => void } | null;
@@ -24,7 +25,7 @@ export function MenuItems({ items, close }: { items: MenuItem[]; close: () => vo
 /** A menu at a point (a right click, or a button's corner with `alignEnd`), kept inside the window and focused on its first
  * field or item. Arrows move; Escape, Tab, a press outside, scrolling the page or leaving the window close it. A press on
  * the open menu's own button is left to that button, which toggles it. `onKey` handles keys before the arrows do. */
-export function FloatingMenu({ at, label, close, className = "context-menu", alignEnd, onKey, children }: {
+export function FloatingMenu({ at, label, close, className = contextMenu, alignEnd, onKey, children }: {
   at: { left: number; top: number }; label: string; close: () => void; className?: string; alignEnd?: boolean;
   onKey?: (event: KeyboardEvent<HTMLDivElement>) => void; children: ReactNode;
 }) {
@@ -65,8 +66,8 @@ export function MoreMenu({ label, items, disabled }: { label: string; items: Men
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAt(null), []);
   return <>
-    <button ref={button} type="button" className="btn sm icon-only" disabled={disabled} aria-haspopup="menu" aria-expanded={!!at} aria-label={label} data-tip={at ? undefined : label}
-      onClick={() => { const rect = button.current!.getBoundingClientRect(); setAt(at ? null : { left: rect.right, top: rect.bottom + 4 }); }}>⋯</button>
-    {at && <FloatingMenu at={at} alignEnd label={label} className="more-menu-list floating" close={close}><MenuItems items={items} close={close} /></FloatingMenu>}
+    <Button ref={button} size="sm" iconOnly disabled={disabled} aria-haspopup="menu" aria-expanded={!!at} aria-label={label} data-tip={at ? undefined : label}
+      onClick={() => { const rect = button.current!.getBoundingClientRect(); setAt(at ? null : { left: rect.right, top: rect.bottom + 4 }); }}>⋯</Button>
+    {at && <FloatingMenu at={at} alignEnd label={label} className={moreMenu} close={close}><MenuItems items={items} close={close} /></FloatingMenu>}
   </>;
 }

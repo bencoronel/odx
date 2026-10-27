@@ -8,6 +8,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { useTranslation } from "react-i18next";
 import { formatAppError, normalizeAppError, type ErrorState } from "./appError";
 import { preventUnloadUntil, usePreventUnload } from "./windowState";
+import { Banner, Button, IconButton, PanelHeader, cx, inlineInput, panel, panelBody, panelSummary, secretMask, titleWarn } from "./ui";
 
 /** Returning the backend placeholder preserves sensitive header values. */
 export const HEADER_MASK = "••••••••••••";
@@ -116,14 +117,14 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
       }
     }));
   };
-  return <form className="panel" aria-label={headerMode ? (environmentId ? t("settingsTable.environmentHeaders") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.environmentContext") : t("settingsTable.globalContext"))} autoComplete="off" onSubmit={(event) => { event.preventDefault(); save(displayed); }}>
-    <header className="panel-header"><span className="row gap-2">{environmentId ? <div><PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle></div> : <span className="row gap-2"><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></span>}
-      {environmentId && !folded && hiddenCount > 0 && <button type="button" className="btn sm ghost" disabled={!settings} aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}><Icon name="eye" />{t("settingsTable.hidden", { count: hiddenCount })}</button>}</span>
-      {folded && settings && <span className="panel-summary">{settings.entries.length
+  return <form className={panel} aria-label={headerMode ? (environmentId ? t("settingsTable.environmentHeaders") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.environmentContext") : t("settingsTable.globalContext"))} autoComplete="off" onSubmit={(event) => { event.preventDefault(); save(displayed); }}>
+    <PanelHeader className={cx(folded && settings && "flex-wrap gap-y-1")}><span className="flex items-center gap-2 flex-auto min-w-0">{environmentId ? <div className="min-w-0"><PanelTitle title={title} collapsed={folded} toggle={() => setCollapsed(!collapsed)}>{!folded && <RevokeNotice environmentId={environmentId} />}</PanelTitle></div> : <span className="flex items-center gap-2"><h3>{title}</h3><RevokeNotice environmentId={environmentId} /></span>}
+      {environmentId && !folded && hiddenCount > 0 && <Button variant="ghost" size="sm" disabled={!settings} aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}><Icon name="eye" />{t("settingsTable.hidden", { count: hiddenCount })}</Button>}</span>
+      {folded && settings && <span className={panelSummary}>{settings.entries.length
         ? t(headerMode ? "settingsTable.ownHeaders" : "settingsTable.ownContext", { count: settings.entries.length })
         : t("settingsTable.onlyInherited")}</span>}
-      {saveStatus && <span className="hint" role="status">{t(saveStatus as never)}</span>}
-    </header>
+      {saveStatus && <span className="text-fg-3 text-xs" role="status">{t(saveStatus as never)}</span>}
+    </PanelHeader>
     <ConfirmDialog open={confirm !== null} busy={false} tone="warn"
       title={headerMode ? t("settingsTable.saveHeaders") : t("settingsTable.saveContext")}
       description={t("settingsTable.pendingWarning", { count: pendingCount, scope: environmentId ? t("common.inThisEnvironment") : "" })}
@@ -135,33 +136,33 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
         setConfirm(null);
       }}
       onConfirm={async () => { if (confirm) { confirmed.current = true; commit(confirm.headers, confirm.signature); } }} />
-    {!folded && <div className="panel-body headers-body">
-      {settings && <fieldset className="props-fieldset">
-        <table className="headers-table"><thead><tr><th><span className="sr-only">{t("settingsTable.enabled")}</span></th><th>{t("settingsTable.key")}</th><th>{t("settingsTable.value")}</th><th><span className="sr-only">{t("settingsTable.actions")}</span></th></tr></thead><tbody>
+    {!folded && <div className={cx(panelBody, "grid gap-3")}>
+      {settings && <fieldset>
+        <table className="headers-table w-full table-fixed border-collapse [&_th]:text-left [&_th]:text-fg-2 [&_th]:font-medium [&_:is(td,th)]:px-1 [&_:is(td,th)]:py-1.5 [&_:is(td,th)]:align-middle [&_tbody_tr]:border-t [&_tbody_tr]:border-line"><thead><tr><th className="w-9"><span className="sr-only">{t("settingsTable.enabled")}</span></th><th className="w-[35%]">{t("settingsTable.key")}</th><th>{t("settingsTable.value")}</th><th className="w-9"><span className="sr-only">{t("settingsTable.actions")}</span></th></tr></thead><tbody>
           {headerMode && (!environmentId || showHidden) && ["Host", "Content-Length"].map((name) => <tr key={name}>
             <td><input type="checkbox" checked disabled aria-label={t("settingsTable.automaticHeader", { name })} /></td>
-            <td><input className="inline-input mono" value={name} readOnly aria-label={t("settingsTable.automaticHeaderName", { name })} /></td>
-            <td><input className="inline-input mono" value={t("settingsTable.automaticValue")} readOnly aria-label={t("settingsTable.automaticHeaderValue", { name })} /></td><td />
+            <td><input className={cx(inlineInput(true), "text-fg-3")} value={name} readOnly aria-label={t("settingsTable.automaticHeaderName", { name })} /></td>
+            <td><input className={cx(inlineInput(true), "text-fg-3")} value={t("settingsTable.automaticValue")} readOnly aria-label={t("settingsTable.automaticHeaderValue", { name })} /></td><td />
           </tr>)}
           {showHidden && environmentId && inherited.map((h) => <tr key={`inherited-${h.name}`}>
             <td><input type="checkbox" checked={h.enabled && !displayed.some((local) => local.enabled && sameName(local.name, h.name))} disabled aria-label={t(headerMode ? "settingsTable.inheritedHeader" : "settingsTable.inheritedContext", { name: h.name })} /></td>
-            <td><input className="inline-input mono" value={h.name} readOnly aria-label={t(headerMode ? "settingsTable.inheritedHeaderName" : "settingsTable.inheritedContextKey", { name: h.name })} /></td>
-            <td><input className="inline-input mono" value={h.value} readOnly aria-label={t(headerMode ? "settingsTable.inheritedHeaderValue" : "settingsTable.inheritedContextValue", { name: h.name })} /></td><td />
+            <td><input className={cx(inlineInput(true), "text-fg-3")} value={h.name} readOnly aria-label={t(headerMode ? "settingsTable.inheritedHeaderName" : "settingsTable.inheritedContextKey", { name: h.name })} /></td>
+            <td><input className={cx(inlineInput(true), "text-fg-3")} value={h.value} readOnly aria-label={t(headerMode ? "settingsTable.inheritedHeaderValue" : "settingsTable.inheritedContextValue", { name: h.name })} /></td><td />
           </tr>)}
           {tableRows.map((h, index) => {
             const blank = index === displayed.length;
             const names = headerMode ? headerNames.filter((name) => !["host", "content-length"].includes(name.toLowerCase())) : contextKeys;
             const suggestions = names.filter((name) => !displayed.some((row, i) => i !== index && sameName(row.name, name)));
-            return <tr key={index} ref={blank ? newRow : undefined} className={blank ? "headers-new-row" : undefined}>
+            return <tr key={index} ref={blank ? newRow : undefined} className={blank ? "scroll-mb-20" : undefined}>
               <td>{!blank && <input type="checkbox" aria-label={t(headerMode ? "settingsTable.enableHeader" : "settingsTable.enableContext", { index: index + 1 })} checked={h.enabled} onChange={(e) => save(change(index, { enabled: e.target.checked }))} />}</td>
-              <td><HeaderInput className="inline-input mono" aria-label={blank ? (headerMode ? t("settingsTable.newHeaderName") : t("settingsTable.newContextKey")) : t(headerMode ? "settingsTable.headerName" : "settingsTable.contextKey", { index: index + 1 })} value={h.name} required={!blank && h.value !== ""} placeholder={blank ? t("settingsTable.key") : undefined} spellCheck={false} suggestions={suggestions} caseSensitive={!headerMode} disabledSuggestions={headerMode ? reservedHeaderNames : []} onBlur={() => save(displayed)} onChange={(name) => change(index, { name })} /></td>
-              <td><HeaderInput className={`inline-input mono ${headerMode && h.value === HEADER_MASK ? "secret-mask" : ""} ${headerMode && h.name.trim() && !VISIBLE_HEADERS.includes(h.name.trim().toLowerCase()) ? "secret-input" : ""}`} aria-label={blank ? (headerMode ? t("settingsTable.newHeaderValue") : t("settingsTable.newContextValue")) : t(headerMode ? "settingsTable.headerValue" : "settingsTable.contextValue", { index: index + 1 })} value={h.value} placeholder={blank ? t("settingsTable.value") : undefined} data-tip={headerMode ? (h.value === HEADER_MASK ? t("settingsTable.savedSecret") : undefined) : t("settingsTable.contextValueHelp")} spellCheck={false} suggestions={headerMode ? headerValues.get(h.name.toLowerCase()) ?? [] : []} onBlur={() => save(displayed)} onChange={(value) => change(index, { value: headerMode && h.value === HEADER_MASK ? value.replaceAll("•", "") : value, enabled: true })} /></td>
-              <td>{!blank && <button type="button" className="icon-btn sm" aria-label={t(headerMode ? "settingsTable.deleteHeader" : "settingsTable.deleteContext", { index: index + 1 })} onClick={() => { const next = displayed.filter((_, i) => i !== index); version.current += 1; setRows(next); save(next); }}><Icon name="trash" /></button>}</td>
+              <td><HeaderInput className={inlineInput(true)} aria-label={blank ? (headerMode ? t("settingsTable.newHeaderName") : t("settingsTable.newContextKey")) : t(headerMode ? "settingsTable.headerName" : "settingsTable.contextKey", { index: index + 1 })} value={h.name} required={!blank && h.value !== ""} placeholder={blank ? t("settingsTable.key") : undefined} spellCheck={false} suggestions={suggestions} caseSensitive={!headerMode} disabledSuggestions={headerMode ? reservedHeaderNames : []} onBlur={() => save(displayed)} onChange={(name) => change(index, { name })} /></td>
+              <td><HeaderInput className={cx(inlineInput(true), headerMode && h.value === HEADER_MASK && cx("secret-mask", secretMask), headerMode && h.name.trim() && !VISIBLE_HEADERS.includes(h.name.trim().toLowerCase()) && "[-webkit-text-security:disc]")} aria-label={blank ? (headerMode ? t("settingsTable.newHeaderValue") : t("settingsTable.newContextValue")) : t(headerMode ? "settingsTable.headerValue" : "settingsTable.contextValue", { index: index + 1 })} value={h.value} placeholder={blank ? t("settingsTable.value") : undefined} data-tip={headerMode ? (h.value === HEADER_MASK ? t("settingsTable.savedSecret") : undefined) : t("settingsTable.contextValueHelp")} spellCheck={false} suggestions={headerMode ? headerValues.get(h.name.toLowerCase()) ?? [] : []} onBlur={() => save(displayed)} onChange={(value) => change(index, { value: headerMode && h.value === HEADER_MASK ? value.replaceAll("•", "") : value, enabled: true })} /></td>
+              <td>{!blank && <IconButton size="sm" aria-label={t(headerMode ? "settingsTable.deleteHeader" : "settingsTable.deleteContext", { index: index + 1 })} onClick={() => { const next = displayed.filter((_, i) => i !== index); version.current += 1; setRows(next); save(next); }}><Icon name="trash" /></IconButton>}</td>
             </tr>;
           })}
         </tbody></table>
       </fieldset>}
-      {error && <p className="banner danger" role="alert">{formatAppError(error)}</p>}
+      {error && <Banner tone="danger" role="alert">{formatAppError(error)}</Banner>}
     </div>}
   </form>;
 }
@@ -169,7 +170,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
 /** Show a notice beside the title: saving revokes pending approvals. */
 function RevokeNotice({ environmentId }: { environmentId?: string }) {
   const { t } = useTranslation();
-  return <span className="title-warn tone-warn" tabIndex={0} aria-label={t("settingsTable.saveWarning")}>
+  return <span className={titleWarn} tabIndex={0} aria-label={t("settingsTable.saveWarning")}>
     <Icon name="alert" />
     <span className="tooltip start" role="tooltip"><strong>{t("settingsTable.onSave")}</strong>{environmentId
       ? t("settingsTable.revokeEnvironmentRequests")

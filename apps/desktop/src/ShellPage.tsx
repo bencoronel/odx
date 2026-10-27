@@ -20,6 +20,7 @@ import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { hasWindowState, useWindowState, usePreventUnload } from "./windowState";
 import { FloatingMenu, MenuItems } from "./Menu";
 import { modalOpen } from "./modal";
+import { Button, Chip, IconButton, StatusDot, chip, cx, empty, emptyIcon, iconButton, method, moreMenu, searchIcon, searchInput, termMenu, termMenuDetail, termMenuValue } from "./ui";
 
 /** Commands kept out of the history, with their aliases (\s for \history). */
 const UNRECALLED = new Set(["\\?", "help", "\\history", "\\s", "\\clear"]);
@@ -241,7 +242,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
       if (!(event.ctrlKey || event.metaKey) || event.altKey || modalOpen()) return;
       const key = event.key.toLowerCase();
       const index = tabs.findIndex((tab) => tab.id === activeId);
-      if (key === "t" && !event.shiftKey) { event.preventDefault(); pick(plus.current ?? document.querySelector<HTMLElement>(".shell-empty .btn")); }
+      if (key === "t" && !event.shiftKey) { event.preventDefault(); pick(plus.current ?? document.querySelector<HTMLElement>(".shell-empty button")); }
       else if (key === "w" && !event.shiftKey) { event.preventDefault(); if (tabs[index]) close([tabs[index]]); }
       else if (key === "tab" || key === "pagedown" || key === "pageup") {
         event.preventDefault();
@@ -268,22 +269,22 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
     setRenaming(null);
     refreshTabs();
   };
-  return <div className="shell-sessions">
-    <div className="shell-tabs" role="tablist" aria-label={t("shell.sessions")} aria-orientation="horizontal">
-      {tabs.map((tab, index) => <div className="shell-tab" key={tab.id} role="presentation" data-active={activeId === tab.id} data-dragging={dragging?.id === tab.id || undefined}
+  return <div className="flex flex-1 flex-col min-h-0 min-w-0">
+    <div className="shell-tabs flex flex-none items-center gap-1 min-h-[46px] overflow-x-auto px-3 pt-2 border-b border-line has-[[data-dragging]]:cursor-grabbing" role="tablist" aria-label={t("shell.sessions")} aria-orientation="horizontal">
+      {tabs.map((tab, index) => <div className={`group relative flex flex-none items-center border border-b-2 border-line rounded-t-md hover:bg-hover ${activeId === tab.id ? "border-b-accent bg-surface-2" : "border-b-transparent bg-surface"} data-dragging:z-2 data-dragging:opacity-90 data-dragging:shadow-pop data-dragging:pointer-events-none data-drop:after:absolute data-drop:after:top-0.5 data-drop:after:bottom-0 data-drop:after:w-0.5 data-drop:after:rounded-[1px] data-drop:after:bg-fg data-drop:after:pointer-events-none data-[drop=before]:after:-left-1 data-[drop=after]:after:-right-1`} key={tab.id} role="presentation" data-active={activeId === tab.id} data-dragging={dragging?.id === tab.id || undefined}
         data-drop={dragging?.drop?.id === tab.id ? dragging.drop.side : undefined} style={dragging?.id === tab.id ? { transform: `translateX(${dragging.dx}px)` } : undefined}
         onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
         onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); close([tab]); } }}>
-        {renaming?.id === tab.id ? <div className="shell-tab-editor" style={{ width: renaming.width }}>
-          <Icon name={tab.busy ? "spinner" : "terminal"} className={tab.busy ? "spin" : undefined} />
-          <input className="shell-tab-name" aria-label={t("shell.sessionName")} autoFocus maxLength={80} spellCheck={false} autoCorrect="off" autoComplete="off"
+        {renaming?.id === tab.id ? <div className={`flex flex-none items-center gap-1.5 min-w-[100px] h-[34px] px-2.5 whitespace-nowrap group-hover:text-fg ${activeId === tab.id ? "text-fg" : "text-fg-3"}`} style={{ width: renaming.width }}>
+          <Icon name={tab.busy ? "spinner" : "terminal"} className={tab.busy ? "animate-spin" : undefined} />
+          <input className="appearance-none flex-1 min-w-0 w-0 h-6 p-0 border-0 rounded-none bg-transparent text-fg shadow-none" aria-label={t("shell.sessionName")} autoFocus maxLength={80} spellCheck={false} autoCorrect="off" autoComplete="off"
           value={renaming.value} onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setRenaming({ ...renaming, value: event.target.value })}
           onBlur={() => finishRename(tab)} onKeyDown={(event) => {
             if (event.key === "Enter") { event.preventDefault(); finishRename(tab); }
             if (event.key === "Escape") { event.preventDefault(); setRenaming(null); }
           }} />
-        </div> : <button type="button" role="tab" id={`shell-tab-${tab.id}`} aria-controls={`shell-panel-${tab.id}`}
+        </div> : <button type="button" role="tab" className="flex items-center gap-1.5 min-w-[100px] h-[34px] px-2.5 text-fg-3 whitespace-nowrap cursor-pointer aria-selected:text-fg group-hover:text-fg" id={`shell-tab-${tab.id}`} aria-controls={`shell-panel-${tab.id}`}
           aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1}
           onMouseDown={(event) => drag(event, tab)} onClick={() => setActiveId(tab.id)} onDoubleClick={(event) => { event.preventDefault(); rename(tab); }}
           onContextMenu={(event) => {
@@ -301,22 +302,23 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
             if (event.key === "End") target = tabs[tabs.length - 1];
             if (target) { event.preventDefault(); setActiveId(target.id); document.getElementById(`shell-tab-${target.id}`)?.focus(); }
           }}>
-          <Icon name={tab.busy ? "spinner" : "terminal"} className={tab.busy ? "spin" : undefined} />
-          <span>{tabLabel(tab)}</span>{!tab.defaultName && <>{" "}<span className="shell-tab-env">{tab.envName}</span></>}
-          {tab.unseen && <span className="shell-tab-unseen" role="status" aria-label={t(tab.unseen === "agent" ? "shell.agentActivity" : "shell.finishedAway")} data-tip={tab.unseen === "agent" ? t("shell.agentActivity") : undefined} />}
+          <Icon name={tab.busy ? "spinner" : "terminal"} className={tab.busy ? "animate-spin" : undefined} />
+          <span>{tabLabel(tab)}</span>{!tab.defaultName && <>{" "}<span className="text-fg-3 text-xs">{tab.envName}</span></>}
+          {tab.unseen && <span className="size-1.5 rounded-full bg-accent" role="status" aria-label={t(tab.unseen === "agent" ? "shell.agentActivity" : "shell.finishedAway")} data-tip={tab.unseen === "agent" ? t("shell.agentActivity") : undefined} />}
         </button>}
-        {tab.pinned ? <button type="button" className="icon-btn sm shell-tab-pin" aria-label={t("shell.unpinSession")} data-tip={t("shell.unpinSession")}
+        {/* iconButton("sm") restated: these two change its color and disabled opacity. */}
+        {tab.pinned ? <button type="button" className="inline-grid place-items-center size-5 mr-1 rounded-md text-fg-3 cursor-pointer enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-45 disabled:cursor-not-allowed [&_.icon]:size-[13px]" aria-label={t("shell.unpinSession")} data-tip={t("shell.unpinSession")}
           onClick={() => pin(tab)}><Icon name="pin" /></button>
-        : <button type="button" className="icon-btn sm shell-tab-close" aria-label={t("shell.closeSession", { name: tabLabel(tab) })}
+        : <button type="button" className="inline-grid place-items-center size-5 mr-1 rounded-md text-fg-2 cursor-pointer enabled:hover:bg-hover enabled:hover:text-fg disabled:cursor-not-allowed [&_.icon]:size-[13px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-hover:disabled:opacity-45 focus-visible:opacity-100 focus-visible:pointer-events-auto" aria-label={t("shell.closeSession", { name: tabLabel(tab) })}
           disabled={tab.busy} data-tip={tab.busy ? t("shell.callInProgress") : `${t("shell.closeSessionLabel")} · Ctrl+W`} onClick={() => close([tab])}><Icon name="x" /></button>}
       </div>)}
-      <button type="button" ref={plus} className="icon-btn sm" aria-label={t("shell.newSession")} data-tip={picking ? undefined : envs.length ? `${t("shell.newSessionLabel")} · Ctrl+T` : t("shell.noEnvironments")} aria-keyshortcuts="Control+T"
-        disabled={!envs.length} aria-haspopup="menu" aria-expanded={!!picking} onClick={() => picking ? setPicking(null) : pick()}><Icon name="plus" /></button>
+      <IconButton size="sm" ref={plus} aria-label={t("shell.newSession")} data-tip={picking ? undefined : envs.length ? `${t("shell.newSessionLabel")} · Ctrl+T` : t("shell.noEnvironments")} aria-keyshortcuts="Control+T"
+        disabled={!envs.length} aria-haspopup="menu" aria-expanded={!!picking} onClick={() => picking ? setPicking(null) : pick()}><Icon name="plus" /></IconButton>
     </div>
-    {loaded && !tabs.length && <div className="empty shell-empty">
-      <span className="empty-icon"><Icon name="terminal" /></span>
+    {loaded && !tabs.length && <div className={cx(empty, "shell-empty")}>
+      <span className={emptyIcon()}><Icon name="terminal" /></span>
       <h2>{t("shell.noSessions")}</h2>
-      {envs.length ? <button type="button" className="btn primary" aria-haspopup="menu" aria-expanded={!!picking} onClick={(event) => picking ? setPicking(null) : pick(event.currentTarget)}><Icon name="plus" />{t("shell.newSession")}</button>
+      {envs.length ? <Button variant="primary" aria-haspopup="menu" aria-expanded={!!picking} onClick={(event) => picking ? setPicking(null) : pick(event.currentTarget)}><Icon name="plus" />{t("shell.newSession")}</Button>
         : <p>{t("shell.noEnvironments")}</p>}
     </div>}
     {picking && <EnvironmentMenu envs={envs} at={picking} choose={openWith} close={closePicker} />}
@@ -339,7 +341,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
         { label: t("shell.closeRight"), disabled: !right.length, run: () => close(right, tab) },
       ]} /></FloatingMenu>;
     })()}
-    {tabs.map((tab) => <div className="shell-panel" key={tab.id} role="tabpanel" id={`shell-panel-${tab.id}`}
+    {tabs.map((tab) => <div className="flex flex-1 min-h-0 min-w-0" key={tab.id} role="tabpanel" id={`shell-panel-${tab.id}`}
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
       <ShellSession tab={tab} envs={envs} active={visible && activeId === tab.id} onChange={refreshTabs} onPersist={persist} saveFailed={saveFailed} fontSize={fontSize} setFontSize={setFontSize}
         aliases={aliases} setAliases={setAliases}
@@ -1181,28 +1183,32 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   })), []);
 
-  return <div className="term" style={{ fontSize }} onKeyDown={onTermKey} onMouseUp={(event) => {
+  return <div className="term relative flex flex-1 flex-col min-h-0 mx-3 mb-3 border-x border-b border-line rounded-b-lg bg-surface-2 font-mono text-sm overflow-hidden cursor-text" style={{ fontSize }} onKeyDown={onTermKey} onMouseUp={(event) => {
     if (!window.getSelection()?.toString() && !(event.target as HTMLElement).closest(".term-find, .term-scroll, .term-status, .term-help, .term-confirm")) field.current?.focus();
   }}>
-    {find && <div className="term-find" role="search">
-      <Icon name="search" />
-      <input ref={findField} value={find.query} aria-label={t("shell.findLabel")} placeholder={t("shell.findLabel")} spellCheck={false}
+    {find && <div className="term-find flex items-center gap-1.5 py-1.5 pr-2.5 pl-3.5 border-b border-line font-sans text-sm cursor-auto" role="search">
+      <Icon name="search" className="size-[13px] text-fg-3" />
+      <input ref={findField} className="flex-1 min-w-0 h-6 px-1.5" value={find.query} aria-label={t("shell.findLabel")} placeholder={t("shell.findLabel")} spellCheck={false}
         onChange={(e) => setFind({ query: e.target.value, index: 0 })}
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); setFind({ ...find, index: findIndex + (e.shiftKey ? -1 : 1) }); }
           if (e.key === "Escape") { e.preventDefault(); closeFind(); }
         }} />
-      <span className="term-find-count" role="status">{find.query ? (matches.length ? t("shell.findCount", { index: findIndex + 1, count: matches.length }) : t("shell.noMatches")) : ""}</span>
-      <button type="button" className="icon-btn sm" aria-label={t("shell.previousMatch")} disabled={!matches.length} onClick={() => setFind({ ...find, index: findIndex - 1 })}><Icon name="caretUp" /></button>
-      <button type="button" className="icon-btn sm" aria-label={t("shell.nextMatch")} disabled={!matches.length} onClick={() => setFind({ ...find, index: findIndex + 1 })}><Icon name="caretDown" /></button>
-      <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={closeFind}><Icon name="x" /></button>
+      <span className="min-w-16 text-fg-3 text-xs text-right" role="status">{find.query ? (matches.length ? t("shell.findCount", { index: findIndex + 1, count: matches.length }) : t("shell.noMatches")) : ""}</span>
+      <IconButton size="sm" aria-label={t("shell.previousMatch")} disabled={!matches.length} onClick={() => setFind({ ...find, index: findIndex - 1 })}><Icon name="caretUp" /></IconButton>
+      <IconButton size="sm" aria-label={t("shell.nextMatch")} disabled={!matches.length} onClick={() => setFind({ ...find, index: findIndex + 1 })}><Icon name="caretDown" /></IconButton>
+      <IconButton size="sm" aria-label={t("common.close")} onClick={closeFind}><Icon name="x" /></IconButton>
     </div>}
-    <div className="term-out" ref={out} role="log" aria-live="polite" aria-label={t("shell.output")}>
+    <div className="term-out flex-1 min-h-0 overflow-auto pt-2.5 px-3.5 pb-1 leading-[1.55] [scrollbar-width:thin] [scrollbar-color:var(--border-strong)_transparent]" ref={out} role="log" aria-live="polite" aria-label={t("shell.output")}>
       <SessionActions.Provider value={sessionActions}>
         <CellActions.Provider value={cellActions}>
-          {groups(visible(session.entries)).map((group) => <div key={group[0].entry.id} className="term-group" data-outcome={outcomeOf(group.map(({ entry }) => entry))}>
-            {group.map(({ entry, hidden }) => <Line key={entry.id} entry={entry} hidden={hidden} onToggle={toggle} />)}
-          </div>)}
+          {groups(visible(session.entries)).map((group) => {
+            const outcome = outcomeOf(group.map(({ entry }) => entry));
+            // Off-screen entries skip layout and paint; a thin mark sits in the output's padding, so text does not move.
+            return <div key={group[0].entry.id} className={`term-group group/cmd not-last:[content-visibility:auto] not-last:[contain-intrinsic-size:auto_400px] ${outcome ? `-ml-2 pl-1.5 border-l-2 ${OUTCOME_LINE[outcome]}` : ""}`} data-outcome={outcome}>
+              {group.map(({ entry, hidden }) => <Line key={entry.id} entry={entry} hidden={hidden} onToggle={toggle} />)}
+            </div>;
+          })}
         </CellActions.Provider>
       </SessionActions.Provider>
       {/* Connecting is shown on the status chip; the output only tracks calls. */}
@@ -1210,60 +1216,62 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     </div>
     {help && <HelpPanel insert={insert} close={() => { setHelp(false); field.current?.focus(); }} />}
     {confirming && <WritePreview pending={confirming} answer={(yes) => void submit(yes ? "y" : "n")} />}
-    {pasted && <div className="term-batch" role="group" aria-label={t("shell.pastedCommands", { count: pasted.length })} onMouseUp={(e) => e.stopPropagation()}>
+    {pasted && <div className={BAR} role="group" aria-label={t("shell.pastedCommands", { count: pasted.length })} onMouseUp={(e) => e.stopPropagation()}>
       <span className="grow">{t("shell.pastedCommands", { count: pasted.length })}</span>
-      <button type="button" className="btn sm" onClick={() => { setInput(pasted.join("\n")); setPasted(null); }}>{t("shell.pasteAsText")} <kbd>Esc</kbd></button>
-      <button type="button" className="btn sm primary" onClick={runPasted}>{t("shell.runInOrder")} <kbd>Enter</kbd></button>
+      <Button size="sm" onClick={() => { setInput(pasted.join("\n")); setPasted(null); }}>{t("shell.pasteAsText")} <kbd>Esc</kbd></Button>
+      <Button size="sm" variant="primary" onClick={runPasted}>{t("shell.runInOrder")} <kbd>Enter</kbd></Button>
     </div>}
-    {batch && <div className="term-batch" role="status" onMouseUp={(e) => e.stopPropagation()}>
-      <Icon name="refresh" className="spin" /><span className="grow">{t("shell.batchProgress", { done: batch.total - batch.lines.length, total: batch.total })}</span>
-      <button type="button" className="btn sm" onClick={() => setBatch(null)}>{t("shell.stop")}</button>
+    {batch && <div className={BAR} role="status" onMouseUp={(e) => e.stopPropagation()}>
+      <Icon name="refresh" className="animate-spin" /><span className="grow">{t("shell.batchProgress", { done: batch.total - batch.lines.length, total: batch.total })}</span>
+      <Button size="sm" onClick={() => setBatch(null)}>{t("shell.stop")}</Button>
     </div>}
-    {inspecting && <div className="term-inspect" role="dialog" aria-label={inspecting.title} onMouseUp={(e) => e.stopPropagation()}>
-      <div className="term-inspect-head">
-        <span className="term-inspect-title">{inspecting.title}</span>
-        <CopyButton text={inspecting.text} className="term-copy" tip={t("common.copy")} ariaLabel={t("common.copy")} />
-        <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={() => { setInspecting(null); field.current?.focus(); }}><Icon name="x" /></button>
+    {inspecting && <div className="absolute top-2 right-2 bottom-[52px] z-6 flex flex-col w-[min(560px,calc(100%-16px))] border border-line-strong rounded-md bg-surface shadow-pop cursor-auto" role="dialog" aria-label={inspecting.title} onMouseUp={(e) => e.stopPropagation()}>
+      <div className={PANEL_HEAD}>
+        <span className={PANEL_TITLE}>{inspecting.title}</span>
+        <CopyButton text={inspecting.text} className="term-copy opacity-100" tip={t("common.copy")} ariaLabel={t("common.copy")} />
+        <IconButton size="sm" aria-label={t("common.close")} onClick={() => { setInspecting(null); field.current?.focus(); }}><Icon name="x" /></IconButton>
       </div>
-      <pre className="term-inspect-body">{inspecting.text}</pre>
+      <pre className="flex-1 min-h-0 m-0 px-3 py-2.5 overflow-auto whitespace-pre-wrap wrap-anywhere select-text">{inspecting.text}</pre>
     </div>}
-    {menu && <ul className="term-menu" ref={menuList} role="listbox" aria-label={t("shell.suggestions")}>
+    {menu && <ul className={termMenu("prompt")} ref={menuList} role="listbox" aria-label={t("shell.suggestions")}>
       {menu.items.map((item, i) => <li key={`${item.kind}-${item.value}`} role="option" aria-selected={i === menu.index}
         onMouseDown={(e) => { e.preventDefault(); accept({ ...menu, index: i }); }}>
-        <span className="term-menu-value">{item.value}</span>
-        {item.detail && <span className="term-menu-detail">{item.translateDetail ? t(`shell.completions.${item.detail}` as "shell.completions.search") : item.detail}</span>}
+        <span className={termMenuValue}>{item.value}</span>
+        {item.detail && <span className={termMenuDetail}>{item.translateDetail ? t(`shell.completions.${item.detail}` as "shell.completions.search") : item.detail}</span>}
       </li>)}
     </ul>}
-    <label className={`term-input ${confirming ? "confirm" : ""} ${search ? "searching" : ""}`}>
-      <span className="term-prompt">{current}</span>
-      <span className="term-editor" style={search ? { flex: "none", width: `calc(${input.length}ch + 2px)` } : undefined}>
-        {!confirming && <div className="term-highlight" ref={editorHighlight} aria-hidden="true">{search ? input : highlight(input, Object.keys(aliases))}{ghost && <span className="term-ghost">{ghost}</span>}</div>}
+    <label className={`term-input relative flex items-start ${search ? "" : "gap-2"} pt-1.5 px-3.5 pb-2 border-t border-line cursor-text`}>
+      <span className={`term-prompt whitespace-nowrap leading-[1.9em] ${search ? "text-fg-3" : `font-semibold ${confirming ? "text-warn" : "text-accent-text"}`}`}>{current}</span>
+      <span className="relative block flex-1 min-w-0 min-h-[1.9em]" style={search ? { flex: "none", width: `calc(${input.length}ch + 2px)` } : undefined}>
+        {!confirming && <div className="absolute inset-0 overflow-hidden whitespace-pre leading-[1.9em] text-fg pointer-events-none" ref={editorHighlight} aria-hidden="true">{search ? input : highlight(input, Object.keys(aliases))}{ghost && <span className="term-ghost text-fg-3 opacity-70">{ghost}</span>}</div>}
         <textarea ref={field} disabled={!tabEnv} value={input} rows={Math.min(8, input.split("\n").length)} wrap="off" spellCheck={false} autoComplete="off" autoCorrect="off" aria-invalid={hint ? true : undefined} aria-label={t("shell.command")} aria-description={search ? t("shell.reverseSearchDescription") : undefined}
-          className={confirming ? "" : "highlighted"}
+          // No visible scrollbars: they would shift the text away from the highlight layer. Over it, only the caret and selection show.
+          className={`relative block w-full min-h-[1.9em] p-0 border-0 bg-transparent [font-size:inherit] leading-[1.9em] whitespace-pre overflow-auto resize-none shadow-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${confirming ? "text-fg" : "text-transparent caret-fg selection:bg-accent-soft selection:text-transparent"}`}
           onChange={(e) => { setInput(e.target.value); setCursor(null); if (search) setSearch({ ...search, query: e.target.value, skip: 0 }); else refilter(e.target.value); }}
           onScroll={syncScroll} onKeyUp={syncScroll} onSelect={syncScroll}
           onBlur={() => setMenu(null)} onKeyDown={onKey} onPaste={onPaste} />
       </span>
       {/* Reverse search keeps one line: the query, then what it finds. */}
-      {search && <span className="term-search" role="status">{"': "}{shownMatch && <SearchMatch command={shownMatch.command} query={match ? search.query : ""} />}</span>}
+      {search && <span className="flex flex-1 min-w-0 leading-[1.9em] whitespace-pre overflow-hidden text-fg-3" role="status">{"': "}{shownMatch && <SearchMatch command={shownMatch.command} query={match ? search.query : ""} />}</span>}
       {/* Where the line goes and what it may do there; a broken connection offers its fix in place. */}
-      {!search && !confirming && <span className="term-status">
-        {!tabEnv ? <span className="chip chip-tone tone-danger">{t("shell.environmentGone")}</span> : <>
+      {/* Chips share one width (the longest label, "Reintentando…"), so the line does not jump as the state changes; a longer translation is cut. */}
+      {!search && !confirming && <span className="term-status inline-flex flex-none items-center gap-2 max-w-[45%] min-h-[1.9em] font-sans text-xs cursor-default [&_.chip]:justify-start [&_.chip]:w-[11em] [&_.chip]:overflow-hidden [&_.chip]:whitespace-nowrap [&_.chip]:transition-[color,background-color] [&_.chip]:duration-200">
+        {!tabEnv ? <Chip tone="danger">{t("shell.environmentGone")}</Chip> : <>
           {/* The database stays in view whatever the connection state. */}
-          <span className="term-db">{tabEnv.database}</span>
-          {connected ? <span className={`chip chip-tone term-mode tone-${modeTone[tabEnv.write_mode]}`}
+          <span className="term-db min-w-[6ch] truncate text-fg-3 font-mono">{tabEnv.database}</span>
+          {connected ? <span className={cx(chip({ tone: modeTone[tabEnv.write_mode] }), "term-mode")}
             data-tip={[t(modeLabels[tabEnv.write_mode] as "mode.readOnly"), server && `${server.version ? `Odoo ${server.version} · ` : ""}${formatNumber(server.latency)} ms`].filter(Boolean).join("\n")}>
             <Icon name={modeIcons[tabEnv.write_mode]} />{t(modeShortLabels[tabEnv.write_mode] as "mode.readOnlyShort")}</span>
             // The state is its own fix: click it to connect again; the tooltip says what went wrong.
-            : <button type="button" key={nudge} className={`chip chip-tone chip-action tone-${connecting ? "info" : failure ? "danger" : "neutral"}${nudge ? " nudge" : ""}`}
+            : <button type="button" key={nudge} className={cx(chip({ tone: connecting ? "info" : failure ? "danger" : "neutral" }), "cursor-pointer enabled:hover:border-tone/45 disabled:cursor-default", !!nudge && "animate-[nudge_.3s_ease-in-out]")}
               disabled={connecting} aria-label={connecting ? connectingLabel : t("shell.retryConnection")} data-tip={!connecting && failure ? connectionProblem(failure) : undefined}
               onClick={() => { retryStarted.current = Date.now(); setRetrying(true); reconnect(); }}>
-              <Icon name="refresh" className={connecting ? "spin" : undefined} />{connecting ? connectingLabel : failure ? t("shell.connectionFailed") : t("shell.notConnected")}
+              <Icon name="refresh" className={connecting ? "animate-spin" : undefined} />{connecting ? connectingLabel : failure ? t("shell.connectionFailed") : t("shell.notConnected")}
             </button>}
         </>}
       </span>}
-      {hint && !menu && <span className="term-hint" role="status">{hint}</span>}
-      {saveFailed && !hint && <span className="term-hint" role="status">{t("shell.sessionsNotSaved")}</span>}
+      {hint && !menu && <span className={HINT} role="status">{hint}</span>}
+      {saveFailed && !hint && <span className={HINT} role="status">{t("shell.sessionsNotSaved")}</span>}
     </label>
   </div>;
 });
@@ -1272,7 +1280,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
 function SearchMatch({ command, query }: { command: string; query: string }) {
   const line = command.split("\n")[0];
   const at = query ? line.toLowerCase().indexOf(query.toLowerCase()) : -1;
-  return <span className="term-search-match">{at < 0 ? line : <>{line.slice(0, at)}<mark>{line.slice(at, at + query.length)}</mark>{line.slice(at + query.length)}</>}{line !== command && " …"}</span>;
+  return <span className="min-w-0 overflow-hidden text-ellipsis text-fg">{at < 0 ? line : <>{line.slice(0, at)}<mark className="rounded-xs bg-accent-soft text-accent-text">{line.slice(at, at + query.length)}</mark>{line.slice(at + query.length)}</>}{line !== command && " …"}</span>;
 }
 
 /** Entries after a folded command stay in the session but are not rendered. */
@@ -1310,18 +1318,18 @@ function EnvironmentMenu({ envs, at, choose, close }: { envs: Environment[]; at:
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const shown = envs.filter((env) => !q || [env.name, hostOf(env.url), env.database, ...env.tags].some((value) => value.toLowerCase().includes(q)));
-  return <FloatingMenu at={at} label={t("shell.newSession")} className="more-menu-list floating shell-env-menu" close={close}
+  return <FloatingMenu at={at} label={t("shell.newSession")} className={cx(moreMenu, "grid-rows-[auto_minmax(0,1fr)] w-[260px] max-h-[60vh] [&_.favicon]:size-3.5")} close={close}
     onKey={(event) => {
       // Enter in the search box opens the first match.
       if (event.key === "Enter" && (event.target as Element).matches("input") && shown[0]) { event.preventDefault(); choose(shown[0]); }
     }}>
-    {searchable && <label className="search shell-env-search"><Icon name="search" />
-      <input type="search" value={query} placeholder={t("shell.findEnvironment")} aria-label={t("shell.findEnvironment")} spellCheck={false} onChange={(e) => setQuery(e.target.value)} /></label>}
-    <div className="shell-env-options">
+    {searchable && <label className="relative block mx-0.5 mt-0.5 mb-1"><Icon name="search" className={searchIcon} />
+      <input type="search" className={searchInput} value={query} placeholder={t("shell.findEnvironment")} aria-label={t("shell.findEnvironment")} spellCheck={false} onChange={(e) => setQuery(e.target.value)} /></label>}
+    <div className="grid min-h-0 overflow-auto">
       {shown.map((env) => <button key={env.id} type="button" role="menuitem" onClick={() => choose(env)}>
-        <EnvIcon env={env} /><span className="grow truncate">{env.name}</span><span className={`status-dot tone-${modeTone[env.write_mode]}`} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} />
+        <EnvIcon env={env} /><span className="grow truncate">{env.name}</span><StatusDot tone={modeTone[env.write_mode]} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} />
       </button>)}
-      {!shown.length && <p className="hint shell-env-empty">{t("shell.noMatches")}</p>}
+      {!shown.length && <p className="px-2 py-1.5 text-fg-3 text-sm">{t("shell.noMatches")}</p>}
     </div>
   </FloatingMenu>;
 }
@@ -1345,15 +1353,15 @@ function helpSections(text: string) {
 function HelpPanel({ insert, close }: { insert: (command: string) => void; close: () => void }) {
   const { t } = useTranslation();
   const { sections, notes } = helpSections(t("shell.help"));
-  return <aside className="term-help" aria-label={t("shell.helpTitle")} onMouseUp={(e) => e.stopPropagation()}>
-    <div className="term-inspect-head"><span className="term-inspect-title">{t("shell.helpTitle")}</span>
-      <button type="button" className="icon-btn sm" aria-label={t("common.close")} onClick={close}><Icon name="x" /></button></div>
-    <div className="term-help-body">
-      {sections.map((section) => <section key={section.title}><h4>{section.title}</h4>
-        <ul>{section.items.map((item) => <li key={item.usage}>
-          <button type="button" onClick={() => insert(`${item.usage.split(/\s/)[0]} `)}><code>{item.usage}</code>{item.description && <span>{item.description}</span>}</button>
+  return <aside className="term-help absolute top-2 right-2 bottom-[52px] z-6 flex flex-col w-[min(460px,calc(100%-16px))] border border-line-strong rounded-md bg-surface shadow-pop font-sans cursor-default" aria-label={t("shell.helpTitle")} onMouseUp={(e) => e.stopPropagation()}>
+    <div className={PANEL_HEAD}><span className={PANEL_TITLE}>{t("shell.helpTitle")}</span>
+      <IconButton size="sm" aria-label={t("common.close")} onClick={close}><Icon name="x" /></IconButton></div>
+    <div className="flex-1 min-h-0 overflow-auto px-3 pt-2 pb-3">
+      {sections.map((section) => <section key={section.title}><h4 className="mt-2.5 mb-1 text-fg-3 text-xs font-semibold">{section.title}</h4>
+        <ul className="grid gap-px">{section.items.map((item) => <li key={item.usage}>
+          <button type="button" className="grid gap-px w-full px-2 py-[5px] rounded-sm text-fg text-left cursor-pointer hover:bg-hover" onClick={() => insert(`${item.usage.split(/\s/)[0]} `)}><code className="text-xs">{item.usage}</code>{item.description && <span className="text-fg-3 text-xs">{item.description}</span>}</button>
         </li>)}</ul></section>)}
-      {notes.map((note) => <p key={note} className="hint">{note}</p>)}
+      {notes.map((note) => <p key={note} className="mt-2 text-fg-3 text-xs leading-[1.5]">{note}</p>)}
     </div>
   </aside>;
 }
@@ -1364,13 +1372,13 @@ function WritePreview({ pending, answer }: { pending: Confirmation; answer: (yes
   const { call, env } = pending;
   const ids = recordIds(call);
   const values = writtenValues(call);
-  return <section className="term-confirm" aria-label={t("shell.confirmPrompt", { name: env?.name })} onMouseUp={(e) => e.stopPropagation()}>
-    <header className="row gap-2">
-      <code className={`method tone-${methodTone(call.method)}`}>{call.method}</code><strong className="mono truncate">{call.model}</strong>
-      <span className="hint truncate">{env?.name}{ids ? ` · ${ids.join(", ")}` : ""}</span>
-      <span className="row gap-2 ml-auto">
-        <button type="button" className="btn sm" onClick={() => answer(false)}>{t("common.cancel")}</button>
-        <button type="button" className={`btn sm ${call.method === "unlink" ? "danger" : "primary"}`} onClick={() => answer(true)}>{t("shell.send")}</button>
+  return <section className="term-confirm grid gap-2 max-h-[45%] overflow-auto px-3.5 py-2.5 border-t border-line bg-warn-soft font-sans text-sm cursor-default" aria-label={t("shell.confirmPrompt", { name: env?.name })} onMouseUp={(e) => e.stopPropagation()}>
+    <header className="flex items-center gap-2 min-w-0">
+      <code className={method(methodTone(call.method))}>{call.method}</code><strong className="mono truncate">{call.model}</strong>
+      <span className="text-fg-3 text-sm truncate">{env?.name}{ids ? ` · ${ids.join(", ")}` : ""}</span>
+      <span className="flex items-center gap-2 ml-auto">
+        <Button size="sm" onClick={() => answer(false)}>{t("common.cancel")}</Button>
+        <Button size="sm" variant={call.method === "unlink" ? "danger" : "primary"} onClick={() => answer(true)}>{t("shell.send")}</Button>
       </span>
     </header>
     {values?.length ? <ValuesTable values={values} /> : <CallDetails item={{ args: call.args, kwargs: call.kwargs, context: {} }} />}
@@ -1378,21 +1386,32 @@ function WritePreview({ pending, answer }: { pending: Confirmation; answer: (yes
 }
 
 
+const LINE = "term-line whitespace-pre-wrap wrap-anywhere";
+const LINE_COLOR = { text: "text-fg", info: "text-fg-3", error: "text-danger", warn: "text-warn", ok: "text-ok" };
+const OUTCOME_LINE = { read: "border-l-line/70", write: "border-l-warn", error: "border-l-danger" };
+/** The bar for pasted commands: the choice before running them, then the progress. */
+const BAR = "flex items-center gap-2 py-1.5 pr-2.5 pl-3.5 border-t border-line bg-surface font-sans text-sm cursor-default";
+/** Floats over the last output line so the editor never moves. */
+const HINT = "term-hint absolute left-3.5 bottom-[calc(100%+4px)] z-4 max-w-[min(70%,520px)] px-2 py-0.5 truncate border border-warn/40 rounded-sm bg-surface text-warn font-sans text-xs shadow-xs pointer-events-none";
+/** Header of the panels over the output (inspected value, help). */
+const PANEL_HEAD = "flex items-center gap-1.5 py-1.5 pr-1.5 pl-3 border-b border-line";
+const PANEL_TITLE = "flex-1 min-w-0 truncate text-fg-2 font-semibold";
+
 const SessionActions = createContext<{ busy: boolean; rerun: (command: string) => void; fold: (id: number) => void; aliases: string[] } | null>(null);
 
 const Line = memo(function Line({ entry, hidden, onToggle }: { entry: Entry; hidden?: number; onToggle: (id: number) => void }): ReactNode {
   const { t } = useTranslation();
   const actions = useContext(SessionActions);
-  if (entry.kind === "input") return <div className="term-line term-cmd">{entry.agent && <span className="term-agent" data-tip={t("shell.ranBy", { name: entry.agent })}>{entry.agent}</span>}<span className="term-prompt">{entry.prompt}</span> {highlight(entry.text, actions?.aliases)}
-    {hidden !== undefined && <button type="button" className="term-folded" onClick={() => actions?.fold(entry.id)}>{t("shell.linesHidden", { count: hidden })}</button>}
-    {entry.command && actions && <span className="term-cmd-actions">
-      <button type="button" className="icon-btn sm" aria-label={t("shell.rerun")} data-tip={t("shell.rerun")} disabled={actions.busy} onClick={() => actions.rerun(entry.text)}><Icon name="refresh" /></button>
-      <CopyButton text={entry.text} className="icon-btn sm" tip={t("shell.copyCommand")} ariaLabel={t("shell.copyCommand")} iconOnly />
-      <button type="button" className="icon-btn sm" aria-label={t(entry.folded ? "shell.unfold" : "shell.fold")} data-tip={t(entry.folded ? "shell.unfold" : "shell.fold")} aria-expanded={!entry.folded} onClick={() => actions.fold(entry.id)}><Icon name={entry.folded ? "chevron" : "caretDown"} /></button>
+  if (entry.kind === "input") return <div className={`${LINE} term-cmd relative pr-24 text-fg`}>{entry.agent && <span className="mr-1.5 px-1.5 rounded-sm bg-accent-soft text-accent-text font-sans text-xs font-semibold" data-tip={t("shell.ranBy", { name: entry.agent })}>{entry.agent}</span>}<span className="text-accent-text font-semibold whitespace-nowrap">{entry.prompt}</span> {highlight(entry.text, actions?.aliases)}
+    {hidden !== undefined && <button type="button" className="ml-2.5 px-1.5 border border-line rounded-sm bg-surface text-fg-3 font-sans text-xs cursor-pointer select-none hover:text-fg" onClick={() => actions?.fold(entry.id)}>{t("shell.linesHidden", { count: hidden })}</button>}
+    {entry.command && actions && <span className="absolute top-0 right-0 inline-flex items-center gap-1.5 opacity-0 transition-opacity duration-120 select-none group-hover/cmd:opacity-100 focus-within:opacity-100 [&_button]:size-[22px] [&_button]:flex-none">
+      <IconButton size="sm" aria-label={t("shell.rerun")} data-tip={t("shell.rerun")} disabled={actions.busy} onClick={() => actions.rerun(entry.text)}><Icon name="refresh" /></IconButton>
+      <CopyButton text={entry.text} className={iconButton("sm")} tip={t("shell.copyCommand")} ariaLabel={t("shell.copyCommand")} iconOnly />
+      <IconButton size="sm" aria-label={t(entry.folded ? "shell.unfold" : "shell.fold")} data-tip={t(entry.folded ? "shell.unfold" : "shell.fold")} aria-expanded={!entry.folded} onClick={() => actions.fold(entry.id)}><Icon name={entry.folded ? "chevron" : "caretDown"} /></IconButton>
     </span>}
   </div>;
   // Sessions saved before connection errors moved to the status chip may still hold them as lines.
-  if (entry.kind !== "table") return <div className={`term-line ${entry.kind}`}>{entry.connectionError
+  if (entry.kind !== "table") return <div className={`${LINE} ${LINE_COLOR[entry.kind]}`}>{entry.connectionError
     ? connectionProblem(entry.connectionError)
     : entry.appError ? <ErrorText error={entry.appError} /> : entry.translationKey ? t(entry.translationKey) : entry.text}</div>;
   return <TableBlock table={entry.table} expanded={entry.expanded} footer={entry.footer} onToggle={() => onToggle(entry.id)} />;
@@ -1405,8 +1424,8 @@ function Running({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 100); return () => clearInterval(timer); }, []);
   const seconds = Math.max(0, now - since) / 1000;
-  return <div className="term-line info term-running" role="status">
-    <Icon name="refresh" className="spin" /> {formatNumber(seconds, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s · {t("shell.discardHint")}
+  return <div className={`${LINE} text-fg-3 [&_.icon]:size-3 [&_.icon]:align-[-1px]`} role="status">
+    <Icon name="refresh" className="animate-spin" /> {formatNumber(seconds, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} s · {t("shell.discardHint")}
   </div>;
 }
 
@@ -1421,9 +1440,9 @@ function ErrorText({ error }: { error: AppError }) {
   const lines = detail.split("\n");
   const [first, ...rest] = lines;
   return <>
-    <span className="term-error-title">{title}</span>{"\n"}{first}
-    {rest.length > 0 && <details className="term-error-more">
-      <summary>{t("shell.moreErrorLines", { count: rest.length })}</summary>
+    <span className="text-fg-3">{title}</span>{"\n"}{first}
+    {rest.length > 0 && <details>
+      <summary className="text-fg-3 cursor-pointer select-none hover:text-fg">{t("shell.moreErrorLines", { count: rest.length })}</summary>
       {rest.join("\n")}
     </details>}
   </>;
