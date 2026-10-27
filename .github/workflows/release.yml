@@ -84,6 +84,8 @@ jobs:
       # Bundled libwayland breaks the host Mesa EGL on newer systems ("Could not create default
       # EGL display: EGL_BAD_PARAMETER", blank window). Use the host's copy, which every Wayland/XWayland
       # desktop ships, and repack with the linuxdeploy plugin the Tauri build already downloaded.
+      # The GTK hook forces GDK_BACKEND=x11 to dodge that same crash; without the bundled libraries it is not
+      # needed, so drop it: the app runs on native Wayland instead of XWayland, and a user's GDK_BACKEND is kept.
       # Fixed asset names across versions.
       - name: Repack without bundled Wayland libraries
         env:
@@ -93,6 +95,9 @@ jobs:
         run: |
           appdir=target/release/bundle/appimage/Odx.AppDir
           rm -f "$appdir"/usr/lib/libwayland-*.so*
+          hook="$appdir"/apprun-hooks/linuxdeploy-plugin-gtk.sh
+          grep -q '^export GDK_BACKEND=x11' "$hook" || { echo "::error::GDK_BACKEND line not found in $hook"; exit 1; }
+          sed -i '/^export GDK_BACKEND=x11/d' "$hook"
           mkdir dist
           ~/.cache/tauri/linuxdeploy-plugin-appimage.AppImage --appdir "$appdir"
 
