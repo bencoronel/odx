@@ -18,7 +18,7 @@ function useAppName() {
 
 const resizeDirections = ["North", "South", "East", "West", "NorthEast", "NorthWest", "SouthEast", "SouthWest"] as const;
 
-/** The border only makes sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
+/** Rounded corners and the border only make sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
 function useFilledWindow() {
   useEffect(() => {
     let active = true;
@@ -39,7 +39,7 @@ function useFilledWindow() {
 }
 
 let revealed = false;
-/** The window starts hidden so an unpainted WebView never shows as an empty box; reveal it once after the first paint. */
+/** The window starts hidden so a transparent, unpainted WebView never shows as a black box; reveal it once after the first paint. */
 function useRevealWindow() {
   useEffect(() => {
     if (revealed) return;

@@ -65,8 +65,9 @@ pub fn open_table_window(
     .title(format!("{title}{}", invisible_tag(number)))
     .inner_size(960.0, 620.0)
     .min_inner_size(420.0, 260.0)
-    // ODX's own frame, as the main window: no system title bar, shown after its first paint.
+    // ODX's own frame, as the main window: no system title bar, rounded, shown after its first paint.
     .decorations(false)
+    .transparent(true)
     .visible(false)
     .build()?;
     #[cfg(target_os = "linux")]
