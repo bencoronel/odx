@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "odx-core"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "axum",
  "bytes",
@@ -2871,7 +2871,7 @@ dependencies = [
 
 [[package]]
 name = "odx-desktop"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "notify-rust",
  "odx-core",
