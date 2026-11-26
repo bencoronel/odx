@@ -7,9 +7,8 @@ targets = ["x86_64-unknown-linux-gnu"]
 unmaintained = "workspace"
 # Each exception says why it cannot reach Odx and when to look again.
 ignore = [
-  { id = "RUSTSEC-2026-0367", reason = "zip: build-dependency of libsodium-sys-stable 1.24.3 (latest), only unzips its own minisign-verified MSVC binaries on Windows builds; Linux builds never call it. Review by 2027-01-31." },
-  { id = "RUSTSEC-2026-0368", reason = "zip: as RUSTSEC-2026-0367. Review by 2027-01-31." },
-  { id = "RUSTSEC-2026-0369", reason = "zip: as RUSTSEC-2026-0367. Review by 2027-01-31." },
+  { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys via bundled-sqlcipher: requires opening an attacker-crafted db + -wal pair; Odx only opens its own local encrypted vault in the user config dir, and sqlcipher-src has no SQLite 3.54.0 release yet. Review by 2027-02-28." },
+  { id = "RUSTSEC-2026-0543", reason = "chrono: marked unmaintained with no drop-in replacement; track migration to jiff/time separately. Review by 2027-02-28." },
 ]
 
 [licenses]

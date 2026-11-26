@@ -44,9 +44,17 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      # EnvironmentsPage.test.tsx invokes `cargo run -p odx-core --example rule_contract`;
+      # pre-building it with the shared Rust cache avoids compiling odx-core inside the Vitest timeout.
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
       - run: npm ci --prefix apps/desktop
       # tsc -b and vite build: the production bundle must build, not only type-check.
       - run: npm run build --prefix apps/desktop
+      - run: cargo build --locked -p odx-core --example rule_contract
       - run: npm test --prefix apps/desktop
 
   ratchet:

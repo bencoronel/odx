@@ -24,7 +24,7 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["preserve_order"] }
 thiserror = "=2.0.17"
 tokio = { version = "=1.51.6", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "fs"] }
-url = { version = "=2.5.7", features = ["serde"] }
+url = { version = "=2.5.9", features = ["serde"] }
 uuid = { version = "=1.18.1", features = ["v4", "serde"] }
 zeroize = { version = "=1.9.1", features = ["derive"] }
 
