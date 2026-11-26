@@ -26,6 +26,15 @@ pub enum WriteMode {
     Permanent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Dev,
+    Test,
+    Pre,
+    Pro,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Environment {
     #[serde(skip)]
@@ -46,6 +55,10 @@ pub struct Environment {
     pub write_until: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
     pub revision: u64,
     #[serde(skip)]
     pub(crate) secret: crate::security::Secret,
@@ -158,6 +171,8 @@ impl EnvironmentDraft {
             write_mode: WriteMode::ReadOnly,
             write_until: None,
             tags: Vec::new(),
+            project: None,
+            stage: None,
             revision: 1,
             secret,
             proxy: Default::default(),
@@ -184,9 +199,31 @@ pub fn validate_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+pub const MAX_PROJECT_CHARS: usize = 80;
+/// Trimmed optional project name, limited to 80 characters.
+pub fn normalize_project(project: Option<&str>) -> Result<Option<String>> {
+    let Some(trimmed) = project.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if trimmed.chars().count() > MAX_PROJECT_CHARS {
+        return Err(OdxError::validation(
+            "validation.environment.project_too_long",
+            "project name is limited to 80 characters",
+        ));
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
 pub const MAX_TAGS: usize = 20;
-/// Tag colors besides the default look.
+/// Built-in tag tones besides the default look. Custom 6-digit hex colors (`#rrggbb`) are also accepted.
 pub const TAG_COLORS: [&str; 5] = ["info", "ok", "warn", "danger", "accent"];
+
+pub fn is_valid_tag_color(color: &str) -> bool {
+    TAG_COLORS.contains(&color)
+        || (color.len() == 7
+            && color.starts_with('#')
+            && color.as_bytes()[1..].iter().all(|b| b.is_ascii_hexdigit()))
+}
 pub const MAX_TAG_CHARS: usize = 32;
 /// Trimmed, nonempty tags without case-insensitive duplicates, keeping first spelling and order.
 pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
@@ -225,6 +262,7 @@ pub(crate) struct VaultData {
     pub global_context: Value,
     pub clients: Vec<crate::clients::ClientGrant>,
     pub rules: Vec<crate::policy::Rule>,
+    pub views: Vec<crate::views::SavedView>,
     pub settings: Settings,
     /// Named outbound proxies.
     pub proxies: Vec<crate::proxy::ProxyProfile>,
@@ -366,6 +404,8 @@ struct StoredVaultData {
     #[serde(default)]
     rules: Vec<crate::policy::Rule>,
     #[serde(default)]
+    views: Vec<crate::views::SavedView>,
+    #[serde(default)]
     settings: Settings,
     #[serde(default)]
     proxies: Vec<crate::proxy::ProxyProfile>,
@@ -400,6 +440,10 @@ struct StoredEnvironment {
     write_until: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stage: Option<Stage>,
     revision: u64,
     secret: crate::security::Secret,
     #[serde(default)]
@@ -422,6 +466,8 @@ impl From<&Environment> for StoredEnvironment {
             write_mode: value.write_mode,
             write_until: value.write_until,
             tags: value.tags.clone(),
+            project: value.project.clone(),
+            stage: value.stage,
             revision: value.revision,
             secret: value.secret.clone(),
             proxy: value.proxy.clone(),
@@ -445,6 +491,8 @@ impl From<StoredEnvironment> for Environment {
             write_mode: value.write_mode,
             write_until: value.write_until,
             tags: value.tags,
+            project: value.project,
+            stage: value.stage,
             revision: value.revision,
             secret: value.secret,
             proxy: value.proxy,
@@ -468,6 +516,7 @@ impl Serialize for VaultData {
             global_context: self.global_context.clone(),
             clients: self.clients.clone(),
             rules: self.rules.clone(),
+            views: self.views.clone(),
             settings: self.settings,
             proxies: self.proxies.clone(),
             default_proxy: self.default_proxy.clone(),
@@ -495,6 +544,7 @@ impl<'de> Deserialize<'de> for VaultData {
             global_context: stored.global_context,
             clients: stored.clients,
             rules: stored.rules,
+            views: stored.views,
             settings: stored.settings,
             proxies: stored.proxies,
             default_proxy: stored.default_proxy,
@@ -522,6 +572,8 @@ impl Default for Environment {
             write_mode: WriteMode::ReadOnly,
             write_until: None,
             tags: Vec::new(),
+            project: None,
+            stage: None,
             revision: 0,
             secret: Default::default(),
             proxy: Default::default(),

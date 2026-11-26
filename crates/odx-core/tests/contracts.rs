@@ -360,11 +360,26 @@ fn comparable(tool: &str, out: &ToolOutput) -> Value {
 
 #[tokio::test]
 async fn every_tool_succeeds_and_fails_alike_on_every_protocol() {
-    // Terminal tools go to the desktop app, not to Odoo, so protocols do not apply; see the terminal tests.
+    // Desktop/local tools (terminals, views, table windows, CSV export, browser open) do not speak
+    // Odoo wire protocols directly; see the terminal and views unit tests.
     let names: Vec<&str> = tool_definitions()
         .iter()
         .map(|d| d.name)
-        .filter(|name| !["show", "terminal_read", "terminal_run", "terminals"].contains(name))
+        .filter(|name| {
+            ![
+                "export_csv",
+                "open_record",
+                "show",
+                "show_table",
+                "terminal_read",
+                "terminal_run",
+                "terminals",
+                "view_run",
+                "view_save",
+                "views",
+            ]
+            .contains(name)
+        })
         .collect();
     let cases = cases();
     let mut tools: Vec<&str> = cases.iter().map(|c| c.tool).collect();

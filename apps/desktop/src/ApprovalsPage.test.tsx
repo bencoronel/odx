@@ -148,10 +148,10 @@ it("filters by model, method, environment or client and keeps keys within the ma
 });
 
 
-it("keeps the layout when nothing is pending and says so in the list", () => {
+it("shows a centered empty state when nothing is pending", () => {
   page([]);
-  expect(screen.getByRole("searchbox", { name: "Filter requests" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "All caught up" })).toBeTruthy();
+  expect(screen.queryByRole("searchbox", { name: "Filter requests" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
 });
 
@@ -319,7 +319,8 @@ it("creates a field rule from a write, with its effective context, and approves 
   fireEvent.click(screen.getByRole("button", { name: "Create rule" }));
   await vi.waitFor(() => expect(decide).toHaveBeenCalledWith(write, true));
   expect(save).toHaveBeenCalledWith({
-    environment_id: "env-A", model: "res.partner", method: "write", kind: "fields", fields: ["name", "email"], values: undefined,
+    id: undefined, environment_id: "env-A", model: "res.partner", model_selector: { kind: "exact", value: "res.partner" }, method: "write", kind: "fields", action: "approve", scope: { kind: "environment" }, name: "", operations: ["write"],
+    fields: ["name", "email"], field_selectors: [{ kind: "exact", value: "name" }, { kind: "exact", value: "email" }], values: undefined,
     context: { lang: "es_ES" }, max_records: 2, expires_at: null,
   });
   // unlink always asks: no rule for it.

@@ -325,7 +325,7 @@ fn from_error(error: OdxError) -> ToolError {
             "environment unavailable to this client",
             Outcome::NotSent,
         ),
-        OdxError::Denied => ToolError::new(
+        OdxError::Denied | OdxError::RuleDenied(_) => ToolError::new(
             "forbidden",
             "denied by environment policy",
             Outcome::NotSent,

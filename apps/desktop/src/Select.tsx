@@ -10,7 +10,7 @@ export type SelectOption<T extends string> = { value: T; label: string };
 
 /** Use a themed dropdown. */
 export default function Select<T extends string>({
-  id, className = "", label, value, options, onChange,
+  id, className = "", label, value, options, onChange, disabled = false,
 }: {
   id?: string;
   className?: string;
@@ -18,6 +18,7 @@ export default function Select<T extends string>({
   value: T;
   options: SelectOption<T>[];
   onChange: (value: T) => void;
+  disabled?: boolean;
 }) {
   const generatedId = useId();
   const listId = `${id ?? generatedId}-options`;
@@ -94,6 +95,7 @@ export default function Select<T extends string>({
       aria-expanded={open}
       aria-controls={listId}
       aria-activedescendant={open ? `${listId}-${active}` : undefined}
+      disabled={disabled}
       className={cx(control, className)}
       onClick={() => open ? setOpen(false) : show()}
       onBlur={() => setOpen(false)}

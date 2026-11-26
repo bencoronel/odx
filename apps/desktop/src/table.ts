@@ -21,7 +21,7 @@ export type Link = { model: string; column: string; value: unknown; row: Record<
 /** Records as a table: columns in first-seen order. */
 export function rowsTable(rows: Record<string, unknown>[]): Table {
   const columns: string[] = [];
-  for (const row of rows) for (const key of Object.keys(row)) if (!columns.includes(key)) columns.push(key);
+  for (const row of rows) for (const key of Object.keys(row)) if (key !== "__odx_redacted_fields" && !columns.includes(key)) columns.push(key);
   return { columns, rows: rows.map((row) => columns.map((c) => row[c])) };
 }
 
@@ -39,11 +39,13 @@ export const toMarkdown = (table: Table) => {
 };
 /** RFC 4180 with a BOM so spreadsheets detect UTF-8. Odoo data can come from outside (web forms), so values
  * that a spreadsheet would run as a formula get a leading apostrophe. */
-const csvCell = (value: string) => {
+const csvCell = (value: string, delimiter: string) => {
   const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  return safe.includes(delimiter) || /["\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 // Numbers are data, never formulas: -150.5 stays a number in the spreadsheet.
-export const toCsv = (table: Table) => "\uFEFF" + [table.columns.map(csvCell), ...table.rows.map((row) => row.map((v) => typeof v === "number" ? String(v) : csvCell(cellText(v))))]
-  .map((cells) => cells.join(","))
+export const toCsv = (table: Table, delimiter = ",") => "\uFEFF" + [table.columns.map((c) => csvCell(c, delimiter)), ...table.rows.map((row) => row.map((v) => typeof v === "number" ? String(v) : csvCell(cellText(v), delimiter)))]
+  .map((cells) => cells.join(delimiter))
   .join("\r\n");
+/** Semicolon-delimited CSV with UTF-8 BOM, for Spanish/European Excel locales. */
+export const toExcelCsv = (table: Table) => toCsv(table, ";");

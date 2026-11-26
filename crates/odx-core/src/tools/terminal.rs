@@ -35,6 +35,31 @@ pub enum DesktopRequest {
         terminal: String,
         reply: oneshot::Sender<Result<Value, String>>,
     },
+    /// Open a native interactive table window with arbitrary/computed columns and rows,
+    /// or print it directly into `terminal` when specified.
+    ShowTable {
+        terminal: Option<String>,
+        title: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<Value>>,
+        model: Option<String>,
+        footer: Option<String>,
+        client_label: String,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+    /// Open a validated Odoo URL in the user's default web browser.
+    OpenUrl {
+        url: String,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+    /// Write a UTF-8 CSV/JSON export to the user's Downloads folder without overwriting.
+    ExportFile {
+        name: String,
+        content: String,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
+    /// Notify the desktop UI that saved views changed (e.g. after `view_save`).
+    ViewsChanged,
 }
 
 /// A saved Terminal tab, as the app stores it (`ShellPage.tsx` `SavedSessions`); only what the tools need.
@@ -370,6 +395,504 @@ impl Core {
             )),
         }
     }
+
+    pub(crate) async fn tool_show_table(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        if !client.capabilities.contains(&Capability::OdooRead) {
+            return Err(ToolError::new(
+                "forbidden",
+                "client lacks odoo:read capability",
+                Outcome::NotSent,
+            ));
+        }
+        let mut args = Args::for_tool("show_table", arguments)?;
+        let title = args.str("title")?;
+        if title.trim().is_empty() || title.chars().count() > 200 {
+            return Err(ToolError::invalid("title must be 1..200 characters"));
+        }
+        let terminal = args.str_opt("terminal")?.filter(|t| !t.trim().is_empty());
+        if let Some(ref tab_id) = terminal {
+            self.client_tab(client, tab_id).await?;
+        }
+        let model = args.str_opt("model")?.filter(|m| !m.trim().is_empty());
+        let footer = args.str_opt("footer")?.filter(|f| !f.trim().is_empty());
+        let raw_columns = args.raw("columns");
+        let raw_rows = args
+            .raw("rows")
+            .ok_or_else(|| ToolError::invalid("missing required argument: rows"))?;
+        let (columns, rows) = normalize_table_input(raw_columns, raw_rows)?;
+        let row_count = rows.len();
+        let col_count = columns.len();
+        let client_label = {
+            let s = self.inner.lock().await;
+            let v = s.vault()?;
+            v.data()
+                .clients
+                .iter()
+                .find(|g| g.id == client.client_id)
+                .map(|g| g.label.clone())
+                .unwrap_or_default()
+        };
+        let (reply, answer) = oneshot::channel();
+        self.send_desktop(DesktopRequest::ShowTable {
+            terminal: terminal.clone(),
+            title: title.clone(),
+            columns,
+            rows,
+            model,
+            footer,
+            client_label,
+            reply,
+        })?;
+        match tokio::time::timeout(SHOW_TIMEOUT, answer).await {
+            Ok(Ok(Ok(_))) => Ok(ToolOutput {
+                data: json!({ "opened": true, "terminal": terminal, "title": title, "columns": col_count, "rows": row_count }),
+                meta: Map::new(),
+                format: crate::output::Format::Compact,
+                trunc: 200,
+            }),
+            Ok(Ok(Err(message))) => Err(ToolError::new("terminal", message, Outcome::NotSent)),
+            _ => Err(ToolError::new(
+                "unavailable",
+                "the Odx window did not open the table",
+                Outcome::NotSent,
+            )),
+        }
+    }
+
+    pub(crate) async fn tool_open_record(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let mut args = Args::for_tool("open_record", arguments)?;
+        let env_name = args.str("env")?;
+        let target = self
+            .configured_target(client, &env_name, Capability::OdooRead)
+            .await?;
+        let model = args.str_opt("model")?;
+        let id = match args.raw("id") {
+            None => None,
+            Some(v) => {
+                let n = v
+                    .as_u64()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| ToolError::invalid("id must be a positive integer"))?;
+                Some(n)
+            }
+        };
+        let record = match (&model, id) {
+            (Some(m), Some(i)) => {
+                if !crate::tools::args::valid_model(m) {
+                    return Err(ToolError::invalid(format!("invalid model: {m}")));
+                }
+                Some((m.as_str(), i))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(ToolError::invalid(
+                    "provide both model and id, or neither to open the environment home",
+                ));
+            }
+        };
+        let url = self
+            .web_url(&target.env.id, record)
+            .await
+            .map_err(ToolError::from)?;
+        let (reply, answer) = oneshot::channel();
+        self.send_desktop(DesktopRequest::OpenUrl {
+            url: url.clone(),
+            reply,
+        })?;
+        match tokio::time::timeout(SHOW_TIMEOUT, answer).await {
+            Ok(Ok(Ok(_))) => Ok(ToolOutput {
+                data: json!({ "opened": true, "env": target.env.name, "url": url }),
+                meta: Map::new(),
+                format: crate::output::Format::Compact,
+                trunc: 200,
+            }),
+            Ok(Ok(Err(message))) => Err(ToolError::new("desktop", message, Outcome::NotSent)),
+            _ => Err(ToolError::new(
+                "unavailable",
+                "the Odx desktop app did not open the browser",
+                Outcome::NotSent,
+            )),
+        }
+    }
+
+    pub(crate) async fn tool_export_csv(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        if !client.capabilities.contains(&Capability::OdooRead) {
+            return Err(ToolError::new(
+                "forbidden",
+                "client lacks odoo:read capability",
+                Outcome::NotSent,
+            ));
+        }
+        let mut args = Args::for_tool("export_csv", arguments)?;
+        let raw_name = args.str("filename")?;
+        let filename = sanitize_csv_filename(&raw_name)?;
+        let delimiter = match args.str_opt("delimiter")?.as_deref() {
+            None | Some(",") => ',',
+            Some(";") => ';',
+            Some(_) => return Err(ToolError::invalid("delimiter must be ',' or ';'")),
+        };
+        let raw_columns = args.raw("columns");
+        let raw_rows = args
+            .raw("rows")
+            .ok_or_else(|| ToolError::invalid("missing required argument: rows"))?;
+        let (columns, rows) = normalize_table_input(raw_columns, raw_rows)?;
+        let csv = encode_csv(&columns, &rows, delimiter);
+        let row_count = rows.len();
+        let col_count = columns.len();
+        let (reply, answer) = oneshot::channel();
+        self.send_desktop(DesktopRequest::ExportFile {
+            name: filename,
+            content: csv,
+            reply,
+        })?;
+        match tokio::time::timeout(SHOW_TIMEOUT, answer).await {
+            Ok(Ok(Ok(result))) => Ok(ToolOutput {
+                data: json!({
+                    "saved": true,
+                    "path": result.get("path").cloned().unwrap_or(Value::Null),
+                    "columns": col_count,
+                    "rows": row_count,
+                    "delimiter": delimiter.to_string(),
+                }),
+                meta: Map::new(),
+                format: crate::output::Format::Compact,
+                trunc: 200,
+            }),
+            Ok(Ok(Err(message))) => Err(ToolError::new("export", message, Outcome::NotSent)),
+            _ => Err(ToolError::new(
+                "unavailable",
+                "the Odx desktop app did not complete the export",
+                Outcome::NotSent,
+            )),
+        }
+    }
+
+    pub(crate) async fn tool_views(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        if !client.capabilities.contains(&Capability::OdooRead) {
+            return Err(ToolError::new(
+                "forbidden",
+                "client lacks odoo:read capability",
+                Outcome::NotSent,
+            ));
+        }
+        let mut args = Args::for_tool("views", arguments)?;
+        let (format, trunc) = common(&mut args)?;
+        let views = self.views().await.map_err(ToolError::from)?;
+        let data: Vec<Value> = views
+            .into_iter()
+            .map(|v| {
+                let schedule = v.schedule.map(|s| {
+                    let runs: Vec<_> = s
+                        .last_runs
+                        .into_iter()
+                        .filter(|r| client.environment_ids.contains(&r.environment_id))
+                        .collect();
+                    json!({
+                        "enabled": s.enabled,
+                        "interval_minutes": s.interval_minutes,
+                        "alert_on": s.alert_on,
+                        "last_run_at": s.last_run_at,
+                        "last_runs": runs,
+                    })
+                });
+                json!({
+                    "id": v.id,
+                    "name": v.name,
+                    "description": v.description,
+                    "model": v.model,
+                    "domain": v.domain,
+                    "fields": v.fields,
+                    "order": v.order,
+                    "limit": v.limit,
+                    "schedule": schedule,
+                })
+            })
+            .collect();
+        Ok(ToolOutput {
+            data: Value::Array(data),
+            meta: Map::new(),
+            format,
+            trunc,
+        })
+    }
+
+    pub(crate) async fn tool_view_run(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        let mut args = Args::for_tool("view_run", arguments)?;
+        let (format, trunc) = common(&mut args)?;
+        let env_name = args.str("env")?;
+        let view_ref = args.str("view")?;
+        let target = self
+            .configured_target(client, &env_name, Capability::OdooRead)
+            .await?;
+        let views = self.views().await.map_err(ToolError::from)?;
+        let found = views
+            .iter()
+            .find(|v| v.id == view_ref || v.name.eq_ignore_ascii_case(&view_ref))
+            .ok_or_else(|| {
+                ToolError::invalid(format!(
+                    "no saved view {view_ref}; list available views with views"
+                ))
+            })?;
+        let result = self
+            .run_view(&found.id, &target.env.id)
+            .await
+            .map_err(ToolError::from)?;
+        let mut meta = Map::new();
+        meta.insert("view".into(), json!(found.name));
+        meta.insert("environment".into(), json!(result.environment_name));
+        meta.insert("total_count".into(), json!(result.total_count));
+        meta.insert("duration_ms".into(), json!(result.duration_ms));
+        Ok(ToolOutput {
+            data: Value::Array(result.rows),
+            meta,
+            format,
+            trunc,
+        })
+    }
+
+    pub(crate) async fn tool_view_save(
+        &self,
+        client: &ClientIdentity,
+        arguments: Value,
+    ) -> Result<ToolOutput, ToolError> {
+        if !client.capabilities.contains(&Capability::OdooRead) {
+            return Err(ToolError::new(
+                "forbidden",
+                "client lacks odoo:read capability",
+                Outcome::NotSent,
+            ));
+        }
+        let mut args = Args::for_tool("view_save", arguments)?;
+        let id = args.str_opt("id")?;
+        let name = args.str("name")?;
+        let model = crate::tools::args::model(&mut args)?;
+        let description = args.text("description")?.unwrap_or_default();
+        let domain = args.array("domain")?.unwrap_or_default();
+        let fields = match args.array("fields")? {
+            Some(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    let s = item
+                        .as_str()
+                        .ok_or_else(|| ToolError::invalid("fields must be an array of strings"))?;
+                    out.push(s.to_owned());
+                }
+                out
+            }
+            None => Vec::new(),
+        };
+        let order = args.text("order")?.filter(|s| !s.trim().is_empty());
+        let limit = args.int("limit", 50, 1, 500)? as u32;
+        // Preserve any existing schedule when updating an existing view by id.
+        let existing_schedule = if let Some(ref view_id) = id {
+            self.views()
+                .await
+                .ok()
+                .and_then(|list| list.into_iter().find(|v| v.id == *view_id))
+                .and_then(|v| v.schedule)
+                .map(|s| crate::views::ViewScheduleDraft {
+                    enabled: s.enabled,
+                    environment_ids: s.environment_ids,
+                    interval_minutes: s.interval_minutes,
+                    alert_on: s.alert_on,
+                })
+        } else {
+            None
+        };
+        let saved = self
+            .save_view(crate::views::SavedViewDraft {
+                id,
+                name,
+                description,
+                model,
+                domain: Value::Array(domain),
+                fields,
+                order,
+                limit,
+                schedule: existing_schedule,
+            })
+            .await
+            .map_err(ToolError::from)?;
+        let _ = self.send_desktop(DesktopRequest::ViewsChanged);
+        Ok(ToolOutput {
+            data: json!({ "saved": true, "id": saved.id, "name": saved.name, "model": saved.model }),
+            meta: Map::new(),
+            format: crate::output::Format::Compact,
+            trunc: 200,
+        })
+    }
+}
+
+fn sanitize_csv_filename(raw: &str) -> Result<String, ToolError> {
+    let trimmed = raw.trim();
+    let stem = trimmed.strip_suffix(".csv").unwrap_or(trimmed);
+    if stem.is_empty()
+        || stem.len() > 100
+        || stem.starts_with('.')
+        || !stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(ToolError::invalid(
+            "filename must be a plain name (letters, digits, '-', '_', '.') without paths",
+        ));
+    }
+    Ok(format!("{stem}.csv"))
+}
+
+fn csv_cell_value(v: &Value) -> (String, bool) {
+    match v {
+        Value::Null => (String::new(), false),
+        Value::Bool(b) => (b.to_string(), false),
+        Value::Number(n) => (n.to_string(), true),
+        Value::String(s) => (s.clone(), false),
+        Value::Array(arr) if arr.len() == 2 && arr[0].is_number() && arr[1].is_string() => (
+            format!("{} ({})", arr[1].as_str().unwrap_or(""), arr[0]),
+            false,
+        ),
+        other => (other.to_string(), false),
+    }
+}
+
+fn escape_csv_cell(text: &str, delimiter: char, is_number: bool) -> String {
+    if is_number {
+        return text.to_owned();
+    }
+    let safe = if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{text}")
+    } else {
+        text.to_owned()
+    };
+    if safe.contains(delimiter) || safe.contains(['"', '\n', '\r']) {
+        format!("\"{}\"", safe.replace('"', "\"\""))
+    } else {
+        safe
+    }
+}
+
+pub(crate) fn encode_csv(columns: &[String], rows: &[Vec<Value>], delimiter: char) -> String {
+    let mut out = String::from("\u{FEFF}");
+    let sep = delimiter.to_string();
+    let header: Vec<String> = columns
+        .iter()
+        .map(|c| escape_csv_cell(c, delimiter, false))
+        .collect();
+    out.push_str(&header.join(&sep));
+    for row in rows {
+        out.push_str("\r\n");
+        let cells: Vec<String> = row
+            .iter()
+            .map(|v| {
+                let (text, is_num) = csv_cell_value(v);
+                escape_csv_cell(&text, delimiter, is_num)
+            })
+            .collect();
+        out.push_str(&cells.join(&sep));
+    }
+    out
+}
+
+const MAX_TABLE_COLUMNS: usize = 60;
+const MAX_TABLE_ROWS: usize = 10_000;
+
+/// Normalize custom table input: supports either array-of-arrays (with explicit `columns`)
+/// or array-of-objects (with optional `columns` — inferred in first-seen key order if omitted).
+pub(crate) fn normalize_table_input(
+    raw_columns: Option<Value>,
+    raw_rows: Value,
+) -> Result<(Vec<String>, Vec<Vec<Value>>), ToolError> {
+    let raw_rows = raw_rows
+        .as_array()
+        .ok_or_else(|| ToolError::invalid("rows must be an array"))?;
+    if raw_rows.len() > MAX_TABLE_ROWS {
+        return Err(ToolError::invalid(format!(
+            "rows exceeds maximum of {MAX_TABLE_ROWS}"
+        )));
+    }
+    let mut columns: Vec<String> = match raw_columns {
+        Some(Value::Array(items)) => {
+            let mut cols = Vec::with_capacity(items.len());
+            for item in items {
+                let name = item
+                    .as_str()
+                    .ok_or_else(|| ToolError::invalid("columns must be an array of strings"))?
+                    .trim();
+                if name.is_empty() {
+                    return Err(ToolError::invalid("column names cannot be empty"));
+                }
+                cols.push(name.to_owned());
+            }
+            cols
+        }
+        Some(Value::Null) | None => Vec::new(),
+        _ => return Err(ToolError::invalid("columns must be an array of strings")),
+    };
+    if columns.is_empty() {
+        for row in raw_rows {
+            if let Some(obj) = row.as_object() {
+                for key in obj.keys() {
+                    if !columns.contains(key) {
+                        columns.push(key.clone());
+                    }
+                }
+            }
+        }
+    }
+    if columns.is_empty() {
+        return Err(ToolError::invalid(
+            "columns is required when rows are arrays or empty",
+        ));
+    }
+    if columns.len() > MAX_TABLE_COLUMNS {
+        return Err(ToolError::invalid(format!(
+            "columns exceeds maximum of {MAX_TABLE_COLUMNS}"
+        )));
+    }
+    let mut rows = Vec::with_capacity(raw_rows.len());
+    for row in raw_rows {
+        match row {
+            Value::Array(cells) => {
+                let mut padded = Vec::with_capacity(columns.len());
+                for i in 0..columns.len() {
+                    padded.push(cells.get(i).cloned().unwrap_or(Value::Null));
+                }
+                rows.push(padded);
+            }
+            Value::Object(map) => {
+                let mut cells = Vec::with_capacity(columns.len());
+                for col in &columns {
+                    cells.push(map.get(col).cloned().unwrap_or(Value::Null));
+                }
+                rows.push(cells);
+            }
+            _ => {
+                return Err(ToolError::invalid(
+                    "each row must be an array of cell values or an object keyed by column",
+                ));
+            }
+        }
+    }
+    Ok((columns, rows))
 }
 
 #[cfg(test)]
@@ -412,5 +935,46 @@ mod tests {
         );
         assert_eq!(blocks[1]["output"][1]["rows"], json!([[1]]));
         assert!(saved_tabs("not json").0.is_empty());
+    }
+
+    #[test]
+    fn normalizes_custom_table_rows_from_arrays_and_objects() {
+        let (cols, rows) = normalize_table_input(
+            Some(json!(["id_prestashop", "trabajo", "detalle"])),
+            json!([[872, 72070, "Duplicado"], [901, 72071]]),
+        )
+        .unwrap();
+        assert_eq!(cols, ["id_prestashop", "trabajo", "detalle"]);
+        assert_eq!(rows[0], vec![json!(872), json!(72070), json!("Duplicado")]);
+        assert_eq!(rows[1], vec![json!(901), json!(72071), Value::Null]);
+
+        let (cols2, rows2) = normalize_table_input(
+            None,
+            json!([
+                {"id_prestashop": 872, "trabajo": 72070, "detalle": "Choca con plantilla A"},
+                {"id_prestashop": 901, "trabajo": 72071}
+            ]),
+        )
+        .unwrap();
+        assert!(cols2.contains(&"id_prestashop".to_string()));
+        assert_eq!(rows2.len(), 2);
+        assert!(normalize_table_input(None, json!([])).is_err());
+    }
+
+    #[test]
+    fn encodes_csv_with_bom_formula_protection_and_excel_semicolon() {
+        assert_eq!(
+            sanitize_csv_filename("errores_hoy").unwrap(),
+            "errores_hoy.csv"
+        );
+        assert_eq!(sanitize_csv_filename("report.csv").unwrap(), "report.csv");
+        assert!(sanitize_csv_filename("../escape.csv").is_err());
+        let csv = encode_csv(
+            &["id_prestashop".into(), "detalle".into()],
+            &[vec![json!(872), json!("=SUM(A1); duplicado")]],
+            ';',
+        );
+        assert!(csv.starts_with('\u{FEFF}'));
+        assert!(csv.contains("id_prestashop;detalle\r\n872;\"'=SUM(A1); duplicado\""));
     }
 }

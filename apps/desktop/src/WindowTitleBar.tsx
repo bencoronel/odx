@@ -1,8 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getName } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useDismiss } from "./ContextMenu";
+import { contextMenu } from "./ui";
 import icon from "../src-tauri/icons/icon.png";
 import devIcon from "../src-tauri/icons/icon-dev.png";
 
@@ -30,22 +32,91 @@ const resizeHandles = {
 const resizeDirections = Object.keys(resizeHandles) as (keyof typeof resizeHandles)[];
 
 /** Rounded corners and the border only make sense on a floating window. Wayland does not always send a resize event to Tauri on maximize, so the browser's own resize event also triggers the check. */
-function useFilledWindow() {
+function useWindowChromeState() {
+  const [maximized, setMaximized] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [focused, setFocused] = useState(true);
   useEffect(() => {
     let active = true;
     const sync = () => {
-      Promise.all([appWindow.isMaximized(), appWindow.isFullscreen()]).then(([maximized, fullscreen]) => {
-        if (active) document.documentElement.toggleAttribute("data-window-filled", maximized || fullscreen);
+      Promise.all([appWindow.isMaximized(), appWindow.isFullscreen()]).then(([max, full]) => {
+        if (!active) return;
+        setMaximized(max);
+        setFullscreen(full);
+        document.documentElement.toggleAttribute("data-window-filled", max || full);
       }, () => undefined);
     };
+    const setFocusState = (next: boolean) => {
+      if (!active) return;
+      setFocused(next);
+      document.documentElement.toggleAttribute("data-window-focused", next);
+    };
     sync();
+    void Promise.resolve().then(() => appWindow.isFocused?.()).then((f) => {
+      if (typeof f === "boolean") setFocusState(f);
+      else setFocusState(document.hasFocus());
+    }, () => setFocusState(document.hasFocus()));
+    const onFocus = () => setFocusState(true);
+    const onBlur = () => setFocusState(false);
     window.addEventListener("resize", sync);
-    const listener = appWindow.onResized(sync);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    const resizeListener = appWindow.onResized(sync);
+    const focusListener = typeof appWindow.onFocusChanged === "function"
+      ? appWindow.onFocusChanged(({ payload }) => setFocusState(payload))
+      : Promise.resolve(() => undefined);
     return () => {
       active = false;
       window.removeEventListener("resize", sync);
-      void listener.then((unlisten) => unlisten(), () => undefined);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      void resizeListener.then((unlisten) => unlisten(), () => undefined);
+      void focusListener.then((unlisten) => unlisten(), () => undefined);
     };
+  }, []);
+  return { maximized, fullscreen, focused };
+}
+
+const ZOOM_MIN = 85;
+const ZOOM_MAX = 125;
+const ZOOM_STEP = 5;
+
+function applyZoom(pct: number) {
+  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(pct)));
+  (document.documentElement.style as CSSStyleDeclaration & { zoom?: string }).zoom = clamped === 100 ? "" : `${clamped}%`;
+  try { localStorage.setItem("odx.zoom", String(clamped)); } catch { /* optional */ }
+  return clamped;
+}
+
+/** Global native window shortcuts: F11 fullscreen and Ctrl+/-/0 UI zoom. */
+function useWindowShortcuts() {
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem("odx.zoom"));
+      if (Number.isFinite(saved) && saved >= ZOOM_MIN && saved <= ZOOM_MAX && saved !== 100) applyZoom(saved);
+    } catch { /* optional */ }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        event.preventDefault();
+        void appWindow.isFullscreen().then((full) => appWindow.setFullscreen(!full)).catch(() => undefined);
+        return;
+      }
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key === "=" || event.key === "+") {
+        event.preventDefault();
+        const current = Number(localStorage.getItem("odx.zoom") || 100) || 100;
+        applyZoom(current + ZOOM_STEP);
+      } else if (event.key === "-") {
+        event.preventDefault();
+        const current = Number(localStorage.getItem("odx.zoom") || 100) || 100;
+        applyZoom(current - ZOOM_STEP);
+      } else if (event.key === "0") {
+        event.preventDefault();
+        applyZoom(100);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 }
 
@@ -110,12 +181,19 @@ const control = "w-11 h-full grid place-items-center cursor-pointer [&_svg]:size
 export function WindowTitleBar({ children, title }: { children?: ReactNode; title?: string }) {
   const name = useAppName();
   const { t } = useTranslation();
-  useFilledWindow();
+  const { maximized, fullscreen, focused } = useWindowChromeState();
   useRevealWindow();
+  useWindowShortcuts();
   // Hidden where the desktop gives no way to stay on top (Wayland outside KDE).
   const [canKeepAbove, setCanKeepAbove] = useState(false);
   const [above, setAbove] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useDismiss(!!menuPos, () => menuRef.current, () => setMenuPos(null));
   useEffect(() => { void Promise.resolve().then(() => invoke<boolean>("window_keep_above_supported")).then(setCanKeepAbove, () => undefined); }, []);
+  const toggleKeepAbove = () => void invoke("window_keep_above", { above: !above }).then(() => setAbove(!above), () => undefined);
+  const toggleFullscreen = () => void appWindow.setFullscreen(!fullscreen).catch(() => undefined);
+  const maxLabel = maximized ? t("window.restore") : t("window.maximize");
   return <><WindowResizeHandles /><div
     className="h-[34px] flex-[0_0_34px] flex items-center pl-3 bg-chrome border-b border-line select-none cursor-default"
     onMouseDown={(event) => {
@@ -124,28 +202,43 @@ export function WindowTitleBar({ children, title }: { children?: ReactNode; titl
         void appWindow.startDragging();
       }
     }}
+    onContextMenu={(event) => {
+      if ((event.target as HTMLElement).closest("button")) return;
+      event.preventDefault();
+      setMenuPos({ x: Math.min(event.clientX, window.innerWidth - 200), y: Math.min(event.clientY, window.innerHeight - 180) });
+    }}
     onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button")) void appWindow.toggleMaximize(); }}
   >
-    <div className="flex items-center gap-2 text-fg-2 text-sm font-semibold" aria-label={name.toUpperCase()}>
-      <img className="block size-[18px] rounded-[5px] object-cover" src={name === "Odx" ? icon : devIcon} alt="" />
-      <span>{name.toUpperCase()}</span>
+    <div className={`flex items-center gap-2 text-fg-2 text-sm font-semibold min-w-0 transition-opacity duration-150 ${focused ? "" : "opacity-60"}`} aria-label={name.toUpperCase()}>
+      <img className="block size-[18px] rounded-[5px] object-cover shrink-0" src={name === "Odx" ? icon : devIcon} alt="" />
+      <span className="shrink-0">{name.toUpperCase()}</span>
       {title && <span className="pl-2 border-l border-line text-fg-3 font-normal truncate">{title}</span>}
     </div>
     <div className="ml-auto flex items-center pr-1.5 [&>button]:size-[26px]">{children}</div>
-    <div className="h-full flex" onMouseDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+    <div className={`h-full flex transition-opacity duration-150 ${focused ? "" : "opacity-65"}`} onMouseDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
       {canKeepAbove && <button type="button" className={`${control} ${above ? "bg-accent-soft text-accent-text [&_svg]:stroke-[1.8]" : idle}`} aria-pressed={above} aria-label={t("window.keepAbove")} data-tip={t(above ? "window.stopKeepAbove" : "window.keepAbove")}
-        onClick={() => void invoke("window_keep_above", { above: !above }).then(() => setAbove(!above), () => undefined)}>
+        onClick={toggleKeepAbove}>
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 7.5 6 4.5l3 3" /></svg>
       </button>}
       <button type="button" className={`${control} ${idle}`} aria-label={t("window.minimize")} data-tip={t("window.minimize")} onClick={() => void appWindow.minimize()}>
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" /></svg>
       </button>
-      <button type="button" className={`${control} ${idle}`} aria-label={t("window.maximizeRestore")} data-tip={t("window.maximizeRestore")} onClick={() => void appWindow.toggleMaximize()}>
-        <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2.25" y="2.25" width="7.5" height="7.5" rx="0.6" /></svg>
+      <button type="button" className={`${control} ${idle}`} aria-label={maxLabel} data-tip={maxLabel} onClick={() => void appWindow.toggleMaximize()}>
+        {maximized
+          ? <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="3.75" width="6.25" height="6.25" rx="0.6" /><path d="M4.25 3.75V2.6a.6.6 0 0 1 .6-.6h4.55a.6.6 0 0 1 .6.6v4.55a.6.6 0 0 1-.6.6H8.25" /></svg>
+          : <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2.25" y="2.25" width="7.5" height="7.5" rx="0.6" /></svg>}
       </button>
       <button className={`${control} text-fg-2 hover:bg-[#c42b3c] hover:text-white [&_svg]:stroke-[1.15]`} type="button" aria-label={t("common.close")} data-tip={t("common.close")} onClick={() => void appWindow.close()}>
         <svg viewBox="0 0 12 12" aria-hidden="true"><path d="m3 3 6 6M9 3 3 9" /></svg>
       </button>
     </div>
-  </div></>;
+  </div>
+  {menuPos && <div ref={menuRef} className={contextMenu} role="menu" aria-label={t("window.menu")} style={{ left: menuPos.x, top: menuPos.y }}>
+    <button type="button" role="menuitem" onClick={() => { setMenuPos(null); void appWindow.minimize(); }}><span>{t("window.minimize")}</span></button>
+    <button type="button" role="menuitem" onClick={() => { setMenuPos(null); void appWindow.toggleMaximize(); }}><span>{maxLabel}</span></button>
+    {canKeepAbove && <button type="button" role="menuitem" onClick={() => { setMenuPos(null); toggleKeepAbove(); }}><span>{t(above ? "window.stopKeepAbove" : "window.keepAbove")}</span></button>}
+    <button type="button" role="menuitem" onClick={() => { setMenuPos(null); toggleFullscreen(); }}><span>{t(fullscreen ? "window.exitFullscreen" : "window.fullscreen")}</span><kbd>F11</kbd></button>
+    <hr />
+    <button type="button" role="menuitem" className="text-danger" onClick={() => { setMenuPos(null); void appWindow.close(); }}><span>{t("common.close")}</span></button>
+  </div>}</>;
 }

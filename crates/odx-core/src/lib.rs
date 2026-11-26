@@ -23,6 +23,7 @@ pub(crate) mod shell;
 pub mod tools;
 pub mod transports;
 pub mod vault;
+pub mod views;
 
 pub use activity::{ActivityCursor, ActivityEvent, ActivityFilter, ActivityPage};
 pub use approval::{ApprovalNotice, PendingApproval};
@@ -30,7 +31,7 @@ pub use clients::{
     AgentProcess, Capability, ClientIdentity, ClientScope, ClientView, ConnectionGuard,
     IssuedToken, McpConnectionInfo,
 };
-pub use config::{Environment, EnvironmentDraft, Protocol, Settings, WriteMode};
+pub use config::{Environment, EnvironmentDraft, Protocol, Settings, Stage, WriteMode};
 pub use environments::{EnvironmentView, HealthReport};
 pub use execution::{Core, SettingsView};
 pub use output::{Format, Outcome, ToolError, ToolOutput};
@@ -38,5 +39,9 @@ pub use policy::{Authorization, Rule, RuleDraft, RuleKind, RuleView};
 pub use shell::{HistoryEntry, ShellCall, ShellResult};
 pub use tools::catalog::{ToolDefinition, tool_definitions};
 pub use tools::terminal::DesktopRequest;
+pub use views::{
+    AlertCondition, SavedView, SavedViewDraft, ViewAlert, ViewRunResult, ViewRunSummary,
+    ViewSchedule, ViewScheduleDraft,
+};
 
 mod database;

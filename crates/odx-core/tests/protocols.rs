@@ -1,8 +1,8 @@
 //! XML-RPC/JSON-2 against simulated Odoo 16–19: authentication, errors, types, limits, redaction, uncertain writes and shared policy across protocols.
 mod support;
 use odx_core::{
-    Capability, ClientIdentity, Core, EnvironmentDraft, Protocol, ToolError, ToolOutput, WriteMode,
-    headers::HeaderEntry,
+    ActivityFilter, Capability, ClientIdentity, Core, EnvironmentDraft, Protocol, RuleDraft,
+    ToolError, ToolOutput, WriteMode, headers::HeaderEntry,
 };
 use serde_json::{Value, json};
 use std::{sync::Arc, sync::atomic::Ordering};
@@ -72,6 +72,126 @@ impl Fixture {
 
 fn calls(out: &ToolOutput) -> u64 {
     out.meta["upstream_calls"].as_u64().unwrap()
+}
+
+#[tokio::test]
+async fn field_rules_filter_and_deny_inference_on_every_transport() {
+    for protocol in PROTOCOLS {
+        let f = fixture(19, protocol, "fixture-secret").await;
+        let rule: RuleDraft = serde_json::from_value(json!({
+            "environment_id":"", "model":"", "method":"all", "kind":"fields",
+            "action":"block", "scope":{"kind":"global"}, "operations":["read"],
+            "model_selector":{"kind":"all"},
+            "field_selectors":[{"kind":"regex","pattern":"(?i)(token|password)"}],
+            "context":{}, "max_records":0
+        }))
+        .unwrap();
+        f.core.save_rule(rule).await.unwrap();
+
+        let out = f
+            .run(
+                "search_read",
+                json!({"model":"res.partner","fields":["id","display_name","api_token","password"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.data[0]["api_token"], "[REDACTED]", "{protocol:?}");
+        assert_eq!(out.data[0]["password"], "[REDACTED]", "{protocol:?}");
+        let call = f
+            .sim
+            .counts
+            .calls()
+            .into_iter()
+            .find(|call| call.get(4) == Some(&json!("search_read")))
+            .unwrap();
+        assert_eq!(
+            call[6]["fields"],
+            json!(["id", "display_name"]),
+            "{protocol:?}"
+        );
+
+        let read = f
+            .run(
+                "read",
+                json!({"model":"res.partner","ids":[1],"fields":["id","password"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.data[0]["password"], "[REDACTED]", "{protocol:?}");
+        let read_call = f
+            .sim
+            .counts
+            .calls()
+            .into_iter()
+            .rev()
+            .find(|call| call.get(4) == Some(&json!("read")))
+            .unwrap();
+        assert_eq!(read_call[6]["fields"], json!(["id"]), "{protocol:?}");
+
+        let before = f.sim.counts.queries();
+        let err = f
+            .run(
+                "search_read",
+                json!({"model":"res.partner","fields":["id"],"domain":[["password","=","secret"]]}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "forbidden", "{protocol:?}");
+        assert_eq!(
+            f.sim.counts.queries(),
+            before,
+            "inference must not reach upstream: {protocol:?}"
+        );
+
+        let model_block: RuleDraft = serde_json::from_value(json!({
+            "environment_id":"", "model":"res.partner", "method":"all", "kind":"method",
+            "action":"block", "scope":{"kind":"global"}, "operations":["read"],
+            "model_selector":{"kind":"exact","value":"res.partner"},
+            "context":{}, "max_records":0
+        }))
+        .unwrap();
+        let model_block = f.core.save_rule(model_block).await.unwrap();
+        let before_model_block = f.sim.counts.queries();
+        let denied = f
+            .run(
+                "search_read",
+                json!({"model":"res.partner","fields":["id"]}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(denied.code, "forbidden", "{protocol:?}");
+        assert_eq!(f.sim.counts.queries(), before_model_block, "{protocol:?}");
+        let denied_events = f
+            .core
+            .activity(None, ActivityFilter::default())
+            .await
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|event| {
+                event.operation == "search_read:res.partner" && event.outcome == "denied"
+            })
+            .collect::<Vec<_>>();
+        let mut traced = false;
+        for event in denied_events {
+            let details = f
+                .core
+                .activity_details(event.request_id.unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            traced |= details.policy_rules.is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule.rule_id == model_block.rule.id
+                        && rule.rule_revision == model_block.rule.revision
+                })
+            });
+        }
+        assert!(
+            traced,
+            "block decision is recorded in activity: {protocol:?}"
+        );
+    }
 }
 
 #[tokio::test]

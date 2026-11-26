@@ -6,7 +6,7 @@ import { ipc, type Service, type ServiceStatus as Services } from "./ipc";
 
 vi.mock("./ipc", () => ({ ipc: {
   status: vi.fn(), environments: vi.fn(), approvals: vi.fn(), clients: vi.fn(), serviceStatus: vi.fn(), lock: vi.fn(), decide: vi.fn(),
-  activity: vi.fn(), settings: vi.fn(), proxies: vi.fn(), headers: vi.fn(), context: vi.fn(), shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), check: vi.fn(), faviconPage: vi.fn(), faviconImage: vi.fn(),
+  activity: vi.fn(), settings: vi.fn(), proxies: vi.fn(), headers: vi.fn(), context: vi.fn(), rules: vi.fn(), views: vi.fn(), shellHistory: vi.fn(), shellSessions: vi.fn(async () => null), saveShellSessions: vi.fn(async () => undefined), check: vi.fn(), faviconPage: vi.fn(), faviconImage: vi.fn(),
 } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }));
 vi.mock("./WindowTitleBar", () => ({ WindowTitleBar: () => null }));
@@ -72,22 +72,20 @@ beforeEach(() => {
   vi.mocked(ipc.shellHistory).mockResolvedValue([]);
   vi.mocked(ipc.settings).mockRejectedValue("no settings in this test");
   vi.mocked(ipc.proxies).mockResolvedValue({ proxies: [], default: null });
+  vi.mocked(ipc.rules).mockResolvedValue([]);
+  vi.mocked(ipc.views).mockResolvedValue([]);
 });
 
 it("keeps the sidebar and service status across pages without refetching on navigation", async () => {
   render(<App />);
   await within(await screen.findByRole("contentinfo", { name: "Service status" })).findByText(/MCP active/);
   const nav = within(screen.getByRole("navigation", { name: "Main navigation" }));
-  const mcp = within(nav.getByRole("group", { name: "MCP" }));
-  expect(mcp.getByRole("button", { name: "Local" })).toBeTruthy();
-  for (const api of nav.getAllByRole("button", { name: "API" })) {
-    expect((api as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(api);
-  }
+  expect(nav.getByRole("button", { name: "MCP" })).toBeTruthy();
+  expect(nav.queryByRole("button", { name: "API" })).toBeNull();
   expect(nav.getByRole("button", { name: "Environments" }).getAttribute("aria-current")).toBe("page");
   const calls = vi.mocked(ipc.serviceStatus).mock.calls.length;
   const before = bar().textContent;
-  for (const name of ["Local", "Activity", "Settings", "Terminal", "Approvals", "Environments"]) {
+  for (const name of ["MCP", "Activity", "Settings", "Terminal", "Approvals", "Environments"]) {
     fireEvent.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name }));
     expect(screen.getByRole("button", { name }).getAttribute("aria-current")).toBe("page");
     expect(bar().textContent).toBe(before);
@@ -142,7 +140,7 @@ it("moves between sections with Ctrl+1…6 keeping the service status", async ()
   render(<App />);
   await within(await screen.findByRole("contentinfo", { name: "Service status" })).findByText(/MCP active/);
   const before = bar().textContent;
-  for (const [key, name] of [["4", "Local"], ["2", "Approvals"], ["6", "Settings"], ["5", "Activity"], ["1", "Environments"]]) {
+  for (const [key, name] of [["4", "Views"], ["5", "MCP"], ["2", "Approvals"], ["7", "Settings"], ["6", "Activity"], ["1", "Environments"]]) {
     fireEvent.keyDown(window, { key, ctrlKey: true });
     await waitFor(() => expect(screen.getByRole("button", { name }).getAttribute("aria-current")).toBe("page"));
     expect(bar().textContent).toBe(before);

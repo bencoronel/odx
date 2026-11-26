@@ -154,6 +154,8 @@ mod tests {
             revision: 1,
             secret: crate::security::Secret::new("fixture-only").unwrap(),
             tags: vec![],
+            project: None,
+            stage: None,
             proxy: Default::default(),
         };
         let mut approval = Approval::new(
@@ -206,6 +208,8 @@ mod tests {
             revision: 1,
             secret: crate::security::Secret::new("fixture-only").unwrap(),
             tags: vec![],
+            project: None,
+            stage: None,
             proxy: Default::default(),
         };
         let mut approval = Approval::new(

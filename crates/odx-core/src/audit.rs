@@ -60,6 +60,10 @@ pub struct AuditDetails {
     /// Write authorization: individual approval, rule ID or free-write mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization: Option<crate::policy::Authorization>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_rules: Option<Vec<crate::policy::RuleTrace>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted_fields: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditPayload {
@@ -111,6 +115,9 @@ impl AuditRequest {
         self.details.duration_ms = Some(self.started.elapsed().as_millis() as u64);
         self.details.error_code = Some(error.code().into());
         self.details.error_params = Some(error.ui_params());
+        if let OdxError::RuleDenied(rules) = error {
+            self.details.policy_rules = Some(rules.clone());
+        }
         if let Some(detail) = error.safe_detail() {
             self.details.error = Some(AuditPayload::capture(
                 &Value::String(detail.into()),

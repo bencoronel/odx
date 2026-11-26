@@ -56,6 +56,30 @@ pub(crate) fn authorization_current(
     authorization: &policy::Authorization,
 ) -> bool {
     let now = v.now();
+    let (Some(args), Some(kwargs)) = (call.args.as_array(), call.kwargs.as_object()) else {
+        return false;
+    };
+    let effective = policy::EffectiveCall {
+        environment_id: &env.id,
+        model: &call.model,
+        method: &call.method,
+        args,
+        kwargs,
+    };
+    if policy::has_any_field_block(&v.data().rules, &env.id, &call.model, now)
+        && !matches!(call.method.as_str(), "create" | "write" | "unlink")
+    {
+        return false;
+    }
+    let block_effect =
+        if call.method == "unlink" || crate::tools::mutations::has_relational_delete(&call.args) {
+            Effect::Delete
+        } else {
+            Effect::Write
+        };
+    if policy::matching_block(&v.data().rules, &effective, &block_effect, now).is_some() {
+        return false;
+    }
     match authorization {
         // Human approval remains valid while the environment permits writes.
         policy::Authorization::Individual => policy::authorize(env, Effect::Write, now).is_ok(),
@@ -66,24 +90,11 @@ pub(crate) fn authorization_current(
             rule_id,
             rule_revision,
         } => {
-            let (Some(args), Some(kwargs)) = (call.args.as_array(), call.kwargs.as_object()) else {
-                return false;
-            };
             matches!(policy::authorize(env, Effect::Write, now), Ok(true))
                 && v.data().rules.iter().any(|rule| {
                     rule.id == *rule_id
                         && rule.revision == *rule_revision
-                        && rule.matches(
-                            &policy::EffectiveCall {
-                                environment_id: &env.id,
-                                model: &call.model,
-                                method: &call.method,
-                                args,
-                                kwargs,
-                            },
-                            &Effect::Write,
-                            now,
-                        )
+                        && rule.matches(&effective, &Effect::Write, now)
                 })
         }
     }
@@ -371,6 +382,8 @@ impl Core {
             write: true,
             recorded: true,
             max_response: crate::odoo::jsonrpc::MAX_RESPONSE,
+            initial_policy: None,
+            read_relations: None,
         };
         // The sent transition shares the lock used by vault_lock and revision changes.
         let (value, _) = self
@@ -382,8 +395,40 @@ impl Core {
                 let v = s.vault()?;
                 let latest = v.data().connection_environment(&env.id)?;
                 // Revalidate against current mode, deadline and rule.
-                let authorized = authorization_current(v, &latest, &call, &authorization);
                 let now = v.now();
+                let latest_rules = &v.data().rules;
+                let block_rule = if let (Some(args), Some(kwargs)) =
+                    (call.args.as_array(), call.kwargs.as_object())
+                {
+                    let effective = policy::EffectiveCall {
+                        environment_id: &env.id,
+                        model: &call.model,
+                        method: &call.method,
+                        args,
+                        kwargs,
+                    };
+                    let effect = if call.method == "unlink"
+                        || crate::tools::mutations::has_relational_delete(&call.args)
+                    {
+                        Effect::Delete
+                    } else {
+                        Effect::Write
+                    };
+                    policy::matching_block(latest_rules, &effective, &effect, now).or_else(|| {
+                        (!crate::tools::catalog::READ_METHODS.contains(&call.method.as_str())
+                            && !matches!(call.method.as_str(), "create" | "write" | "unlink"))
+                        .then(|| {
+                            policy::first_any_field_block(latest_rules, &env.id, &call.model, now)
+                        })
+                        .flatten()
+                    })
+                } else {
+                    None
+                };
+                if let Some(rule) = block_rule {
+                    return Err(OdxError::RuleDenied(vec![policy::trace_rule(rule)]));
+                }
+                let authorized = authorization_current(v, &latest, &call, &authorization);
                 let pending = s.pending.get_mut(id).ok_or(OdxError::ApprovalUnavailable)?;
                 // A human decision was already checked against the deadline when it was taken; a slow
                 // login or a wait for a slot after it must not void it. Free and rule authorizations still expire.
@@ -417,12 +462,91 @@ impl Core {
         let env = &target.env;
         self.reject_credential_call(Some(&client.client_id), env, model, method, &args, &kwargs)
             .await?;
+        if let (Some(positional), Some(named)) = (args.as_array(), kwargs.as_object()) {
+            let (policies, policy_now) = self
+                .policy_snapshot(&env.id)
+                .await
+                .map_err(ToolError::from)?;
+            let call = policy::EffectiveCall {
+                environment_id: &env.id,
+                model,
+                method,
+                args: positional,
+                kwargs: named,
+            };
+            let block_rule = policy::matching_block(&policies, &call, &effect, policy_now);
+            let field_rule = (effect == Effect::Read)
+                .then(|| policy::first_field_block(&policies, &env.id, model, method, policy_now))
+                .flatten();
+            let opaque_rule = (!crate::tools::catalog::READ_METHODS.contains(&method)
+                && !matches!(method, "create" | "write" | "unlink"))
+            .then(|| policy::first_any_field_block(&policies, &env.id, model, policy_now))
+            .flatten();
+            let deciding_rule = block_rule.or(field_rule).or(opaque_rule);
+            let blocked = deciding_rule.is_some();
+            if blocked {
+                let details = crate::audit::AuditDetails {
+                    error_code: Some("app.denied".into()),
+                    policy_rules: deciding_rule.map(|rule| vec![policy::trace_rule(rule)]),
+                    ..Default::default()
+                };
+                self.log_as(
+                    Some(&client.client_id),
+                    &env.id,
+                    &format!("{method}:{model}"),
+                    "denied",
+                    details,
+                )
+                .await
+                .map_err(ToolError::from)?;
+                return Err(ToolError::new(
+                    "forbidden",
+                    "operation blocked by a rule",
+                    Outcome::NotSent,
+                ));
+            }
+        }
         // Human wait spans request creation to execution start.
         let requested;
         let (id, deadline, details, waiter) = {
             let mut s = self.inner.lock().await;
             let v = s.vault()?;
             let now = v.now();
+            if let (Some(positional), Some(named)) = (args.as_array(), kwargs.as_object()) {
+                let call = policy::EffectiveCall {
+                    environment_id: &env.id,
+                    model,
+                    method,
+                    args: positional,
+                    kwargs: named,
+                };
+                if effect == Effect::Read
+                    && policy::has_field_block(&v.data().rules, &env.id, model, method, now)
+                {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "generic calls cannot safely apply field protection; use a structured read",
+                        Outcome::NotSent,
+                    ));
+                }
+                if policy::has_any_field_block(&v.data().rules, &env.id, model, now)
+                    && !crate::tools::catalog::READ_METHODS.contains(&method)
+                    && !matches!(method, "create" | "write" | "unlink")
+                {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "opaque methods are blocked while field protection applies",
+                        Outcome::NotSent,
+                    ));
+                }
+                if policy::matching_block(&v.data().rules, &call, &effect, now).is_some() {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "operation blocked by a rule".to_owned(),
+                        Outcome::NotSent,
+                    ));
+                }
+            }
             // Free-write skips approval; approval mode uses a matching valid rule or a human decision. unlink and relational deletes always require individual approval.
             let authorization = match policy::authorize(env, effect.clone(), now) {
                 Err(_) => {

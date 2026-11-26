@@ -36,6 +36,28 @@ fn rule(patch: Value) -> Rule {
 fn rejected(patch: Value) -> bool {
     draft(patch).map_or(true, |d| d.into_rule(Utc::now()).is_err())
 }
+
+#[tokio::test]
+async fn global_rules_survive_environment_removal_and_apply_to_future_environments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let core = support::unlocked_core(&tmp).await;
+    let env = core
+        .save_environment(support::draft("Temporary", "http://127.0.0.1:1"))
+        .await
+        .unwrap();
+    let mut value = json!({
+        "environment_id": env.id, "model":"", "method":"all", "kind":"method",
+        "action":"block", "scope":{"kind":"global"}, "operations":["read"],
+        "model_selector":{"kind":"all"}, "context":{}, "max_records":0
+    });
+    let draft: RuleDraft = serde_json::from_value(value.take()).unwrap();
+    let saved = core.save_rule(draft).await.unwrap();
+    assert_eq!(saved.rule.environment_id, "");
+    core.delete_environment(&env.id, true).await.unwrap();
+    let future = core.rules(Some("new-environment-id")).await.unwrap();
+    assert_eq!(future.len(), 1);
+    assert_eq!(future[0].rule.id, saved.rule.id);
+}
 /// Match the effective call with the effect assigned by real validation.
 fn hits(rule: &Rule, method: &str, args: Value, mut kwargs: Value) -> bool {
     hits_in(
@@ -111,6 +133,7 @@ fn unrepresentable_rules_are_rejected_instead_of_broadened() {
         json!({"model":"res.users","method":"api_key_wizard"}),
         json!({"model":"res.users.apikeys.description","method":"make_key"}),
         json!({"model":"res..partner"}),
+        json!({"action":"block","operations":["read"],"kind":"values","values":{"name":"x"}}),
     ] {
         assert!(rejected(patch.clone()), "{patch}");
     }
@@ -510,6 +533,371 @@ async fn a_matching_rule_sends_without_human_and_variants_wait_for_one() {
         last_authorization(&f.core).await,
         Some(Authorization::Individual)
     );
+}
+
+#[tokio::test]
+async fn global_block_overrides_free_and_human_approval_before_dispatch() {
+    for mode in [
+        WriteMode::Permanent,
+        WriteMode::Temporary,
+        WriteMode::Approval,
+    ] {
+        let f = fixture(mode).await;
+        let queued = if mode == WriteMode::Approval {
+            Some(flow::queue(&f.core, &f.client, "write", write(json!({"name":"x"}))).await)
+        } else {
+            None
+        };
+        let mut block = save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"method",
+                "method":"write", "operations":["write"], "model_selector":{"kind":"all"},
+                "context":{}, "max_records":0
+            }),
+        );
+        block.environment_id = f.env.clone();
+        let blocked = f.core.save_rule(block).await.unwrap();
+        if let Some((call, pending)) = queued {
+            assert!(f.core.decide(&pending.id, true).await.is_err());
+            let error = call.await.unwrap().unwrap_err();
+            assert!(
+                matches!(error.code, "forbidden" | "approval_revoked"),
+                "unexpected outcome after policy change: {error:?}"
+            );
+        } else {
+            let error = f
+                .core
+                .run_tool(&f.client, "write", write(json!({"name":"x"})))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "forbidden");
+        }
+        assert_eq!(f.sim.counts.writes(), 0, "{mode:?}");
+        if mode == WriteMode::Approval {
+            let event = f
+                .core
+                .activity(None, ActivityFilter::default())
+                .await
+                .unwrap()
+                .events
+                .into_iter()
+                .find(|event| event.operation == "write:res.partner" && event.outcome == "not_sent")
+                .unwrap();
+            let details = f
+                .core
+                .activity_details(event.request_id.unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(details.policy_rules.unwrap().iter().any(|rule| {
+                rule.rule_id == blocked.rule.id && rule.rule_revision == blocked.rule.revision
+            }));
+        }
+    }
+}
+
+#[tokio::test]
+async fn block_rules_override_global_or_local_approvals_in_either_storage_order() {
+    for (approval_scope, block_scope, block_first) in [
+        ("environment", "global", false),
+        ("global", "environment", true),
+    ] {
+        let f = fixture(WriteMode::Approval).await;
+        let approval = save(
+            &f,
+            json!({
+                "action":"approve", "scope":{"kind":approval_scope}, "kind":"method",
+                "method":"write", "context":{"lang":"es_ES"}, "max_records":2
+            }),
+        );
+        let block = save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":block_scope}, "kind":"method",
+                "method":"write", "operations":["write"], "model_selector":{"kind":"all"},
+                "context":{}, "max_records":0
+            }),
+        );
+        if block_first {
+            f.core.save_rule(block).await.unwrap();
+            f.core.save_rule(approval).await.unwrap();
+        } else {
+            f.core.save_rule(approval).await.unwrap();
+            f.core.save_rule(block).await.unwrap();
+        }
+        let error = f
+            .core
+            .run_tool(&f.client, "write", write(json!({"name":"x"})))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "forbidden");
+        assert_eq!(f.sim.counts.writes(), 0);
+        assert!(f.core.approvals().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn field_blocks_reject_mixed_and_relational_writes_without_stripping_payloads() {
+    let f = fixture(WriteMode::Permanent).await;
+    let blocked_rule = f
+        .core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"fields",
+                "method":"all", "operations":["write"], "model_selector":{"kind":"all"},
+                "fields":["password"], "field_selectors":[{"kind":"exact","value":"password"}],
+                "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+
+    // A value equal to the field name is not itself a field reference.
+    f.core
+        .run_tool(&f.client, "write", write(json!({"name":"password"})))
+        .await
+        .unwrap();
+    assert_eq!(f.sim.counts.writes(), 1);
+
+    for payload in [
+        json!({"name":"x", "password":"secret"}),
+        json!({"password":"secret", "tag_ids":[[3,8,0]]}),
+        json!({"line_ids":[[1, 5, {"password":"secret"}]]}),
+    ] {
+        let error = f
+            .core
+            .run_tool(&f.client, "write", write(payload))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "forbidden");
+        assert_eq!(error.outcome, odx_core::Outcome::NotSent);
+    }
+    let denied = f
+        .core
+        .activity(None, ActivityFilter::default())
+        .await
+        .unwrap()
+        .events
+        .into_iter()
+        .find(|event| event.operation == "write:res.partner" && event.outcome == "denied")
+        .unwrap();
+    let details = f
+        .core
+        .activity_details(denied.request_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        details.policy_rules.unwrap(),
+        vec![odx_core::policy::RuleTrace {
+            rule_id: blocked_rule.rule.id,
+            rule_revision: 1
+        }]
+    );
+    assert!(
+        details.request.is_none(),
+        "denied payload values are not audited"
+    );
+    let error = f
+        .core
+        .run_tool(
+            &f.client,
+            "create",
+            json!({"env":"A", "model":"res.partner", "values":[{"name":"ok"},{"password":"secret"}]}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "forbidden");
+    assert_eq!(error.outcome, odx_core::Outcome::NotSent);
+    assert_eq!(f.sim.counts.writes(), 1, "blocked writes must not be sent");
+}
+
+#[tokio::test]
+async fn related_model_blocks_fail_closed_before_simulator() {
+    let f = fixture(WriteMode::Permanent).await;
+    f.core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"fields",
+                "method":"all", "operations":["read","write","delete"],
+                "model":"res.users", "model_selector":{"kind":"exact","value":"res.users"},
+                "fields":["password"], "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+    let before = f
+        .sim
+        .counts
+        .calls()
+        .iter()
+        .filter(|call| call[4] == "search_read" || call[4] == "write")
+        .count();
+    let error = f
+        .core
+        .run_tool(
+            &f.client,
+            "search_read",
+            json!({
+                "env":"A", "model":"res.partner", "fields":["id"],
+                "domain":[["user_id.password", "=", "secret"]]
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.outcome, odx_core::Outcome::NotSent);
+    let error = f
+        .core
+        .run_tool(
+            &f.client,
+            "write",
+            write(json!({"user_ids":[[1,8,{"password":"secret"}]]})),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.outcome, odx_core::Outcome::NotSent);
+    assert_eq!(
+        f.sim
+            .counts
+            .calls()
+            .iter()
+            .filter(|call| call[4] == "search_read" || call[4] == "write")
+            .count(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn human_approval_cannot_bypass_new_password_block_for_relational_delete() {
+    let f = fixture(WriteMode::Approval).await;
+    let (call, pending) = flow::queue(
+        &f.core,
+        &f.client,
+        "write",
+        write(json!({"password":"secret", "tag_ids":[[3,8,0]]})),
+    )
+    .await;
+    f.core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"fields",
+                "method":"all", "operations":["write"], "model_selector":{"kind":"all"},
+                "fields":["password"], "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(f.core.decide(&pending.id, true).await.is_err());
+    assert!(call.await.unwrap().is_err());
+    assert_eq!(f.sim.counts.writes(), 0);
+}
+
+#[tokio::test]
+async fn new_related_model_block_revokes_queued_relational_write() {
+    let f = fixture(WriteMode::Approval).await;
+    let (call, pending) = flow::queue(
+        &f.core,
+        &f.client,
+        "write",
+        write(json!({"user_ids":[[1,8,{"password":"secret"}]]})),
+    )
+    .await;
+    f.core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"method",
+                "method":"all", "operations":["write"],
+                "model":"res.users", "model_selector":{"kind":"exact","value":"res.users"},
+                "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+    assert!(f.core.decide(&pending.id, true).await.is_err());
+    assert!(call.await.unwrap().is_err());
+    assert_eq!(f.sim.counts.writes(), 0);
+}
+
+#[tokio::test]
+async fn delete_blocks_cover_unlink_and_relational_delete_commands() {
+    let f = fixture(WriteMode::Permanent).await;
+    f.core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"method",
+                "method":"all", "operations":["delete"], "model_selector":{"kind":"all"},
+                "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+    for (tool, args) in [
+        (
+            "unlink",
+            json!({"env":"A", "model":"res.partner", "ids":[1]}),
+        ),
+        ("write", write(json!({"tag_ids":[[2, 7, 0]]}))),
+    ] {
+        let error = f.core.run_tool(&f.client, tool, args).await.unwrap_err();
+        assert_eq!(error.code, "forbidden", "{tool}");
+        assert_eq!(error.outcome, odx_core::Outcome::NotSent, "{tool}");
+    }
+    assert_eq!(f.sim.counts.writes(), 0);
+}
+
+#[tokio::test]
+async fn relational_command_detection_avoids_plain_lists_and_catches_short_commands() {
+    let f = fixture(WriteMode::Permanent).await;
+    let saved = f
+        .core
+        .save_rule(save(
+            &f,
+            json!({
+                "action":"block", "scope":{"kind":"global"}, "kind":"method",
+                "method":"all", "operations":["write"],
+                "model":"res.users", "model_selector":{"kind":"exact","value":"res.users"},
+                "context":{}, "max_records":0
+            }),
+        ))
+        .await
+        .unwrap();
+    // Plain integer list on an unrelated model is not a relational command.
+    assert!(
+        f.core
+            .run_tool(&f.client, "write", write(json!({"scores":[1, 2, 3]})))
+            .await
+            .is_ok()
+    );
+    // Short x2many commands (`[4, 9]`, `[5]`) must still fail closed.
+    let short_cmd = f
+        .core
+        .run_tool(&f.client, "write", write(json!({"user_ids":[[4, 9]]})))
+        .await
+        .unwrap_err();
+    assert_eq!(short_cmd.code, "forbidden");
+
+    // Editing a rule cannot change its action.
+    let err = f
+        .core
+        .save_rule(save(
+            &f,
+            json!({
+                "id": saved.rule.id,
+                "action":"approve", "scope":{"kind":"global"}, "kind":"method",
+                "method":"write", "operations":["write"],
+                "model":"res.users", "model_selector":{"kind":"exact","value":"res.users"},
+                "context":{}, "max_records":1
+            }),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "validation.rule.action_immutable");
 }
 
 #[tokio::test]

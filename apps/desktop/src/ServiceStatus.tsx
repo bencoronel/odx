@@ -32,12 +32,14 @@ function ServiceItem({ label, service, unlocked, open, count, details = [] }: { 
 }
 
 /** Keep the status bar mounted across navigation. */
-export default function ServiceStatus({ vault, services, pending = 0, openMcp, openApprovals }: {
+export default function ServiceStatus({ vault, services, pending = 0, openWrites = 0, openMcp, openApprovals, openOpenWrites }: {
   vault: VaultState;
   services: Services | null;
   pending?: number;
+  openWrites?: number;
   openMcp?: () => void;
   openApprovals?: () => void;
+  openOpenWrites?: () => void;
 }) {
   const { t } = useTranslation();
   const unlocked = vault === "unlocked";
@@ -46,8 +48,10 @@ export default function ServiceStatus({ vault, services, pending = 0, openMcp, o
       count={unlocked ? services.connections.length : undefined}
       details={services.connections.length ? services.connections.map((c) => t("service.connectionSince", { client: c.cwd ?? c.client_label ?? t("common.deletedClient"), time: formatDateTime(new Date(c.since), { hour: "2-digit", minute: "2-digit" }) })
         + (c.calls ? ` · ${t("mcpLocal.calls", { count: c.calls })}` : "")) : [t("service.noConnector")]} />}
-    {unlocked
-      ? <button className={`${item} ${button} ml-auto ${pending ? "text-warn" : "hover:text-fg"}`} onClick={openApprovals}><Icon name="check" />{pending ? t("service.pendingApprovals", { count: pending }) : t("service.noPendingApprovals")}</button>
+    {unlocked ? <span className="ml-auto inline-flex items-center gap-1">
+      {openWrites > 0 && <button className={`${item} ${button} text-warn`} data-tip={t("service.openWritesTip")} onClick={openOpenWrites}><Icon name="pencil" />{t("service.openWrites", { count: openWrites })}</button>}
+      <button className={`${item} ${button} ${pending ? "text-warn" : "hover:text-fg"}`} onClick={openApprovals}><Icon name="check" />{pending ? t("service.pendingApprovals", { count: pending }) : t("service.noPendingApprovals")}</button>
+    </span>
       : <span className={`${item} h-full`}>{t("service.unlockToAccess")}</span>}
   </footer>;
 }

@@ -2,6 +2,8 @@ import { useEffect, useState, type ChangeEvent } from "react";
 import SettingsTable from "./SettingsTable";
 import ProxyPanel from "./ProxyPanel";
 import PasswordPage from "./PasswordPage";
+import RulesPanel from "./RulesPanel";
+import TeamBundlePanel from "./TeamBundlePanel";
 import { LanguageSelect } from "./LanguageSelector";
 import { UpdatesPanel } from "./Updates";
 import PanelTitle, { useCollapsed } from "./PanelTitle";
@@ -13,8 +15,8 @@ import { i18n } from "./i18n";
 import { formatNumber } from "./i18n/format";
 import { formatAppError, normalizeAppError, type AppError } from "./appError";
 import { usePreventUnload, type Theme } from "./windowState";
-import { loadEnvironmentDefaults, saveEnvironmentDefaults, type EnvironmentDefaults } from "./EnvironmentForm";
-import { Banner, Button, PanelHeader, Props, Segment, Segmented, navItem, panel, panelBody, settingRow } from "./ui";
+import { loadEnvironmentDefaults, saveEnvironmentDefaults, type EnvironmentDefaults, type FormDraft } from "./EnvironmentForm";
+import { Banner, Button, PanelHeader, Props, Segment, Segmented, panel, panelBody, settingRow } from "./ui";
 
 
 function ThemeSelector({ theme, change }: { theme: Theme; change: (theme: Theme) => void }) {
@@ -26,13 +28,38 @@ function ThemeSelector({ theme, change }: { theme: Theme; change: (theme: Theme)
   </Segmented>;
 }
 
-export default function SettingsPage({ theme, setTheme, busy, pendingCount, onContextSaved, onHeadersSaved, lock, changePassword }: {
+const SHELL_FONT_KEY = "odx.shell.fontSize";
+function readShellFont(): number {
+  try { const n = Number(localStorage.getItem(SHELL_FONT_KEY)); return n >= 10 && n <= 24 ? n : 12; } catch { return 12; }
+}
+function TerminalFontRow() {
+  const { t } = useTranslation();
+  const [size, setSize] = useState(readShellFont);
+  const update = (next: number) => {
+    const clamped = Math.min(24, Math.max(10, next));
+    setSize(clamped);
+    try { localStorage.setItem(SHELL_FONT_KEY, String(clamped)); } catch { /* Optional preference. */ }
+    window.dispatchEvent(new CustomEvent("odx:shell-font", { detail: clamped }));
+  };
+  return <div className={settingRow}>
+    <strong>{t("settingsPage.terminalFontSize")}</strong>
+    <span className="inline-flex items-center gap-1.5">
+      <Button size="sm" iconOnly disabled={size <= 10} aria-label={t("settingsPage.decreaseFontSize")} onClick={() => update(size - 1)}>−</Button>
+      <span className="min-w-[44px] text-center font-mono text-sm tabular-nums">{size} px</span>
+      <Button size="sm" iconOnly disabled={size >= 24} aria-label={t("settingsPage.increaseFontSize")} onClick={() => update(size + 1)}>+</Button>
+      {size !== 12 && <Button size="sm" variant="ghost" onClick={() => update(12)}>{t("settingsPage.resetFontSize")}</Button>}
+    </span>
+  </div>;
+}
+
+export default function SettingsPage({ theme, setTheme, busy, pendingCount, onContextSaved, onHeadersSaved, onConfigureEnvironment, lock, changePassword }: {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   busy: boolean;
   pendingCount: number;
   onContextSaved: () => Promise<void>;
   onHeadersSaved: () => Promise<void>;
+  onConfigureEnvironment?: (draft: FormDraft) => void;
   lock: () => void;
   changePassword: (current: string, next: string) => Promise<void>;
 }) {
@@ -43,18 +70,22 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
   const title = (id: SectionId) => <header className="grid gap-[3px] mb-1">
     <h2 className="text-fg" id={`${id}-title`}>{t(sections.find(([key]) => key === id)![1])}</h2>
   </header>;
-  return <div className="flex-1 min-h-0 grid grid-cols-[200px_minmax(0,1fr)] max-sm:grid-cols-1 max-sm:grid-rows-[auto_1fr]">
-    <nav className="grid content-start gap-px px-2 py-3 border-r border-line bg-bg overflow-y-auto max-sm:grid-flow-col max-sm:auto-cols-max max-sm:overflow-x-auto max-sm:border-r-0 max-sm:border-b" aria-label={t("settingsPage.sections")}>
-      {sections.map(([id, key, icon]) => <button key={id} type="button" className={navItem} aria-current={active === id ? "page" : undefined} onClick={() => setActive(id)}><Icon name={icon} /><span className="flex-1 max-md:hidden">{t(key)}</span></button>)}
+  return <div className="flex-1 min-h-0 flex flex-col">
+    <nav className="flex flex-none items-center gap-1 px-6 py-2 border-b border-line bg-bg overflow-x-auto max-sm:px-3" aria-label={t("settingsPage.sections")}>
+      {sections.map(([id, key, icon]) => <button key={id} type="button"
+        className="inline-flex items-center gap-2 h-7 px-2.5 rounded-md text-fg-2 text-base whitespace-nowrap cursor-pointer hover:bg-hover hover:text-fg aria-[current=page]:bg-active aria-[current=page]:text-fg aria-[current=page]:font-medium aria-[current=page]:[&_.icon]:text-accent-text"
+        aria-current={active === id ? "page" : undefined} onClick={() => setActive(id)}><Icon name={icon} /><span>{t(key)}</span></button>)}
     </nav>
-    <div className="page-scroll flex-1 min-h-0 overflow-auto overscroll-contain px-7 pt-5 pb-8 max-sm:p-4"><div className="settings max-w-[760px]">
+    <div className="page-scroll flex-1 min-h-0 overflow-auto overscroll-contain px-6 pt-5 pb-8 max-sm:p-4"><div className="settings max-w-[760px]">
       <section {...section("general")}>
         {title("general")}
         <section className={panel}>
           <PanelHeader><h3>{t("settingsPage.appearance")}</h3></PanelHeader>
           <div className={settingRow}><strong>{t("settings.language.label")}</strong><LanguageSelect className="w-[260px] max-sm:w-full" /></div>
           <div className={settingRow}><strong>{t("settingsPage.theme")}</strong><ThemeSelector theme={theme} change={setTheme} /></div>
+          <TerminalFontRow />
         </section>
+        <TeamBundlePanel onConfigureEnvironment={onConfigureEnvironment} />
         <UpdatesPanel />
       </section>
       <section {...section("connection")}>
@@ -75,6 +106,7 @@ export default function SettingsPage({ theme, setTheme, busy, pendingCount, onCo
           <PanelHeader><h3>{t("unlock.vault")}</h3></PanelHeader>
           <div className={settingRow}><div><strong>{t("settingsPage.lockNow")}</strong>{pendingCount > 0 && <p className="text-fg-3 text-sm mt-px">{t("settingsPage.lockPending", { count: pendingCount })}</p>}</div><Button disabled={busy} onClick={lock}><Icon name="lock" />{t("navigation.lock")}</Button></div>
         </section>
+        <RulesPanel />
         <PasswordPage busy={busy} change={changePassword} />
       </section>
     </div></div>

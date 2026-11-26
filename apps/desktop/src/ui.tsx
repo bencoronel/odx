@@ -50,7 +50,7 @@ export const searchInput = "pl-[27px] h-6 text-sm";
 /** Masked secrets; on an <input> only the spacing and cursor showed before, since the input's own color won. */
 export const secretMask = "text-fg-2 tracking-[.12em] cursor-default";
 /** Inputs inside a property list while editing; `!` beats the input and Select styles they sit on. */
-export const inlineInput = (mono?: boolean) => cx("h-[26px]! -ml-[9px] w-[calc(100%+9px)]!", mono ? "font-mono text-sm!" : "text-base!");
+export const inlineInput = (mono?: boolean) => cx("h-[28px]! -ml-[9px] w-[calc(100%+9px)]!", mono ? "font-mono text-sm!" : "text-base!");
 
 const pill = "inline-flex items-center h-5 rounded-sm text-xs whitespace-nowrap flex-none";
 export const chip = ({ tone, token }: { tone?: Tone; token?: boolean } = {}) => cx("chip", pill, "font-medium border",
@@ -108,7 +108,7 @@ const propsBase = "grid [&>div]:grid [&>div]:items-center [&>div]:gap-3 [&>div]:
 /** A <dl> of <div><dt/><dd/></div> rows. */
 export function Props({ compact, editing, className, ...props }: { compact?: boolean; editing?: boolean } & ComponentProps<"dl">) {
   return <dl className={cx(propsBase, compact ? "border border-line rounded-md [&>div]:grid-cols-[100px_minmax(0,1fr)] [&>div]:min-h-[30px] [&>div]:px-2.5 [&>div]:py-1"
-    : cx("[&>div]:grid-cols-[140px_minmax(0,1fr)] max-sm:[&>div]:grid-cols-[110px_minmax(0,1fr)] [&>div]:min-h-[34px] [&>div]:px-3", editing ? "[&>div]:py-[3px]" : "[&>div]:py-1.5"), className)} {...props} />;
+    : cx("[&>div]:grid-cols-[140px_minmax(0,1fr)] max-sm:[&>div]:grid-cols-[110px_minmax(0,1fr)] [&>div]:min-h-[40px] [&>div]:px-3.5", editing ? "[&>div]:py-1.5" : "[&>div]:py-1.5"), className)} {...props} />;
 }
 export const valuesTables = "grid gap-2 px-3 py-2.5 border-t border-line";
 export const valuesTable = "values-table w-full text-sm [&_caption]:text-left [&_caption]:pb-1 [&_caption]:text-fg-3 [&_caption]:text-xs [&_:is(th,td)]:px-2 [&_:is(th,td)]:py-[5px] [&_:is(th,td)]:border-b [&_:is(th,td)]:border-line [&_:is(th,td)]:text-left [&_:is(th,td)]:align-top [&_thead_th]:text-fg-3 [&_thead_th]:text-xs [&_thead_th]:font-medium [&_tbody_th]:w-[30%] [&_tbody_th]:font-medium [&_tbody_th]:text-fg-2 [&_tbody_th]:wrap-anywhere [&_code]:text-fg [&_code]:whitespace-pre-wrap [&_code]:wrap-anywhere [&_tr:last-child>*]:border-b-0";
@@ -152,6 +152,6 @@ export const termMenuDetail = "min-w-0 truncate text-fg-3 font-sans text-xs";
 export const contextMenu = "fixed z-1000 grid min-w-[190px] p-[3px] border border-line-strong rounded-md bg-surface shadow-pop [&_button]:flex [&_button]:items-center [&_button]:justify-between [&_button]:gap-4 [&_button]:h-[26px] [&_button]:px-2 [&_button]:rounded-sm [&_button:not(.text-danger,:disabled)]:text-fg [&_button]:text-sm [&_button]:text-left [&_button]:cursor-pointer [&_button:hover:not(:disabled)]:bg-hover [&_button:focus-visible]:bg-hover [&_button:disabled:not(.text-danger)]:text-fg-3 [&_button:disabled]:cursor-default [&_kbd]:border-0 [&_kbd]:bg-transparent [&_kbd]:p-0 [&_kbd]:text-fg-3 [&_kbd]:text-xs [&_hr]:mx-1 [&_hr]:my-[3px] [&_hr]:border-line";
 export const moreMenu = "fixed z-120 grid min-w-[200px] p-[3px] border border-line-strong rounded-md bg-surface shadow-pop [&_button]:flex [&_button]:items-center [&_button]:gap-2 [&_button]:h-[30px] [&_button]:px-2 [&_button]:rounded-sm [&_button:not(.text-danger)]:text-fg-2 [&_button]:text-sm [&_button]:text-left [&_button]:cursor-pointer [&_button:is(:hover,:focus-visible)]:bg-hover [&_button:not(.text-danger):is(:hover,:focus-visible)]:text-fg [&_.icon]:size-3.5";
 
-export const appWindow = "h-dvh flex flex-col overflow-hidden rounded-[10px] bg-bg border border-line [:root[data-window-filled]_&]:rounded-none [:root[data-window-filled]_&]:border-transparent";
+export const appWindow = "h-dvh flex flex-col overflow-hidden rounded-[10px] bg-bg border border-line transition-[border-color] duration-150 [:root[data-window-focused]:not([data-window-filled])_&]:border-line-strong [:root[data-window-filled]_&]:rounded-none [:root[data-window-filled]_&]:border-transparent";
 /** Sidebar and Settings navigation; the label <span> gets `flex-1 max-md:hidden` so narrow windows show icons only. */
 export const navItem = "flex items-center gap-[9px] w-full h-7 px-2 rounded-md text-fg-2 text-base text-left cursor-pointer enabled:hover:bg-hover enabled:hover:text-fg aria-[current=page]:bg-active aria-[current=page]:text-fg aria-[current=page]:font-medium aria-[current=page]:[&_.icon]:text-accent-text disabled:opacity-55 disabled:cursor-default max-md:relative max-md:justify-center max-md:p-0";

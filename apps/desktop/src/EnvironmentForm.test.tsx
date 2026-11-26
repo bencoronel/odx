@@ -12,7 +12,7 @@ afterEach(async () => { cleanup(); await i18n.changeLanguage("en"); localStorage
 it("creates with automatic detection without opening advanced options", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<EnvironmentForm busy={false} tagSuggestions={[]} save={save} cancel={vi.fn()} />);
-  expect(screen.getByText("Advanced options").closest("details")!.open).toBe(false);
+  expect(screen.getByRole("button", { name: /Advanced options/ }).getAttribute("aria-expanded")).toBe("false");
   for (const [label, value] of [[/^Name/, "Dev"], [/^Odoo URL/, "https://odoo.example.test"], [/^Database/, "db"], [/^User/, "user"], [/^API key or password/, "fixture-secret"]] as const) {
     fireEvent.change(screen.getByLabelText(label), { target: { value } });
   }
@@ -60,8 +60,9 @@ it("changes the protocol when editing the connection", async () => {
 it("loads databases on request, tests without a name, suggests the name and saves tags", async () => {
   const save = vi.fn().mockResolvedValue(undefined);
   render(<EnvironmentForm busy={false} tagSuggestions={["Cliente A"]} save={save} cancel={vi.fn()} />);
+  const name = screen.getByLabelText(/^Name/);
+  expect(document.activeElement).toBe(name);
   const url = screen.getByLabelText(/^Odoo URL/);
-  expect(document.activeElement).toBe(url);
   fireEvent.change(url, { target: { value: "https://odoo.example.test" } });
   fireEvent.blur(url);
   // Leaving the URL suggests a name but sends nothing.
@@ -87,6 +88,7 @@ it("loads databases on request, tests without a name, suggests the name and save
   const create = screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement;
   expect(create.disabled).toBe(false);
   fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "Dev" } });
+  fireEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
   const tag = screen.getByRole("combobox", { name: "Add tag" });
   fireEvent.change(tag, { target: { value: "prod" } });
   fireEvent.keyDown(tag, { key: "Enter" });
@@ -148,6 +150,7 @@ it("creates and tests the environment through the proxy chosen in the form", asy
   vi.mocked(ipc.checkDraft).mockResolvedValueOnce({ environment_id: "draft", status: "ok", server_version: "17.0", latency_ms: 42 });
   const save = vi.fn().mockResolvedValue(undefined);
   render(<EnvironmentForm busy={false} tagSuggestions={[]} save={save} cancel={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /Advanced options/ }));
   const proxy = await screen.findByRole("combobox", { name: "Environment proxy" });
   expect(proxy.textContent).toBe("Default (direct)");
   fireEvent.click(proxy);

@@ -72,7 +72,7 @@ async fn reads_respect_grant_validate_before_sending_and_page() {
     let envs = f.core.run_tool(&reader, "envs", json!({})).await.unwrap();
     assert_eq!(
         envs.data,
-        json!([{"name":"A","protocol":"legacy_jsonrpc","write_mode":"read_only","context":{"lang":"es_ES"},"tags":["Cliente A","staging"]}])
+        json!([{"name":"A","project":null,"stage":null,"protocol":"legacy_jsonrpc","write_mode":"read_only","context":{"lang":"es_ES"},"tags":["Cliente A","staging"]}])
     );
     assert!(
         !envs.data.to_string().contains("fixture-secret")

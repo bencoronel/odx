@@ -3,11 +3,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import EnvironmentsPage from "./EnvironmentsPage";
 import { ipc, type Environment } from "./ipc";
 import { envFixture } from "./test/fixtures";
-vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined), rules: vi.fn().mockResolvedValue([]), deleteRule: vi.fn().mockResolvedValue(undefined) } }));
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+vi.mock("./ipc", () => ({ ipc: { faviconPage: vi.fn().mockResolvedValue({ url: "https://example.test/", html: "" }), faviconImage: vi.fn().mockRejectedValue(new Error("no icon")), headers: vi.fn().mockResolvedValue({ headers: [], inherited: [] }), context: vi.fn().mockResolvedValue({ entries: [], inherited: {} }), environmentProxy: vi.fn().mockResolvedValue({ mode: "inherit", id: null }), proxies: vi.fn().mockResolvedValue({ proxies: [], default: null }), tagColors: vi.fn().mockResolvedValue({}), setTagColor: vi.fn().mockResolvedValue(undefined), saveEnvironmentProxy: vi.fn().mockResolvedValue(undefined), setTags: vi.fn().mockResolvedValue(undefined), setOrganization: vi.fn().mockResolvedValue(undefined), rules: vi.fn().mockResolvedValue([]), deleteRule: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("./HealthChip", () => ({ HealthChip: () => null, HealthDot: () => null, checkHealth: vi.fn(), forgetHealth: vi.fn() }));
 afterEach(() => {
   cleanup();
-  for (const key of ["connection", "context", "headers"]) localStorage.removeItem(`odx.collapsed.${key}`);
+  for (const key of ["connection", "context", "headers", "rules"]) localStorage.removeItem(`odx.collapsed.${key}`);
+  localStorage.removeItem("odx.environments.groupBy");
+  localStorage.removeItem("odx.environments.pinned");
 });
 const env = envFixture();
 function page() {
@@ -16,15 +22,15 @@ function page() {
 it("starts with only write mode expanded and hides Edit in collapsed sections", async () => {
   render(page());
   expect(screen.getByRole("radiogroup", { name: "Environment write mode" })).toBeTruthy();
-  for (const title of ["Connection", "Context", "HTTP headers"]) {
-    expect(screen.getByRole("button", { name: `Expand ${title}` }).getAttribute("aria-expanded")).toBe("false");
-  }
+  expect(screen.getByRole("button", { name: "Expand Connection" }).getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-  for (const title of ["Connection"]) {
-    fireEvent.click(screen.getByRole("button", { name: `Expand ${title}` }));
-    expect(within(screen.getByRole("form", { name: title })).getByRole("button", { name: "Edit" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: `Collapse ${title}` }));
-    expect(within(screen.getByRole("form", { name: title })).queryByRole("button", { name: "Edit" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Expand Connection" }));
+  expect(within(screen.getByRole("form", { name: "Connection" })).getByRole("button", { name: "Edit" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Collapse Connection" }));
+  expect(within(screen.getByRole("form", { name: "Connection" })).queryByRole("button", { name: "Edit" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Context & headers" }));
+  for (const title of ["Context", "HTTP headers"]) {
+    expect(screen.getByRole("button", { name: `Expand ${title}` }).getAttribute("aria-expanded")).toBe("false");
   }
   fireEvent.click(screen.getByRole("button", { name: "Expand Context" }));
   await screen.findByLabelText("New context key");
@@ -93,7 +99,7 @@ it("clones and deletes from the list's context menu", async () => {
   render(withProps({ remove }));
   fireEvent.contextMenu(screen.getByRole("option", { name: /Fixture/ }), { clientX: 10, clientY: 10 });
   const menu = screen.getByRole("menu", { name: "Fixture" });
-  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in Terminal", "Duplicate environment", "Add another database", "Delete environment"]);
+  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Open in Terminal", "Pin to top", "Duplicate environment", "Add another database", "Add another user to this DB", "Delete environment"]);
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete environment" }));
   expect(screen.queryByRole("menu", { name: "Fixture" })).toBeNull();
   fireEvent.click(within(dialog()).getByRole("button", { name: "Delete environment" }));
@@ -143,11 +149,12 @@ it("saving other connection fields with an empty secret keeps the stored key, bu
   expect(secret.placeholder).toBe("API key required for the new URL, database or user");
   expect(save.disabled).toBe(true);
   fireEvent.change(screen.getByRole("textbox", { name: "User" }), { target: { value: "fixture-user" } });
-  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  fireEvent.click(within(screen.getByRole("form", { name: "Connection" })).getByRole("combobox", { name: "Protocol" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "XML-RPC" }));
   expect(secret.required).toBe(false);
   fireEvent.click(save);
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-  expect(update.mock.calls[0][1]).toMatchObject({ secret: "", name: "Renamed", login: "fixture-user" });
+  expect(update.mock.calls[0][1]).toMatchObject({ secret: "", protocol: "xmlrpc", login: "fixture-user" });
 });
 
 // Environment proxy.
@@ -170,10 +177,9 @@ it("ignores unchanged submissions and disables Save again when edits are reverte
   await within(proxyForm()).findByRole("combobox", { name: "Environment proxy" });
   const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
   expect(save.disabled).toBe(true);
-  const name = within(proxyForm()).getByRole("textbox", { name: "Name" });
-  fireEvent.change(name, { target: { value: "Another name" } });
-  expect(save.disabled).toBe(false);
-  fireEvent.change(name, { target: { value: "  Fixture  " } });
+  const db = within(proxyForm()).getByRole("textbox", { name: "Database" });
+  fireEvent.change(db, { target: { value: "other-db" } });
+  fireEvent.change(db, { target: { value: "  fixture-db  " } });
   expect(save.disabled).toBe(true);
   chooseOption("Protocol", "XML-RPC");
   expect(save.disabled).toBe(false);
@@ -222,7 +228,7 @@ it("only saves the proxy when it changed", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Expand Connection" }));
   expect(await within(proxyForm()).findByText("Default (direct)")).toBeTruthy();
   fireEvent.click(within(proxyForm()).getByRole("button", { name: "Edit" }));
-  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  chooseOption("Protocol", "XML-RPC");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
   expect(ipc.saveEnvironmentProxy).not.toHaveBeenCalled();
@@ -236,7 +242,7 @@ it("asks before saving the connection when the environment has pending requests"
   editConnection();
   // Editing before the proxy loads still shows the selector when ready.
   expect(await within(proxyForm()).findByRole("combobox", { name: "Environment proxy" })).toBeTruthy();
-  fireEvent.change(within(proxyForm()).getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  chooseOption("Protocol", "XML-RPC");
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   const confirm = await screen.findByRole("alertdialog");
   expect(confirm.textContent).toContain("There is 1 pending approval");
@@ -250,12 +256,12 @@ it("keeps the environment being edited when the filter excludes it", () => {
   const other: Environment = { ...env, id: "other", name: "Other", database: "other-db" };
   render(withProps({ envs: [env, other] }));
   fireEvent.click(within(screen.getByRole("form", { name: "Connection" })).getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Renamed" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Database" }), { target: { value: "renamed-db" } });
   fireEvent.change(screen.getByRole("combobox", { name: "Filter environments" }), { target: { value: "other" } });
-  expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
+  expect((screen.getByRole("textbox", { name: "Database" }) as HTMLInputElement).value).toBe("renamed-db");
   fireEvent.change(screen.getByRole("combobox", { name: "Filter environments" }), { target: { value: "nothing" } });
   expect(screen.getByText("No matching environments")).toBeTruthy();
-  expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Renamed");
+  expect((screen.getByRole("textbox", { name: "Database" }) as HTMLInputElement).value).toBe("renamed-db");
 });
 
 it("filters by any of the chosen write modes and shows them as chips", () => {
@@ -480,11 +486,15 @@ it("edits a rule from the environment, keeping its target, id and current expiry
   const save = vi.fn().mockResolvedValue({});
   Object.assign(ipc, { saveRule: save });
   render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
+  expect(screen.getByRole("combobox", { name: "Scope" })).toHaveProperty("disabled", true);
+  expect(screen.getByRole("combobox", { name: "Action" })).toHaveProperty("disabled", true);
   fireEvent.change(screen.getByRole("textbox", { name: /^Fields/ }), { target: { value: "name email" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith({ id: "r1", environment_id: "fixture", model: "res.partner", method: "write", kind: "fields",
-    fields: ["name", "email"], values: undefined, context: { lang: "es_ES" }, max_records: 5, expires_at: expires }));
+    action: "approve", scope: { kind: "environment" }, name: "", model_selector: { kind: "exact", value: "res.partner" }, operations: ["write"],
+    fields: ["name", "email"], field_selectors: [{ kind: "exact", value: "name" }, { kind: "exact", value: "email" }], values: undefined, context: { lang: "es_ES" }, max_records: 5, expires_at: expires }));
 });
 
 it("never turns an expired rule permanent on edit: it starts with a 24 h expiry", async () => {
@@ -494,10 +504,108 @@ it("never turns an expired rule permanent on edit: it starts with a 24 h expiry"
   const save = vi.fn().mockResolvedValue({});
   Object.assign(ipc, { saveRule: save });
   render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(save).toHaveBeenCalled());
   const expires = Date.parse(save.mock.lastCall![0].expires_at);
   expect(expires - Date.now()).toBeGreaterThan(23 * 3_600_000);
   expect(expires - Date.now()).toBeLessThanOrEqual(24 * 3_600_000);
+});
+
+it("keeps legacy fields when the new selector list is empty", async () => {
+  vi.mocked(ipc.rules).mockResolvedValue([{ id: "legacy", environment_id: "fixture", model: "res.partner", method: "write", kind: "fields", fields: ["name"], field_selectors: [], context: {}, max_records: 1, revision: 1, created_at: "2026-10-01T00:00:00Z", expired: false }] as never);
+  const save = vi.fn().mockResolvedValue({});
+  Object.assign(ipc, { saveRule: save });
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
+  expect(screen.getByRole("textbox", { name: /^Fields/ })).toHaveProperty("value", "name");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ fields: ["name"], field_selectors: [{ kind: "exact", value: "name" }] })));
+});
+
+it("creates a global block from Rules without a pending approval", async () => {
+  const { ipc } = await import("./ipc");
+  const save = vi.fn().mockResolvedValue({});
+  Object.assign(ipc, { saveRule: save });
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Create rule" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).queryByText(/also approve this request/i)).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create rule" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+    environment_id: "fixture", action: "block", scope: { kind: "global" },
+    operations: ["read"], model_selector: { kind: "all" }, method: "all",
+  })));
+  expect(save.mock.lastCall![0].expires_at).toBeNull();
+});
+
+it("creates and re-edits a regex through the real core rule contract", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "odx-rule-form-"));
+  const bridge = (command: unknown) => JSON.parse(execFileSync("cargo", ["run", "--quiet", "--locked", "--manifest-path", "../../Cargo.toml", "-p", "odx-core", "--example", "rule_contract", "--", join(dir, "vault.sqlite3")], { input: JSON.stringify(command), encoding: "utf8" }));
+  const save = vi.fn(async (draft) => bridge({ op: "save", draft }));
+  vi.mocked(ipc.rules).mockImplementation(async () => bridge({ op: "list" }));
+  Object.assign(ipc, { saveRule: save });
+  try {
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Create rule" }));
+  let dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("combobox", { name: "Condition" }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: "Only these fields" }));
+  fireEvent.change(within(dialog).getByRole("textbox", { name: /^Fields/ }), { target: { value: "(?i)(token|password)" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create rule" }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ fields: undefined, field_selectors: [{ kind: "regex", pattern: "(?i)(token|password)" }] })));
+  expect(await screen.findByText("/(?i)(token|password)/")).toBeTruthy();
+  fireEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
+  dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByRole("textbox", { name: /^Fields/ })).toHaveProperty("value", "(?i)(token|password)");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ fields: undefined, field_selectors: [{ kind: "regex", pattern: "(?i)(token|password)" }] })));
+  const stored = bridge({ op: "list" });
+  expect(stored[0]).toEqual(expect.objectContaining({ revision: 2, field_selectors: [{ kind: "regex", pattern: "(?i)(token|password)" }] }));
+  const read = bridge({ op: "verify" });
+  expect(read.fields).toEqual(["id", "name"]);
+  expect(read.data[0]).toEqual(expect.objectContaining({ api_token: "[REDACTED]", password: "[REDACTED]" }));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 120_000);
+
+it("deletes a global rule directly from the environment rule list", async () => {
+  const { ipc } = await import("./ipc");
+  vi.mocked(ipc.rules).mockResolvedValue([{
+    id: "global-rule", environment_id: "", model: "", method: "all", kind: "method",
+    action: "block", scope: { kind: "global" }, operations: ["read"], model_selector: { kind: "all" },
+    context: {}, max_records: 0, revision: 1, created_at: "2026-10-01T00:00:00Z", expired: false,
+  }] as never);
+  const remove = vi.fn().mockResolvedValue(undefined);
+  Object.assign(ipc, { deleteRule: remove });
+  render(page());
+  fireEvent.click(screen.getByRole("button", { name: "Rules" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete rule" }));
+  const confirm = await screen.findByRole("alertdialog");
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete rule" }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith("global-rule"));
+});
+
+it("groups by project ordered by stage (PRO -> PRE -> TEST -> DEV), pins environments and adds another user to the same DB", async () => {
+  const pro: Environment = { ...env, id: "p", name: "Acme Pro", url: "https://erp.acme.test", project: "Acme", stage: "pro" };
+  const pre: Environment = { ...env, id: "r", name: "Acme Pre", url: "https://pre.acme.test", project: "Acme", stage: "pre" };
+  const test: Environment = { ...env, id: "t", name: "Acme Test", url: "https://test.acme.test", project: "Acme", stage: "test" };
+  const setCreating = vi.fn();
+  const draftRef: Parameters<typeof EnvironmentsPage>[0]["draftRef"] = { current: null };
+  render(withProps({ envs: [test, pre, pro], setCreating, draftRef }));
+  const group = screen.getByRole("group", { name: "Acme" });
+  expect(within(group).getAllByRole("option").map((o) => o.dataset.id)).toEqual(["p", "r", "t"]);
+  // Pin Acme Test to top.
+  fireEvent.contextMenu(within(group).getByRole("option", { name: /Acme Test/ }));
+  fireEvent.click(within(screen.getByRole("menu", { name: "Acme Test" })).getByRole("menuitem", { name: "Pin to top" }));
+  const pinned = screen.getByRole("group", { name: "Pinned" });
+  expect(within(pinned).getAllByRole("option").map((o) => o.dataset.id)).toEqual(["t"]);
+  // Add another user to the same DB copies URL, database, project and stage, leaving login empty.
+  fireEvent.contextMenu(within(group).getByRole("option", { name: /Acme Pro/ }));
+  fireEvent.click(within(screen.getByRole("menu", { name: "Acme Pro" })).getByRole("menuitem", { name: "Add another user to this DB" }));
+  await waitFor(() => expect(setCreating).toHaveBeenCalledWith(true));
+  expect(draftRef!.current).toMatchObject({ values: { url: pro.url, database: pro.database, login: "", secret: "" }, project: "Acme", stage: "pro" });
 });

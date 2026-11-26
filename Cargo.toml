@@ -19,6 +19,7 @@ libc = "=0.2.190"
 reqwest = { version = "=0.13.1", default-features = false, features = ["json", "rustls", "socks"] }
 rusqlite = { version = "=0.40.2", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
 quick-xml = { version = "=0.42.0", default-features = false }
+regex = "=1.12.2"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["preserve_order"] }
 thiserror = "=2.0.17"

@@ -1,14 +1,15 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ContextType, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { currentShellFlush, registerShellFlush } from "./shellFlush";
-import { ipc, type AgentRequest, type Environment, type HistoryEntry, type ShellCall } from "./ipc";
+import { ipc, type AgentRequest, type Environment, type HistoryEntry, type SavedViewDraft, type ShellCall } from "./ipc";
 import { highlight } from "./shell/highlight";
-import { exportName, isIds, isM2o, toCsv, toJson, type Link, type Table } from "./table";
+import { exportName, isIds, isM2o, toCsv, toExcelCsv, toJson, type Link, type Table } from "./table";
 import { CellActions, TableBlock } from "./TableBlock";
 import { CommandError, META, VERBS, expandAlias, needsOdoo, parse, searchCall, substitute, unfinished, type Command, type OdooCall } from "./shell/commands";
 import { completions, type Completion } from "./shell/complete";
 import { connectionProblem, outcomeOf, plainEntry, pythonCall, reshapeTable, resultEntries } from "./shell/output";
 import { MAX_LINES, newTab, nextEntryId, peekEntryId, pristine, restore, savedAliases, seedEntryIds, snapshot, tabLabel, type Confirmation, type ConnectionErrorPresentation, type Entry, type NewEntry, type QueuedRun, type AgentRun, type Session, type ShellTab } from "./shell/sessions";
 import { modeIcons, modeLabels, modeShortLabels, modeTone } from "./ModeSelect";
+import { StageBadge } from "./StageBadge";
 import { CallDetails, ValuesTable, methodTone, recordIds, writtenValues } from "./ApprovalDetails";
 import { EnvIcon } from "./EnvIcon";
 import { hostOf } from "./hosts";
@@ -44,11 +45,12 @@ type Menu = Completion & { index: number };
 
 const size = (bytes: number) => bytes < 1024 ? `${formatNumber(bytes)} B` : `${formatNumber(bytes / 1024, { maximumFractionDigits: 1 })} KB`;
 
-export default function ShellPage({ envs, connectTo, command, onConnectHandled, visible = true, agentRequests = [], onAgentHandled }: {
+export default function ShellPage({ envs, connectTo, command, onConnectHandled, visible = true, agentRequests = [], onAgentHandled, onSaveAsView }: {
   /** `command` runs once connected to `connectTo`. */
   envs: Environment[]; connectTo?: string | null; command?: string | null; onConnectHandled?: () => void; visible?: boolean;
   /** Requests from MCP agents (terminal_run, show); each is answered through ipc.agentReply and then reported handled. */
   agentRequests?: AgentRequest[]; onAgentHandled?: (id: number) => void;
+  onSaveAsView?: (draft: SavedViewDraft) => void;
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useWindowState<ShellTab[]>("shell.tabs", () => [], (tabs) => tabs.map((tab) => ({
@@ -115,6 +117,14 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
     const next = Math.min(FONT_RANGE[1], Math.max(FONT_RANGE[0], size));
     setFontSizeState(next);
     try { localStorage.setItem(FONT_KEY, String(next)); } catch { /* per-window only */ }
+  }, []);
+  useEffect(() => {
+    const onFont = (event: Event) => {
+      const next = (event as CustomEvent<number>).detail;
+      if (typeof next === "number" && next >= FONT_RANGE[0] && next <= FONT_RANGE[1]) setFontSizeState(next);
+    };
+    window.addEventListener("odx:shell-font", onFont);
+    return () => window.removeEventListener("odx:shell-font", onFont);
   }, []);
   usePreventUnload(tabs.some((tab) => tab.busy || tab.runs?.length) || renaming !== null);
   const refreshTabs = useCallback(() => setTabs((current) => [...current]), [setTabs]);
@@ -218,6 +228,23 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
         else void ipc.agentReply(request.id, undefined, `no terminal ${request.terminal}`);
         continue;
       }
+      if (request.kind === "table") {
+        const target = all.find((tab) => tab.id === request.terminal);
+        if (!target) { void ipc.agentReply(request.id, undefined, `no terminal ${request.terminal}`); continue; }
+        const maxId = target.session.entries.reduce((max, entry) => Math.max(max, entry.id), 0);
+        const table: Table = { columns: request.columns, rows: request.rows, ...(request.model ? { model: request.model } : {}) };
+        target.session = {
+          ...target.session,
+          entries: [
+            ...target.session.entries,
+            { id: maxId + 1, kind: "input", prompt: `${target.envName}>`, text: request.title, command: false, agent: request.clientLabel },
+            { id: maxId + 2, kind: "table", expanded: false, table, footer: request.footer ?? t("shell.row", { count: request.rows.length }) },
+          ],
+        };
+        setActiveId(target.id);
+        void ipc.agentReply(request.id, { terminal: target.id, rows: request.rows.length, columns: request.columns.length });
+        continue;
+      }
       const env = envs.find((e) => e.id === request.envId);
       const own = all.filter((tab) => tab.envId === request.envId);
       let tab = request.terminal ? all.find((item) => item.id === request.terminal) : own.find((item) => item.id === activeId) ?? own[0];
@@ -303,6 +330,7 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
             if (target) { event.preventDefault(); setActiveId(target.id); document.getElementById(`shell-tab-${target.id}`)?.focus(); }
           }}>
           <Icon name={tab.busy ? "spinner" : "terminal"} className={tab.busy ? "animate-spin" : undefined} />
+          <StageBadge stage={envs.find((e) => e.id === tab.envId)?.stage} compact />
           <span>{tabLabel(tab)}</span>{!tab.defaultName && <>{" "}<span className="text-fg-3 text-xs">{tab.envName}</span></>}
           {tab.unseen && <span className="size-1.5 rounded-full bg-accent" role="status" aria-label={t(tab.unseen === "agent" ? "shell.agentActivity" : "shell.finishedAway")} data-tip={tab.unseen === "agent" ? t("shell.agentActivity") : undefined} />}
         </button>}
@@ -344,19 +372,20 @@ export default function ShellPage({ envs, connectTo, command, onConnectHandled, 
     {tabs.map((tab) => <div className="flex flex-1 min-h-0 min-w-0" key={tab.id} role="tabpanel" id={`shell-panel-${tab.id}`}
       aria-labelledby={`shell-tab-${tab.id}`} hidden={activeId !== tab.id}>
       <ShellSession tab={tab} envs={envs} active={visible && activeId === tab.id} onChange={refreshTabs} onPersist={persist} saveFailed={saveFailed} fontSize={fontSize} setFontSize={setFontSize}
-        aliases={aliases} setAliases={setAliases}
+        aliases={aliases} setAliases={setAliases} onSaveAsView={onSaveAsView}
         queued={tab.runs?.length ?? 0} />
     </div>)}
   </div>;
 }
 
 // `tab` keeps its identity while the session mutates it; the session re-renders from its own state.
-const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, fontSize, setFontSize, aliases, setAliases, queued }: {
+const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, onPersist, saveFailed, fontSize, setFontSize, aliases, setAliases, onSaveAsView, queued }: {
   tab: ShellTab; envs: Environment[]; active: boolean; onChange: () => void; onPersist: () => void; saveFailed: boolean;
   /** How many commands wait in `tab.runs`; a change wakes the session to run them. */
   queued: number;
   fontSize: number; setFontSize: (size: number) => void;
   aliases: Record<string, string>; setAliases: (update: (aliases: Record<string, string>) => Record<string, string>) => void;
+  onSaveAsView?: (draft: SavedViewDraft) => void;
 }) {
   const { t } = useTranslation();
   const mounted = useRef(true);
@@ -436,6 +465,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   /** Ctrl+R as in bash: `query` typed in place of the line, `skip` older matches passed with Ctrl+R, `original` the line before. */
   const [search, setSearch] = useState<{ query: string; skip: number; original: string } | null>(null);
   const [help, setHelp] = useState(false);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   /** Why the last connection attempt failed; formatted when shown, so it follows the language. */
   const [failure, setFailure] = useState<ConnectionErrorPresentation | AppError | null>(null);
   const failureNow = useRef(failure);
@@ -715,9 +745,11 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
     return submit(`read ${target} ${ids[0]} -f *`);
   }
 
-  async function exportTable(table: Table, format: "csv" | "json") {
+  async function exportTable(table: Table, format: "csv" | "csv-excel" | "json") {
     try {
-      const path = await ipc.shellExport(exportName(table, format), format === "csv" ? toCsv(table) : toJson(table));
+      const ext = format === "json" ? "json" : "csv";
+      const content = format === "csv" ? toCsv(table) : format === "csv-excel" ? toExcelCsv(table) : toJson(table);
+      const path = await ipc.shellExport(exportName(table, ext), content);
       text("ok", t("shell.exported", { path }));
     } catch (reason) { fail(reason); }
   }
@@ -768,8 +800,8 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
 
   /** Ctrl+F and font zoom work from the editor and the find bar alike. */
   function onTermKey(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "F1") { event.preventDefault(); setHelp((open) => !open); return; }
-    if (event.key === "Escape" && help) { event.preventDefault(); setHelp(false); field.current?.focus(); return; }
+    if (event.key === "F1") { event.preventDefault(); setSnippetsOpen(false); setHelp((open) => !open); return; }
+    if (event.key === "Escape" && (help || snippetsOpen)) { event.preventDefault(); setHelp(false); setSnippetsOpen(false); field.current?.focus(); return; }
     const inTable = (event.target as HTMLElement).classList.contains("term-scroll");
     if (inTable && event.key === "Escape") { event.preventDefault(); field.current?.focus(); return; }
     // Typing in a table goes back to the editor; the key lands there.
@@ -1149,12 +1181,12 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   // Disconnected and busy can only mean the health check is running: the first connection or a Retry.
   const connecting = retrying || (busy && !connected);
   const connectingLabel = retrying ? t("shell.retrying") : t("shell.connecting");
-  const insert = (command: string) => { setInput(command); setHelp(false); requestAnimationFrame(() => { field.current?.focus(); field.current?.setSelectionRange(command.length, command.length); }); };
+  const insert = (command: string) => { setInput(command); setHelp(false); setSnippetsOpen(false); requestAnimationFrame(() => { field.current?.focus(); field.current?.setSelectionRange(command.length, command.length); }); };
 
   // The output's contexts and toggle stay the same object while typing, so finished entries (memo) do not render again.
   // Their functions read the latest render's closures through this ref.
-  const latest = useRef({ rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, popOut: (_table: Table, _footer?: string) => {} });
-  latest.current = { rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, popOut: (table: Table, footer?: string) => {
+  const latest = useRef({ rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, onSaveAsView, popOut: (_table: Table, _footer?: string) => {} });
+  latest.current = { rerun, fold, follow, inspect, exportTable, tableFields, insert, tabEnv, onSaveAsView, popOut: (table: Table, footer?: string) => {
     // Named after the command that printed it (the input line above the table), then where it ran.
     const at = tab.session.entries.findIndex((entry) => entry.kind === "table" && entry.table === table);
     const source = tab.session.entries.slice(0, at).reverse().find((entry) => entry.kind === "input");
@@ -1171,13 +1203,32 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
   // Field lists and the environment change what cells show: a new value then renders the tables again.
   const cellActions = useMemo((): NonNullable<ContextType<typeof CellActions>> => ({
     follow: (link, inOdoo) => void latest.current.follow(link, inOdoo), inspect: (title, value) => latest.current.inspect(title, value),
-    exportTable: (table, format) => void latest.current.exportTable(table, format), fields: (model) => latest.current.tableFields(model),
+    exportTable: (table, format) => void latest.current.exportTable(table, format),
+    saveAsView: onSaveAsView ? (table) => {
+      const call = table.call;
+      if (!call) return;
+      const domain = Array.isArray(call.args?.[0]) ? (call.args[0] as unknown[]) : [];
+      const rawFields = Array.isArray(call.kwargs?.fields) ? (call.kwargs.fields as string[]) : table.columns;
+      const order = typeof call.kwargs?.order === "string" ? call.kwargs.order : "";
+      const limit = typeof call.kwargs?.limit === "number" && call.kwargs.limit >= 1 && call.kwargs.limit <= 500 ? call.kwargs.limit : 50;
+      latest.current.onSaveAsView?.({
+        name: call.model,
+        description: "",
+        model: call.model,
+        domain,
+        fields: rawFields,
+        order,
+        limit,
+        schedule: null,
+      });
+    } : undefined,
+    fields: (model) => latest.current.tableFields(model),
     callCode: (call) => latest.current.tabEnv ? pythonCall(latest.current.tabEnv, call, tab.session.context) : null,
     insert: (command) => latest.current.insert(command),
     // The window gets the table with what describes it (field labels and types); it shares nothing else with the session.
     popOut: (table, footer) => latest.current.popOut(table, footer), aliases: aliasNames,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session.fields, tabEnv, aliasNames]);
+  }), [session.fields, tabEnv, aliasNames, !!onSaveAsView]);
   const toggle = useCallback((id: number) => update((s) => ({
     ...s, entries: s.entries.map((e) => e.id === id && e.kind === "table" ? { ...e, expanded: !e.expanded } : e),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1215,6 +1266,7 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       {busy && !connecting && <Running since={started} />}
     </div>
     {help && <HelpPanel insert={insert} close={() => { setHelp(false); field.current?.focus(); }} />}
+    {snippetsOpen && <SnippetsPanel currentInput={input} insert={insert} run={(cmd) => { setSnippetsOpen(false); if (!busy && !confirming) void submit(cmd); }} close={() => { setSnippetsOpen(false); field.current?.focus(); }} />}
     {confirming && <WritePreview pending={confirming} answer={(yes) => void submit(yes ? "y" : "n")} />}
     {pasted && <div className={BAR} role="group" aria-label={t("shell.pastedCommands", { count: pasted.length })} onMouseUp={(e) => e.stopPropagation()}>
       <span className="grow">{t("shell.pastedCommands", { count: pasted.length })}</span>
@@ -1254,10 +1306,11 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
       {/* Reverse search keeps one line: the query, then what it finds. */}
       {search && <span className="flex flex-1 min-w-0 leading-[1.9em] whitespace-pre overflow-hidden text-fg-3" role="status">{"': "}{shownMatch && <SearchMatch command={shownMatch.command} query={match ? search.query : ""} />}</span>}
       {/* Where the line goes and what it may do there; a broken connection offers its fix in place. */}
-      {/* Chips share one width (the longest label, "Reintentando…"), so the line does not jump as the state changes; a longer translation is cut. */}
-      {!search && !confirming && <span className="term-status inline-flex flex-none items-center gap-2 max-w-[45%] min-h-[1.9em] font-sans text-xs cursor-default [&_.chip]:justify-start [&_.chip]:w-[11em] [&_.chip]:overflow-hidden [&_.chip]:whitespace-nowrap [&_.chip]:transition-[color,background-color] [&_.chip]:duration-200">
+      {/* Chips share one minimum width (the longest label, "Reintentando…"), so the line does not jump as the state changes without clipping longer translations. */}
+      {!search && !confirming && <span className="term-status inline-flex flex-none items-center gap-2 max-w-[45%] min-h-[1.9em] font-sans text-xs cursor-default [&_.chip]:justify-start [&_.chip]:min-w-[11em] [&_.chip]:whitespace-nowrap [&_.chip]:transition-[color,background-color] [&_.chip]:duration-200">
         {!tabEnv ? <Chip tone="danger">{t("shell.environmentGone")}</Chip> : <>
           {/* The database stays in view whatever the connection state. */}
+          <StageBadge stage={tabEnv.stage} compact />
           <span className="term-db min-w-[6ch] truncate text-fg-3 font-mono">{tabEnv.database}</span>
           {connected ? <span className={cx(chip({ tone: modeTone[tabEnv.write_mode] }), "term-mode")}
             data-tip={[t(modeLabels[tabEnv.write_mode] as "mode.readOnly"), server && `${server.version ? `Odoo ${server.version} · ` : ""}${formatNumber(server.latency)} ms`].filter(Boolean).join("\n")}>
@@ -1269,6 +1322,10 @@ const ShellSession = memo(function ShellSession({ tab, envs, active, onChange, o
               <Icon name="refresh" className={connecting ? "animate-spin" : undefined} />{connecting ? connectingLabel : failure ? t("shell.connectionFailed") : t("shell.notConnected")}
             </button>}
         </>}
+        <IconButton size="sm" aria-label={t("shell.snippetsTitle")} aria-pressed={snippetsOpen} data-tip={t("shell.snippetsTitle")}
+          onClick={() => { setHelp(false); setSnippetsOpen((open) => !open); }}><Icon name="rows" /></IconButton>
+        <IconButton size="sm" aria-label={t("shell.helpTitle")} aria-pressed={help} data-tip={`${t("shell.helpTitle")} · \\?`}
+          onClick={() => { setSnippetsOpen(false); setHelp((open) => !open); }}><span className="font-mono text-xs font-semibold leading-none" aria-hidden="true">?</span></IconButton>
       </span>}
       {hint && !menu && <span className={HINT} role="status">{hint}</span>}
       {saveFailed && !hint && <span className={HINT} role="status">{t("shell.sessionsNotSaved")}</span>}
@@ -1327,7 +1384,7 @@ function EnvironmentMenu({ envs, at, choose, close }: { envs: Environment[]; at:
       <input type="search" className={searchInput} value={query} placeholder={t("shell.findEnvironment")} aria-label={t("shell.findEnvironment")} spellCheck={false} onChange={(e) => setQuery(e.target.value)} /></label>}
     <div className="grid min-h-0 overflow-auto">
       {shown.map((env) => <button key={env.id} type="button" role="menuitem" onClick={() => choose(env)}>
-        <EnvIcon env={env} /><span className="grow truncate">{env.name}</span><StatusDot tone={modeTone[env.write_mode]} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} />
+        <EnvIcon env={env} /><StageBadge stage={env.stage} compact /><span className="grow truncate">{env.name}</span><StatusDot tone={modeTone[env.write_mode]} data-tip={t(modeLabels[env.write_mode] as "mode.readOnly")} />
       </button>)}
       {!shown.length && <p className="px-2 py-1.5 text-fg-3 text-sm">{t("shell.noMatches")}</p>}
     </div>
@@ -1362,6 +1419,100 @@ function HelpPanel({ insert, close }: { insert: (command: string) => void; close
           <button type="button" className="grid gap-px w-full px-2 py-[5px] rounded-sm text-fg text-left cursor-pointer hover:bg-hover" onClick={() => insert(`${item.usage.split(/\s/)[0]} `)}><code className="text-xs">{item.usage}</code>{item.description && <span className="text-fg-3 text-xs">{item.description}</span>}</button>
         </li>)}</ul></section>)}
       {notes.map((note) => <p key={note} className="mt-2 text-fg-3 text-xs leading-[1.5]">{note}</p>)}
+    </div>
+  </aside>;
+}
+
+type ShellSnippet = { id: string; name: string; command: string; builtin?: boolean };
+const SNIPPETS_KEY = "odx.shell.snippets";
+const BUILTIN_SNIPPETS: { id: string; nameKey: string; command: string }[] = [
+  { id: "b-emails", nameKey: "shell.builtinSnippets.failedEmails", command: "search mail.mail -d [('state','=','exception')] -f id,subject,email_to,date -o \"date desc\" -l 30" },
+  { id: "b-crons", nameKey: "shell.builtinSnippets.activeCrons", command: "search ir.cron -d [('active','=',True)] -f id,name,nextcall,numbercall -o \"nextcall asc\" -l 50" },
+  { id: "b-modules", nameKey: "shell.builtinSnippets.installedModules", command: "search ir.module.module -d [('state','=','installed')] -f name,shortdesc,latest_version -o \"name asc\" -l 100" },
+  { id: "b-params", nameKey: "shell.builtinSnippets.systemParams", command: "search ir.config_parameter -f key,value -o \"key asc\" -l 100" },
+  { id: "b-users", nameKey: "shell.builtinSnippets.internalUsers", command: "search res.users -d [('share','=',False),('active','=',True)] -f id,name,login,login_date -o \"login_date desc\" -l 50" },
+  { id: "b-sales", nameKey: "shell.builtinSnippets.recentSales", command: "search sale.order -d [('date_order','>=','{{days_ago:7}}')] -f name,partner_id,amount_total,state,date_order -o \"date_order desc\" -l 30" },
+];
+
+function expandSnippetDates(command: string): string {
+  const now = new Date();
+  const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
+  const fmtDateTime = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
+  return command
+    .replace(/\{\{today\}\}/g, () => fmtDate(now))
+    .replace(/\{\{now\}\}/g, () => fmtDateTime(now))
+    .replace(/\{\{days_ago:(\d+)\}\}/g, (_, n) => fmtDate(new Date(now.getTime() - Number(n) * 86_400_000)))
+    .replace(/\{\{hours_ago:(\d+)\}\}/g, (_, n) => fmtDateTime(new Date(now.getTime() - Number(n) * 3_600_000)));
+}
+
+function readCustomSnippets(): ShellSnippet[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SNIPPETS_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((s): s is ShellSnippet => typeof s?.id === "string" && typeof s?.name === "string" && typeof s?.command === "string") : [];
+  } catch { return []; }
+}
+
+function SnippetsPanel({ currentInput, insert, run, close }: { currentInput: string; insert: (command: string) => void; run: (command: string) => void; close: () => void }) {
+  const { t } = useTranslation();
+  const [custom, setCustom] = useState<ShellSnippet[]>(readCustomSnippets);
+  const [query, setQuery] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [cmd, setCmd] = useState(currentInput.trim());
+
+  const saveCustom = (next: ShellSnippet[]) => {
+    setCustom(next);
+    try { localStorage.setItem(SNIPPETS_KEY, JSON.stringify(next)); } catch { /* optional */ }
+  };
+
+  const all: ShellSnippet[] = [
+    ...custom,
+    ...BUILTIN_SNIPPETS.map((b) => ({ id: b.id, name: t(b.nameKey as never), command: b.command, builtin: true })),
+  ];
+  const q = query.trim().toLowerCase();
+  const shown = all.filter((s) => !q || s.name.toLowerCase().includes(q) || s.command.toLowerCase().includes(q));
+
+  return <aside className="term-help absolute top-2 right-2 bottom-[52px] z-6 flex flex-col w-[min(460px,calc(100%-16px))] border border-line-strong rounded-md bg-surface shadow-pop font-sans cursor-default" aria-label={t("shell.snippetsTitle")} onMouseUp={(e) => e.stopPropagation()}>
+    <div className={PANEL_HEAD}>
+      <span className={PANEL_TITLE}>{t("shell.snippetsTitle")}</span>
+      <span className="flex items-center gap-1">
+        <Button size="sm" variant={adding ? "accent" : "ghost"} onClick={() => { setAdding((v) => !v); if (!adding) setCmd(currentInput.trim()); }}><Icon name="plus" />{t("shell.saveSnippet")}</Button>
+        <IconButton size="sm" aria-label={t("common.close")} onClick={close}><Icon name="x" /></IconButton>
+      </span>
+    </div>
+    <div className="px-3 pt-2 pb-1.5 border-b border-line grid gap-2">
+      <label className="relative block"><Icon name="search" className={searchIcon} />
+        <input type="search" className={searchInput} value={query} placeholder={t("shell.searchSnippets")} aria-label={t("shell.searchSnippets")} onChange={(e) => setQuery(e.target.value)} /></label>
+      {adding && <form className="grid gap-1.5 p-2 rounded-md border border-line bg-surface-2" onSubmit={(e) => {
+        e.preventDefault();
+        if (!name.trim() || !cmd.trim()) return;
+        saveCustom([{ id: `u-${Date.now()}`, name: name.trim(), command: cmd.trim() }, ...custom]);
+        setName("");
+        setCmd("");
+        setAdding(false);
+      }}>
+        <input autoFocus maxLength={80} placeholder={t("shell.snippetName")} value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="mono text-xs!" placeholder="search res.partner -l 20" value={cmd} onChange={(e) => setCmd(e.target.value)} />
+        <div className="flex justify-end gap-1.5">
+          <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>{t("common.cancel")}</Button>
+          <Button size="sm" variant="primary" type="submit" disabled={!name.trim() || !cmd.trim()}>{t("common.save")}</Button>
+        </div>
+      </form>}
+    </div>
+    <div className="flex-1 min-h-0 overflow-auto px-2 py-1.5">
+      <ul className="grid gap-1">
+        {shown.map((snippet) => <li key={snippet.id} className="group flex items-start gap-1.5 px-2 py-1.5 rounded-sm hover:bg-hover">
+          <button type="button" className="grid gap-0.5 flex-1 min-w-0 text-left cursor-pointer bg-transparent border-0 p-0" onClick={() => insert(expandSnippetDates(snippet.command))}>
+            <span className="text-xs font-medium text-fg truncate">{snippet.name}</span>
+            <code className="text-2xs text-fg-3 truncate">{snippet.command}</code>
+          </button>
+          <span className="flex items-center gap-0.5 flex-none">
+            <IconButton size="sm" aria-label={t("views.run")} data-tip={t("views.run")} onClick={() => run(expandSnippetDates(snippet.command))}><Icon name="arrow" /></IconButton>
+            {!snippet.builtin && <IconButton size="sm" aria-label={t("common.delete")} data-tip={t("common.delete")} onClick={() => saveCustom(custom.filter((c) => c.id !== snippet.id))}><Icon name="trash" /></IconButton>}
+          </span>
+        </li>)}
+        {shown.length === 0 && <li className="px-2 py-4 text-center text-fg-3 text-xs">{t("shell.noMatches")}</li>}
+      </ul>
     </div>
   </aside>;
 }

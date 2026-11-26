@@ -6,6 +6,8 @@ use super::*;
 pub(super) struct SavedWindow {
     pub(super) bounds: Option<(i32, i32, u32, u32)>,
     pub(super) maximized: bool,
+    #[serde(default)]
+    pub(super) table_size: Option<(u32, u32)>,
 }
 
 pub(super) fn saved_window_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -27,22 +29,46 @@ pub fn place_main(app: &AppHandle) {
         fit_to_monitor(&window);
         return;
     };
+    if let Some((tw, th)) = saved.table_size {
+        app.state::<Arc<Desktop>>()
+            .window
+            .lock()
+            .unwrap()
+            .table_size = Some((tw.clamp(420, 3840), th.clamp(260, 2160)));
+    }
     match saved.bounds {
         Some((x, y, width, height)) => {
-            let _ = window.set_size(tauri::PhysicalSize::new(width, height));
-            // A monitor unplugged since the last session would leave the window off-screen.
-            let visible = window
-                .available_monitors()
-                .unwrap_or_default()
-                .iter()
-                .any(|monitor| {
-                    let area = monitor.work_area();
-                    (area.position.x..area.position.x + area.size.width as i32).contains(&x)
-                        && (area.position.y..area.position.y + area.size.height as i32).contains(&y)
-                });
-            if visible {
-                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            let monitors = window.available_monitors().unwrap_or_default();
+            let target = monitors.iter().find(|monitor| {
+                let area = monitor.work_area();
+                (area.position.x..area.position.x + area.size.width as i32).contains(&x)
+                    && (area.position.y..area.position.y + area.size.height as i32).contains(&y)
+            });
+            if let Some(monitor) = target {
+                let area = monitor.work_area();
+                let clamped_w = width.min(area.size.width).max(900.min(area.size.width));
+                let clamped_h = height.min(area.size.height).max(650.min(area.size.height));
+                let max_x = area.position.x + (area.size.width.saturating_sub(clamped_w)) as i32;
+                let max_y = area.position.y + (area.size.height.saturating_sub(clamped_h)) as i32;
+                let clamped_x = x.clamp(area.position.x, max_x.max(area.position.x));
+                let clamped_y = y.clamp(area.position.y, max_y.max(area.position.y));
+                let _ = window.set_size(tauri::PhysicalSize::new(clamped_w, clamped_h));
+                let _ = window.set_position(tauri::PhysicalPosition::new(clamped_x, clamped_y));
             } else {
+                // Monitor unplugged or layout changed: clamp size to primary/available monitor and center.
+                if let Some(monitor) = window
+                    .primary_monitor()
+                    .ok()
+                    .flatten()
+                    .or_else(|| monitors.into_iter().next())
+                {
+                    let area = monitor.work_area();
+                    let clamped_w = width.min(area.size.width).max(900.min(area.size.width));
+                    let clamped_h = height.min(area.size.height).max(650.min(area.size.height));
+                    let _ = window.set_size(tauri::PhysicalSize::new(clamped_w, clamped_h));
+                } else {
+                    let _ = window.set_size(tauri::PhysicalSize::new(width, height));
+                }
                 let _ = window.center();
             }
         }
@@ -90,6 +116,7 @@ pub(super) fn save_main_placement(app: &AppHandle) {
         SavedWindow {
             bounds: state.bounds.map(|(p, s)| (p.x, p.y, s.width, s.height)),
             maximized: state.maximized,
+            table_size: state.table_size,
         }
     };
     let Some(path) = saved_window_path(app) else {
@@ -166,4 +193,35 @@ pub fn remember_main_bounds(window: &tauri::Window) {
             .unwrap()
             .remember_bounds(position, size, maximized);
     }
+}
+
+/// Remember the last logical size of any table window so newly opened table windows match it.
+pub fn remember_table_size(window: &tauri::Window) {
+    if !window.label().starts_with("table-")
+        || window.is_minimized().unwrap_or(true)
+        || window.is_maximized().unwrap_or(true)
+        || window.is_fullscreen().unwrap_or(true)
+    {
+        return;
+    }
+    if let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
+        let logical = size.to_logical::<f64>(scale);
+        let w = (logical.width.round() as u32).clamp(420, 3840);
+        let h = (logical.height.round() as u32).clamp(260, 2160);
+        window
+            .state::<Arc<Desktop>>()
+            .window
+            .lock()
+            .unwrap()
+            .table_size = Some((w, h));
+    }
+}
+
+pub(super) fn saved_table_size(app: &AppHandle) -> (f64, f64) {
+    app.state::<Arc<Desktop>>()
+        .window
+        .lock()
+        .unwrap()
+        .table_size
+        .map_or((960.0, 620.0), |(w, h)| (w as f64, h as f64))
 }

@@ -240,6 +240,17 @@ pub async fn environment_tags_set(
         .map_err(AppError::from)
 }
 #[tauri::command]
+pub async fn environment_organization_set(
+    id: String,
+    project: Option<String>,
+    stage: Option<odx_core::Stage>,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::EnvironmentView, AppError> {
+    core.set_environment_organization(&id, project.as_deref(), stage)
+        .await
+        .map_err(AppError::from)
+}
+#[tauri::command]
 pub async fn clients_list(
     core: State<'_, Arc<Core>>,
 ) -> Result<Vec<odx_core::ClientView>, AppError> {
@@ -314,6 +325,31 @@ pub async fn rule_save(
 #[tauri::command]
 pub async fn rule_delete(id: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
     core.delete_rule(&id).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn views_list(core: State<'_, Arc<Core>>) -> Result<Vec<odx_core::SavedView>, AppError> {
+    core.views().await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn view_save(
+    draft: odx_core::SavedViewDraft,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::SavedView, AppError> {
+    core.save_view(draft).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn view_delete(id: String, core: State<'_, Arc<Core>>) -> Result<(), AppError> {
+    core.delete_view(&id).await.map_err(AppError::from)
+}
+#[tauri::command]
+pub async fn view_run(
+    id: String,
+    environment_id: String,
+    core: State<'_, Arc<Core>>,
+) -> Result<odx_core::ViewRunResult, AppError> {
+    core.run_view(&id, &environment_id)
+        .await
+        .map_err(AppError::from)
 }
 
 #[tauri::command]
@@ -592,6 +628,11 @@ pub fn agent_reply(
 #[tauri::command]
 pub fn desktop_take_approval(app: tauri::AppHandle) -> Option<String> {
     crate::desktop::take_open_approval(&app)
+}
+
+#[tauri::command]
+pub fn desktop_take_page(app: tauri::AppHandle) -> Option<String> {
+    crate::desktop::take_open_page(&app)
 }
 
 #[tauri::command]

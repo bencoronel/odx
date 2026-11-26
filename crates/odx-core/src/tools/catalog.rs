@@ -55,7 +55,7 @@ pub(crate) struct Tool {
 }
 
 /// Every tool, in alphabetical order: the one list MCP, HTTP and run_tool share.
-pub(crate) const TOOLS: [Tool; 25] = [
+pub(crate) const TOOLS: [Tool; 31] = [
     Tool {
         name: "access",
         title: "Permissions",
@@ -99,10 +99,18 @@ pub(crate) const TOOLS: [Tool; 25] = [
     Tool {
         name: "envs",
         title: "Environments",
-        description: "Odoo environments granted to this client, with their write modes and tags. Makes no Odoo calls.",
+        description: "Odoo environments granted to this client, with their project, stage (dev/test/pre/pro), write modes and tags. Makes no Odoo calls.",
         read_only: true,
         destructive: false,
         access: Access::Any,
+    },
+    Tool {
+        name: "export_csv",
+        title: "Export table as CSV",
+        description: "Save a custom/computed table directly to the user's Downloads folder as a UTF-8 CSV file (comma or semicolon for Excel, never overwriting existing files). Use this when the user wants a spreadsheet-ready file from derived data.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
     },
     Tool {
         name: "fields",
@@ -132,6 +140,14 @@ pub(crate) const TOOLS: [Tool; 25] = [
         name: "name_search",
         title: "Search by name",
         description: "Search names as in Odoo dropdowns. No offset; refine the query when more matches exist.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "open_record",
+        title: "Open in browser",
+        description: "Open an Odoo environment or a specific record (model + id) in the user's web browser using the environment's saved URL. Never exposes credentials.",
         read_only: true,
         destructive: false,
         access: Access::Read,
@@ -193,6 +209,14 @@ pub(crate) const TOOLS: [Tool; 25] = [
         access: Access::Read,
     },
     Tool {
+        name: "show_table",
+        title: "Show custom table in Odx",
+        description: "Open a native interactive, filterable, sortable, exportable (CSV/JSON/TSV/Markdown) table window in the Odx desktop app with arbitrary or computed columns and rows (e.g. fields parsed out of JSON/args, joined records, grouped summaries). Use this whenever you want to present derived data that a raw Odoo model read cannot show directly.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
         name: "terminal_read",
         title: "Terminal history",
         description: "Recent commands of one Odx Terminal tab with their output, newest first: text lines, errors and tables (columns and rows). Commands an agent ran carry its name. Makes no Odoo calls.",
@@ -228,6 +252,30 @@ pub(crate) const TOOLS: [Tool; 25] = [
         name: "view",
         title: "View",
         description: "Read the connected user's final view architecture and paginated inheritance chain. q filters lines and marks matching views. Readable views may differ from applied views due to groups or inactive views.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "view_run",
+        title: "Run saved view",
+        description: "Execute one of Odx's saved views (by id or name) on a granted environment, expanding dynamic date placeholders ({{today}}, {{days_ago:N}}, etc.) and returning its rows and total count.",
+        read_only: true,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "view_save",
+        title: "Save reusable view",
+        description: "Create or update a read-only saved view in Odx (model, domain with optional date placeholders, fields, order, limit). Makes no Odoo calls.",
+        read_only: false,
+        destructive: false,
+        access: Access::Read,
+    },
+    Tool {
+        name: "views",
+        title: "Saved views",
+        description: "List Odx's saved views and the latest monitor results/alerts for environments granted to this client. Makes no Odoo calls.",
         read_only: true,
         destructive: false,
         access: Access::Read,
@@ -386,6 +434,12 @@ impl Core {
             "terminal_read" => self.tool_terminal_read(&client, arguments).await,
             "terminal_run" => self.tool_terminal_run(&client, arguments).await,
             "show" => self.tool_show(&client, arguments).await,
+            "show_table" => self.tool_show_table(&client, arguments).await,
+            "open_record" => self.tool_open_record(&client, arguments).await,
+            "export_csv" => self.tool_export_csv(&client, arguments).await,
+            "views" => self.tool_views(&client, arguments).await,
+            "view_run" => self.tool_view_run(&client, arguments).await,
+            "view_save" => self.tool_view_save(&client, arguments).await,
             _ => Err(ToolError::invalid(format!("unknown tool: {name}"))),
         }
     }
@@ -477,6 +531,8 @@ impl Core {
             .map(|e| {
                 json!({
                     "name": e.name,
+                    "project": e.project,
+                    "stage": e.stage,
                     "protocol": if e.protocol == crate::config::Protocol::Auto { e.detected_protocol.unwrap_or(e.protocol) } else { e.protocol },
                     "write_mode": e.effective_write_mode(now),
                     "context": e.context,
@@ -603,19 +659,293 @@ impl Core {
             &Value::Object(kwargs.clone()),
         )
         .await?;
-        let operation = format!("{method}:{model}");
-        let audit = self
-            .audit_request(
-                &uuid::Uuid::new_v4().to_string(),
-                AuditDetails::call(
-                    env,
+        let (policy_rules, now) = self
+            .policy_snapshot(&env.id)
+            .await
+            .map_err(ToolError::from)?;
+        let mut positional = args(None);
+        let domain_paths = positional
+            .as_array()
+            .map(|args| {
+                policy::domain_paths(&policy::EffectiveCall {
+                    environment_id: &env.id,
                     model,
                     method,
-                    &args(None),
-                    &Value::Object(kwargs.clone()),
-                ),
+                    args,
+                    kwargs: &kwargs,
+                })
+            })
+            .unwrap_or_default();
+        let mut resolved_domain = None;
+        if !domain_paths.is_empty() && policy::has_any_read_block(&policy_rules, &env.id, now) {
+            let mut relations = Vec::new();
+            for path in domain_paths {
+                let mut current = model.to_owned();
+                let parts: Vec<_> = path.split('.').collect();
+                if parts.len() > 16
+                    || parts
+                        .iter()
+                        .any(|part| !crate::tools::args::is_identifier(part, false))
+                {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "invalid relational domain path",
+                        Outcome::NotSent,
+                    ));
+                }
+                for (index, field) in parts.iter().enumerate() {
+                    let metadata = Box::pin(self.read_call(
+                        client,
+                        target,
+                        &current,
+                        "fields_get",
+                        json!([]),
+                        Map::from_iter([
+                            ("allfields".into(), json!([field])),
+                            ("attributes".into(), json!(["type", "relation"])),
+                        ]),
+                        call_context,
+                        upstream,
+                    ))
+                    .await?;
+                    let Some(definition) = metadata.get(*field).and_then(Value::as_object) else {
+                        let traces = policy::trace_field_rules(
+                            &policy_rules,
+                            &env.id,
+                            &current,
+                            "fields_get",
+                            &[(*field).to_owned()],
+                            now,
+                        );
+                        self.log_as(
+                            Some(&client.client_id),
+                            &env.id,
+                            &format!("{method}:{model}"),
+                            "denied",
+                            AuditDetails {
+                                error_code: Some("app.denied".into()),
+                                policy_rules: (!traces.is_empty()).then_some(traces),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .map_err(ToolError::from)?;
+                        return Err(ToolError::new(
+                            "forbidden",
+                            "relation metadata unavailable",
+                            Outcome::NotSent,
+                        ));
+                    };
+                    relations.push((current.clone(), (*field).to_owned()));
+                    if index + 1 < parts.len() {
+                        let relation = definition
+                            .get("relation")
+                            .and_then(Value::as_str)
+                            .filter(|v| crate::tools::args::valid_model(v))
+                            .ok_or_else(|| {
+                                ToolError::new(
+                                    "forbidden",
+                                    "relation target unavailable",
+                                    Outcome::NotSent,
+                                )
+                            })?;
+                        current = relation.to_owned();
+                    }
+                }
+            }
+            resolved_domain = Some(relations);
+        }
+        let field_rule = policy::has_field_block(&policy_rules, &env.id, model, method, now);
+        let mut redacted_fields = Vec::<String>::new();
+        if field_rule && method != "fields_get" && !policy::is_value_free_read(method) {
+            let values = positional.as_array_mut().ok_or_else(|| {
+                ToolError::new(
+                    "forbidden",
+                    "ambiguous read arguments under field protection",
+                    Outcome::NotSent,
+                )
+            })?;
+            let (field_index, named_fields) = match method {
+                "read" if kwargs.contains_key("fields") => {
+                    if values.len() > 1 {
+                        return Err(ToolError::new(
+                            "forbidden",
+                            "ambiguous field selection under field protection",
+                            Outcome::NotSent,
+                        ));
+                    }
+                    (None, true)
+                }
+                "read" => (Some(1usize), false),
+                "search_read" if kwargs.contains_key("fields") => {
+                    if values.len() > 1 {
+                        return Err(ToolError::new(
+                            "forbidden",
+                            "ambiguous field selection under field protection",
+                            Outcome::NotSent,
+                        ));
+                    }
+                    (None, true)
+                }
+                "search_read" => (Some(1usize), false),
+                _ => {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "this read method cannot be safely filtered under field protection",
+                        Outcome::NotSent,
+                    ));
+                }
+            };
+            let request_fields = if named_fields {
+                if kwargs.get("fields").is_some_and(|v| !v.is_array()) {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "ambiguous field selection under field protection",
+                        Outcome::NotSent,
+                    ));
+                }
+                kwargs.get("fields").and_then(Value::as_array)
+            } else {
+                let max_positional = if method == "search_read" { 5 } else { 2 };
+                if kwargs.contains_key("fields") || values.len() > max_positional {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "ambiguous field selection under field protection",
+                        Outcome::NotSent,
+                    ));
+                }
+                field_index
+                    .and_then(|index| values.get(index))
+                    .and_then(Value::as_array)
+            };
+            let Some(request_fields) = request_fields else {
+                return Err(ToolError::new(
+                    "forbidden",
+                    "explicit fields are required when field protection applies",
+                    Outcome::NotSent,
+                ));
+            };
+            let mut allowed = Vec::new();
+            for value in request_fields {
+                let Some(field) = value.as_str() else {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "invalid field selection under field protection",
+                        Outcome::NotSent,
+                    ));
+                };
+                if policy::field_is_blocked(&policy_rules, &env.id, model, method, field, now) {
+                    redacted_fields.push(field.to_owned());
+                } else {
+                    allowed.push(value.clone());
+                }
+            }
+            if allowed.is_empty() {
+                let details = AuditDetails {
+                    error_code: Some("app.denied".into()),
+                    policy_rules: Some(policy::trace_field_rules(
+                        &policy_rules,
+                        &env.id,
+                        model,
+                        method,
+                        &redacted_fields,
+                        now,
+                    )),
+                    ..Default::default()
+                };
+                self.log_as(
+                    Some(&client.client_id),
+                    &env.id,
+                    &format!("{method}:{model}"),
+                    "denied",
+                    details,
+                )
+                .await
+                .map_err(ToolError::from)?;
+                return Err(ToolError::new(
+                    "forbidden",
+                    "all requested fields are blocked by a rule",
+                    Outcome::NotSent,
+                ));
+            }
+            if named_fields {
+                kwargs.insert("fields".into(), Value::Array(allowed));
+            } else {
+                values[1] = Value::Array(allowed);
+            }
+        }
+        if let Some(positional_args) = positional.as_array() {
+            let call = policy::EffectiveCall {
+                environment_id: &env.id,
+                model,
+                method,
+                args: positional_args,
+                kwargs: &kwargs,
+            };
+            if let Some(block_rule) = policy::matching_block_with_domain(
+                &policy_rules,
+                &call,
+                &policy::Effect::Read,
+                now,
+                resolved_domain.is_some(),
             )
+            .or_else(|| {
+                resolved_domain.as_ref().and_then(|relations| {
+                    policy::matching_read_relations(&policy_rules, &call, relations, now)
+                })
+            }) {
+                let details = AuditDetails {
+                    error_code: Some("app.denied".into()),
+                    policy_rules: Some(vec![policy::trace_rule(block_rule)]),
+                    ..Default::default()
+                };
+                self.log_as(
+                    Some(&client.client_id),
+                    &env.id,
+                    &format!("{method}:{model}"),
+                    "denied",
+                    details,
+                )
+                .await
+                .map_err(ToolError::from)?;
+                return Err(ToolError::new(
+                    "forbidden",
+                    "operation blocked by a rule",
+                    Outcome::NotSent,
+                ));
+            }
+        }
+        let operation = format!("{method}:{model}");
+        let mut audit_details = AuditDetails::call(
+            env,
+            model,
+            method,
+            &positional,
+            &Value::Object(kwargs.clone()),
+        );
+        if !redacted_fields.is_empty() {
+            audit_details.redacted_fields = Some(redacted_fields.clone());
+            audit_details.policy_rules = Some(policy::trace_field_rules(
+                &policy_rules,
+                &env.id,
+                model,
+                method,
+                &redacted_fields,
+                now,
+            ));
+        }
+        let audit = self
+            .audit_request(&uuid::Uuid::new_v4().to_string(), audit_details)
             .await?;
+        let dispatch_args = args;
+        let redacted_for_dispatch = redacted_fields.clone();
+        let dispatched_kwargs = kwargs.clone();
+        let filtered_positional_fields = positional
+            .as_array()
+            .and_then(|values| values.get(1))
+            .cloned();
+        let policy_args = positional.clone();
+        let policy_kwargs = kwargs.clone();
         let call = AuditedCall {
             actor: Some(&client.client_id),
             env,
@@ -624,14 +954,75 @@ impl Core {
             operation: &operation,
             model,
             method,
-            args: |uid| args(Some(uid)),
+            args: move |uid: i64| {
+                let mut call_args = dispatch_args(Some(uid));
+                if !redacted_for_dispatch.is_empty()
+                    && matches!(method, "read" | "search_read")
+                    && !dispatched_kwargs.contains_key("fields")
+                    && let Some(values) = call_args.as_array_mut()
+                    && values.len() > 1
+                    && let Some(filtered_fields) = &filtered_positional_fields
+                {
+                    values[1] = filtered_fields.clone();
+                }
+                call_args
+            },
             kwargs: Value::Object(kwargs),
             write: false,
             recorded: false,
             max_response,
+            initial_policy: Some((policy_rules.clone(), now)),
+            read_relations: resolved_domain.clone(),
         };
         let (value, _) = self
-            .audited_call(audit, call, upstream, || async { Ok(env.clone()) })
+            .audited_call(audit, call, upstream, || async {
+                let (current_rules, current_time) = self.policy_snapshot(&env.id).await?;
+                let Some(policy_args) = policy_args.as_array() else {
+                    return Err(OdxError::Denied);
+                };
+                let effective = policy::EffectiveCall {
+                    environment_id: &env.id,
+                    model,
+                    method,
+                    args: policy_args,
+                    kwargs: &policy_kwargs,
+                };
+                let block_rule = policy::matching_block_with_domain(
+                    &current_rules,
+                    &effective,
+                    &policy::Effect::Read,
+                    current_time,
+                    resolved_domain.is_some(),
+                )
+                .or_else(|| {
+                    resolved_domain.as_ref().and_then(|relations| {
+                        policy::matching_read_relations(
+                            &current_rules,
+                            &effective,
+                            relations,
+                            current_time,
+                        )
+                    })
+                })
+                .or_else(|| {
+                    (policy::has_field_block(&current_rules, &env.id, model, method, current_time)
+                        && !policy::has_explicit_read_fields(policy_args, &policy_kwargs, method))
+                    .then(|| {
+                        policy::first_field_block(
+                            &current_rules,
+                            &env.id,
+                            model,
+                            method,
+                            current_time,
+                        )
+                    })
+                    .flatten()
+                });
+                if let Some(rule) = block_rule {
+                    return Err(OdxError::RuleDenied(vec![policy::trace_rule(rule)]));
+                }
+                Ok(env.clone())
+            })
             .await?;
         Ok(value)
     }
@@ -1043,7 +1434,11 @@ impl Core {
                     }
                     return Ok(out);
                 }
-                let effect = mutations::call_effect(&method, &positional, &kwargs, &[], 0)?;
+                let effect = if READ_METHODS.contains(&method.as_str()) {
+                    policy::Effect::Read
+                } else {
+                    mutations::call_effect(&method, &positional, &kwargs, &[], 0)?
+                };
                 (method, positional, kwargs, effect)
             }
         };
@@ -1262,7 +1657,7 @@ mod tests {
     #[test]
     fn published_catalog_is_sorted_complete_and_self_contained() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 25);
+        assert_eq!(defs.len(), 31);
         assert!(defs.iter().find(|d| d.name == "write").unwrap().destructive);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         let mut sorted = names.clone();

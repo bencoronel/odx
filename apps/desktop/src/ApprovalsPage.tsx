@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Environment, Pending } from "./ipc";
 import { EnvIcon } from "./EnvIcon";
+import { StageBadge } from "./StageBadge";
 import { ListResizer, useListWidth } from "./ListResizer";
 import { Icon } from "./Icon";
 import SearchField from "./SearchField";
@@ -38,6 +39,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   const [nudge, setNudge] = useState(0);
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
+  const [rawOpen, setRawOpen] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [ruleFor, setRuleFor] = useState<Pending | null>(null);
   const query = filter.trim().toLowerCase();
@@ -159,15 +161,15 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
   const env = item && envs.find((e) => e.id === item.environment_id);
   const ids = item && recordIds(item);
   const values = item && writtenValues(item);
+  if (pending.length === 0) return <div className={empty}>
+    <span className={emptyIcon("ok")}><Icon name="check" /></span>
+    <h2>{t("approvals.emptyTitle")}</h2>
+  </div>;
   return <div className={split} style={{ "--list-w": `${listWidth}px` } as CSSProperties}>
     <aside className={listPane} aria-label={t("approvals.listLabel")}>
       <ListResizer width={listWidth} setWidth={setListWidth} label={t("approvals.resizeList")} />
       {toolbar}
-      {pending.length === 0 ? <div className={empty}>
-        <span className={emptyIcon("ok")}><Icon name="check" /></span>
-        <h2>{t("approvals.emptyTitle")}</h2>
-      </div>
-      : !item ? <ul className={envList}><li className={listEmpty}><span className={listEmptyIcon}><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><Button size="sm" className="mt-2" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</Button></li></ul>
+      {!item ? <ul className={envList}><li className={listEmpty}><span className={listEmptyIcon}><Icon name="search" /></span><strong>{t("approvals.noMatches")}</strong><Button size="sm" className="mt-2" onClick={() => setFilter("")}><Icon name="x" />{t("approvals.clearFilter")}</Button></li></ul>
       : <ul className={envList} role="listbox" aria-multiselectable="true" aria-label={t("approvals.listLabel")} ref={list}>
         {visible.map((p) => {
           if (!fresh.current.has(p.id)) fresh.current.set(p.id, mounted.current);
@@ -182,7 +184,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
             onClick={(event) => { if (event.detail) choose(p.id, event.shiftKey ? "range" : event.ctrlKey || event.metaKey ? "toggle" : "single"); }}>
             <code className={method(methodTone(p.method))}>{p.method}</code>
             <span className={envListText}>
-              <strong className="mono">{p.model}</strong>
+              <span className="flex items-center gap-1.5 min-w-0"><StageBadge stage={envs.find((e) => e.id === p.environment_id)?.stage} compact /><strong className="mono">{p.model}</strong></span>
               <small>{p.environment_name} · {p.client_label ?? t("approvals.local")} · {relativeTime(p.created_at, now)}</small>
             </span>
             {deciding.has(p.id) ? <Icon name="refresh" className="animate-spin ml-auto size-3.5 text-fg-3" /> : <span className="ml-auto">{countdownOf(p)}</span>}
@@ -213,6 +215,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
       : item && <div className={cx(detail, tones[methodTone(item.method)])} aria-busy={busy}>
         <header className={detailHeader}>
           <code className={method(methodTone(item.method))}>{item.method}</code>
+          <StageBadge stage={env?.stage} />
           <strong className="mono truncate">{item.model}</strong>
           <span className="flex items-center gap-2 ml-auto">
             <Button variant="dangerGhost" size="sm" iconOnly disabled={busy} onClick={() => setRejecting(true)} aria-label={t("approvals.rejectWithReason")} aria-keyshortcuts="Shift+R" data-tip={`${t("approvals.rejectWithReason")} · ⇧R`}><Icon name="pencil" /></Button>
@@ -236,7 +239,7 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
         <div className={cx(panel, "border-l-[3px] border-l-tone", busy && "opacity-60")}>
           <Props compact>
             <div><dt>{t("common.environment")}</dt><dd className="flex items-center gap-2">{env
-              ? <button type="button" className="flex items-center gap-2 cursor-pointer hover:text-accent-text hover:underline" onClick={() => openEnvironment(env.id)} data-tip={t("approvals.openEnvironment")}><EnvIcon env={env} />{item.environment_name}</button>
+              ? <button type="button" className="flex items-center gap-1.5 cursor-pointer hover:text-accent-text hover:underline" onClick={() => openEnvironment(env.id)} data-tip={t("approvals.openEnvironment")}><EnvIcon env={env} /><StageBadge stage={env.stage} compact /><span>{item.environment_name}</span></button>
               : <><Icon name="server" />{item.environment_name}</>}</dd></div>
             <div><dt>{t("approvals.requestedBy")}</dt><dd className="flex items-center gap-2" data-tip={item.client_label ? t("approvals.clientRequest") : t("approvals.localRequest")}><Icon name="clients" />{item.client_label ?? t("approvals.local")}</dd></div>
             <div><dt>{t("approvals.requestedAt")}</dt><dd><time dateTime={item.created_at} data-tip={formatDateTime(new Date(item.created_at), { hour: "2-digit", minute: "2-digit", second: "2-digit" })}>{relativeTime(item.created_at, now)}</time></dd></div>
@@ -247,7 +250,14 @@ export default function ApprovalsPage({ pending, envs, deciding, decide, decideM
             </dd></div>}
           </Props>
           {values && <ValuesTable values={values} />}
-          {values ? <details className="border-t border-line"><summary className="px-3 py-1.5 text-fg-3 text-xs cursor-pointer">{t("approvals.rawCall")}</summary><CallDetails item={item} /></details> : <CallDetails item={item} />}
+          {values ? <div className="border-t border-line">
+            <button type="button" className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-transparent border-0 text-fg-3 text-xs text-left cursor-pointer hover:text-fg hover:bg-hover/60 transition-colors"
+              aria-expanded={rawOpen} onClick={() => setRawOpen((o) => !o)}>
+              <Icon name="chevron" className={cx("size-3 transition-transform duration-150", rawOpen && "rotate-90")} />
+              <span>{t("approvals.rawCall")}</span>
+            </button>
+            <div hidden={!rawOpen}><CallDetails item={item} /></div>
+          </div> : <CallDetails item={item} />}
           <div className="flex justify-end gap-1.5 px-2 py-1.5 border-t border-line">
             {item.method !== "unlink" && <Button variant="ghost" size="sm" disabled={busy || expired} onClick={() => setRuleFor(item)}><Icon name="shield" />{t("rules.create")}</Button>}
             <CopyButton text={() => shellCommand(item)} label={t("approvals.copyCommand")} className={button({ variant: "ghost", size: "sm" })} />

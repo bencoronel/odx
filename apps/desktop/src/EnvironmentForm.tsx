@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { ipc, type EnvironmentDraft, type EnvironmentProxyInput, type Health, type ProxiesView } from "./ipc";
+import { ipc, type EnvironmentDraft, type EnvironmentProxyInput, type Health, type ProxiesView, type Stage } from "./ipc";
 import { i18n } from "./i18n";
 import HeaderInput from "./HeaderInput";
 import TagEditor from "./TagEditor";
+import { StagePicker } from "./StageBadge";
 import { Icon } from "./Icon";
 import Select from "./Select";
 import { useTranslation } from "react-i18next";
@@ -35,48 +36,69 @@ export function ProtocolSelect({ id, className, value, onChange }: { id?: string
   return <Select id={id} className={className} label={t("environmentForm.protocol")} value={value} options={protocolOptions.map((option) => ({ ...option, label: t(option.label) }))} onChange={onChange} />;
 }
 
-function ConnectionFields({ idPrefix, values, change, autoFocus, databases, loadDatabases, children }: {
+function ConnectionFields({ idPrefix, values, change, autoFocus, databases, loadingDatabases, loadDatabases, advancedOpen, setAdvancedOpen, advancedSummary, proxyControl, advancedExtra, children }: {
   idPrefix: string;
   values: ConnectionValues;
   change: (values: ConnectionValues) => void;
   autoFocus?: boolean;
   /** Databases the server lists; `null` once it refused to list them. */
   databases: string[] | null;
+  loadingDatabases: boolean;
   loadDatabases: () => void;
-  /** Extra fields before the advanced options. */
+  advancedOpen: boolean;
+  setAdvancedOpen: (open: boolean) => void;
+  advancedSummary: string;
+  proxyControl: ReactNode;
+  advancedExtra?: ReactNode;
+  /** Extra fields inside the Identity section (Project, Stage). */
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
   const set = (key: keyof ConnectionValues) => (event: ChangeEvent<HTMLInputElement>) => change({ ...values, [key]: event.target.value });
-  // The URL comes first because the database list depends on it; the host is a sensible default name.
+  // Suggest the host as a sensible default name if left blank when leaving the URL.
   const suggestName = () => { if (!values.name.trim() && !urlError(values.url)) change({ ...values, name: new URL(values.url.trim()).host }); };
   const section = (title: string, body: ReactNode) => <section className={panel}>
     <PanelHeader><h3>{title}</h3></PanelHeader>
     <div className={cx(panelBody, "grid grid-cols-2 gap-x-3.5 gap-y-3 max-sm:grid-cols-1 pt-3.5 pb-3.5")}>{body}</div>
   </section>;
   return <>
-    {section(t("environmentForm.serverTitle"), <>
-        <label className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} autoFocus={autoFocus} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
-        <div className={cx(field, "col-span-2 max-sm:col-auto")}><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
-          <span className="flex items-center gap-2">
-            <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll caseSensitive
-              aria-describedby={databases?.length !== 0 ? `${idPrefix}-database-help` : undefined} onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
-            <Button iconOnly disabled={!!urlError(values.url)} onClick={loadDatabases} aria-label={t("environmentForm.loadDatabases")} data-tip={t("environmentForm.loadDatabases")}><Icon name="refresh" /></Button>
-          </span>
-          {databases?.length !== 0 && <small className="text-fg-3 text-xs" id={`${idPrefix}-database-help`}>{databases === null ? t("environmentForm.databasesHidden") : t("environmentForm.databasesFound", { count: databases.length })}</small>}</div>
-        <details className="group/advanced col-span-2 max-sm:col-auto">
-          <summary className="cursor-pointer text-fg-2 text-sm group-open/advanced:mb-2">{t("environmentForm.advancedOptions")}</summary>
-          <label className={field}><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
-        </details>
-    </>)}
-    {section(t("environmentForm.accessTitle"), <>
-        <label className={field}><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
-        <label className={field}><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required autoComplete="new-password" value={values.secret} onChange={set("secret")} /></label>
-    </>)}
     {section(t("environmentForm.identityTitle"), <>
-        <label className={field}><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
+      <label className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environmentForm.name")}</span><input id={`${idPrefix}-name`} autoFocus={autoFocus} required maxLength={200} value={values.name} placeholder={t("environmentForm.namePlaceholder")} onChange={set("name")} /></label>
       {children}
     </>)}
+    {section(t("environmentForm.connection"), <>
+      <label className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environmentForm.odooUrl")}</span><input id={`${idPrefix}-url`} type="url" required value={values.url} placeholder="https://odoo.example.com" onChange={set("url")} onBlur={suggestName} /></label>
+      <div className={cx(field, "col-span-2 max-sm:col-auto")}><span id={`${idPrefix}-database-label`}>{t("common.database")}</span>
+        <span className="flex items-center gap-2">
+          <span className="grow min-w-0"><HeaderInput id={`${idPrefix}-database`} aria-labelledby={`${idPrefix}-database-label`} required value={values.database} suggestions={databases ?? []} showAll dropdown caseSensitive
+            placeholder={databases && databases.length > 0 ? t("environmentForm.databasesSelectPlaceholder") : undefined}
+            onChange={(database) => change({ ...values, database })} onBlur={() => undefined} /></span>
+          <Button variant={databases === null ? "danger" : "default"} disabled={loadingDatabases || !!urlError(values.url)} onClick={loadDatabases}
+            aria-label={t("environmentForm.loadDatabases")}
+            data-tip={databases === null ? t("environmentForm.databasesHidden") : databases.length > 0 ? t("environmentForm.databasesFound", { count: databases.length }) : t("environmentForm.loadDatabases")}>
+            <Icon name={databases === null ? "alert" : "refresh"} className={loadingDatabases ? "animate-spin" : undefined} />
+            {t("environmentForm.detectDatabases")}
+          </Button>
+        </span>
+      </div>
+      <label className={field}><span>{t("environmentForm.user")}</span><input id={`${idPrefix}-login`} required autoComplete="off" value={values.login} onChange={set("login")} /></label>
+      <label className={field}><span>{t("environmentForm.apiKey")}</span><input id={`${idPrefix}-secret`} type="password" required autoComplete="new-password" value={values.secret} onChange={set("secret")} /></label>
+    </>)}
+    <section className={panel}>
+      <button type="button" className="w-full flex items-center justify-between gap-3 px-4 h-9 bg-transparent border-0 text-left cursor-pointer hover:bg-hover/60 transition-colors"
+        aria-expanded={advancedOpen} onClick={() => setAdvancedOpen(!advancedOpen)}>
+        <span className="flex items-center gap-2">
+          <Icon name="chevron" className={cx("size-3.5 text-fg-3 transition-transform duration-150", advancedOpen && "rotate-90")} />
+          <h3 className="m-0 text-base font-semibold text-fg normal-case tracking-normal">{t("environmentForm.advancedOptions")}</h3>
+        </span>
+        <span className="text-xs text-fg-3 truncate">{advancedSummary}</span>
+      </button>
+      {advancedOpen && <div className={cx(panelBody, "grid grid-cols-2 gap-x-3.5 gap-y-3 max-sm:grid-cols-1 border-t border-line pt-3.5 pb-3.5")}>
+        {proxyControl}
+        <label className={field}><span>{t("environmentForm.protocol")}</span><ProtocolSelect id={`${idPrefix}-protocol`} value={values.protocol} onChange={(protocol) => change({ ...values, protocol })} /></label>
+        {advancedExtra}
+      </div>}
+    </section>
   </>;
 }
 
@@ -106,13 +128,15 @@ export function proxyOptions(list: ProxiesView) {
   ];
 }
 
-export type FormDraft = { values: ConnectionValues; tags: string[]; proxy?: string };
+export type EnvironmentOrganization = { project: string | null; stage: Stage | null };
+export type FormDraft = { values: ConnectionValues; tags: string[]; proxy?: string; project?: string; stage?: Stage | null };
 
-export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, draftRef }: {
+export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, projectSuggestions = [], draftRef }: {
   busy: boolean;
-  save: (draft: EnvironmentDraft, tags: string[], proxy: EnvironmentProxyInput) => Promise<void>;
+  save: (draft: EnvironmentDraft, tags: string[], proxy: EnvironmentProxyInput, org?: EnvironmentOrganization) => Promise<void>;
   cancel: () => void;
   tagSuggestions: string[];
+  projectSuggestions?: string[];
   /** Keeps what was typed while the form is unmounted, e.g. when switching pages. */
   draftRef?: { current: FormDraft | null };
 }) {
@@ -120,13 +144,17 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
   const [values, setValues] = useState<ConnectionValues>(() => draftRef?.current?.values ?? { name: "", url: "", secret: "", protocol: "auto", ...loadEnvironmentDefaults() });
   const [tags, setTags] = useState<string[]>(() => draftRef?.current?.tags ?? []);
   const [proxy, setProxy] = useState(() => draftRef?.current?.proxy ?? "inherit");
+  const [project, setProject] = useState(() => draftRef?.current?.project ?? "");
+  const [stage, setStage] = useState<Stage | null>(() => draftRef?.current?.stage ?? null);
   const [proxies, setProxies] = useState<ProxiesView | null>(null);
   useEffect(() => { ipc.proxies().then(setProxies, () => setProxies({ proxies: [], default: null })); }, []);
-  useEffect(() => { if (draftRef) draftRef.current = { values, tags, proxy }; }, [draftRef, values, tags, proxy]);
+  useEffect(() => { if (draftRef) draftRef.current = { values, tags, proxy, project, stage }; }, [draftRef, values, tags, proxy, project, stage]);
   const [error, setError] = useState<ErrorState>("");
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<Health | null>(null);
   const [databases, setDatabases] = useState<string[] | null>([]);
+  const [loadingDatabases, setLoadingDatabases] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const latestUrl = useRef("");
   latestUrl.current = values.url.trim();
   const draft = (): EnvironmentDraft => ({ name: values.name.trim(), url: values.url.trim(), database: values.database.trim(), login: values.login.trim(), secret: values.secret, protocol: values.protocol, context: {} });
@@ -138,7 +166,16 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
   // Only on request: it sends the global headers to the typed URL. Late answers for an older URL are dropped.
   function loadDatabases() {
     const url = values.url.trim();
-    ipc.databases(url).then((names) => { if (latestUrl.current === url) setDatabases(names); }, () => { if (latestUrl.current === url) setDatabases(null); });
+    setLoadingDatabases(true);
+    ipc.databases(url).then((names) => {
+      if (latestUrl.current !== url) return;
+      setDatabases(names);
+      if (names.length === 1 && !values.database.trim()) setValues((current) => current.database.trim() ? current : { ...current, database: names[0] });
+    }, () => {
+      if (latestUrl.current === url) setDatabases(null);
+    }).finally(() => {
+      if (latestUrl.current === url) setLoadingDatabases(false);
+    });
   }
   const canTest = !!(values.url.trim() && values.database.trim() && values.login.trim() && values.secret);
   // What a test result is about: one that ends after an edit describes values no longer in the form and is dropped.
@@ -163,6 +200,10 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     finally { setTesting(false); }
   }
 
+  const proxyList = proxies ? proxyOptions(proxies) : [];
+  const activeProxyLabel = proxyList.find((o) => o.value === proxy)?.label ?? t("environments.directProxy");
+  const advancedSummary = [activeProxyLabel, t(protocolLabelKeys[values.protocol]), tags.length ? `${tags.length} ${t("environments.tags").toLowerCase()}` : ""].filter(Boolean).join(" · ");
+
   return <form className={detail} aria-labelledby="create-environment-title" autoComplete="off" onSubmit={async (event) => {
     event.preventDefault();
     if (busy) return;
@@ -170,7 +211,9 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
     const invalidUrl = urlError(values.url);
     if (invalidUrl) { setError(invalidUrl); return; }
     try {
-      await save(draft(), tags, proxyChoice(proxy));
+      const org: EnvironmentOrganization | undefined = project.trim() || stage ? { project: project.trim() || null, stage } : undefined;
+      if (org) await save(draft(), tags, proxyChoice(proxy), org);
+      else await save(draft(), tags, proxyChoice(proxy));
       setValues((current) => ({ ...current, secret: "" }));
     } catch (reason) { setError(normalizeAppError(reason)); }
   }}>
@@ -179,10 +222,14 @@ export default function EnvironmentForm({ busy, save, cancel, tagSuggestions, dr
       <h2 id="create-environment-title" className="grow">{t("environmentForm.createTitle")}</h2>
     </header>
     <fieldset disabled={busy} className="grid gap-3 min-w-0 m-0 p-0 border-0">
-      <ConnectionFields idPrefix="environment" values={values} change={change} autoFocus databases={databases} loadDatabases={loadDatabases}>
-        <div className={field}><span id="environment-proxy-label">{t("proxy.title")}</span>
-          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyOptions(proxies)} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span>…</span>}</div>
-        <div className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>
+      <ConnectionFields idPrefix="environment" values={values} change={change} autoFocus databases={databases} loadingDatabases={loadingDatabases} loadDatabases={loadDatabases}
+        advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} advancedSummary={advancedSummary}
+        proxyControl={<div className={field}><span id="environment-proxy-label">{t("proxy.title")}</span>
+          {proxies ? <Select label={t("environments.environmentProxy")} value={proxy} options={proxyList} onChange={(next) => { setProxy(next); setTest(null); }} /> : <span>…</span>}</div>}
+        advancedExtra={<div className={cx(field, "col-span-2 max-sm:col-auto")}><span>{t("environments.tags")}</span><TagEditor tags={tags} suggestions={tagSuggestions} disabled={busy} onChange={setTags} /></div>}>
+        <div className={field}><span id="environment-project-label">{t("environments.project")}</span>
+          <HeaderInput id="environment-project" aria-labelledby="environment-project-label" maxLength={80} placeholder={t("environments.projectPlaceholder")} value={project} suggestions={projectSuggestions} showAll onChange={setProject} onBlur={() => undefined} /></div>
+        <div className={field}><span>{t("environments.stage")}</span><StagePicker value={stage} disabled={busy} onChange={setStage} /></div>
       </ConnectionFields>
     </fieldset>
     {error && <Banner tone="danger" role="alert"><Icon name="alert" />{formatAppError(error)}</Banner>}

@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import { CellActions, TableBlock } from "./TableBlock";
-import { cellText, exportName, rowsTable, toCsv, toJson, toMarkdown, toTsv, type Table } from "./table";
+import { cellText, exportName, rowsTable, toCsv, toExcelCsv, toJson, toMarkdown, toTsv, type Table } from "./table";
 import type { Field } from "./shell/complete";
 import { ipc } from "./ipc";
 import { TooltipLayer } from "./TooltipLayer";
@@ -20,7 +21,11 @@ type Payload = { table: Table; footer?: string; fields?: Field[]; title?: string
 // Taken once per window (the app hands each window its own table, once), outside React so StrictMode cannot ask twice.
 const taken = invoke<Payload | null>("table_window_take").catch(() => null);
 const copies = { TSV: toTsv, JSON: toJson, Markdown: toMarkdown };
-const saves = { CSV: toCsv, JSON: toJson };
+const saves = {
+  CSV: { ext: "csv", encode: toCsv },
+  "CSV (Excel ;)": { ext: "csv", encode: toExcelCsv },
+  JSON: { ext: "json", encode: toJson },
+} as const;
 /** Reads whose `fields` can grow by one column and run again as they were. */
 const FETCHABLE = ["search_read", "read"];
 
@@ -41,6 +46,21 @@ export default function TableWindow() {
     const theme = stored !== "system" ? stored : window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
+  }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "w") {
+        event.preventDefault();
+        void getCurrentWindow().close().catch(() => undefined);
+        return;
+      }
+      if (event.key === "Escape" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
+        event.preventDefault();
+        void getCurrentWindow().close().catch(() => undefined);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
   if (payload === undefined) return null;
   const q = query.trim().toLowerCase();
@@ -89,6 +109,7 @@ export default function TableWindow() {
           </div>
         </CellActions.Provider>
       </div>
+      {payload.footer && payload.footer !== t("shell.row", { count: data.rows.length }) && <footer className="px-3 py-1.5 border-t border-line bg-chrome text-xs text-fg-3 font-sans truncate">{payload.footer}</footer>}
     </> : <p className={empty}>{t("shell.tableGone")}</p>}
   </div>;
 }
@@ -126,7 +147,7 @@ function Actions({ table, say }: { table: Table; say: (text: string, error?: boo
   const { t } = useTranslation();
   const copy = (format: keyof typeof copies) =>
     void navigator.clipboard.writeText(copies[format](table)).then(() => say(t("shell.copiedAs", { format })), () => undefined);
-  const save = (format: keyof typeof saves) => void ipc.shellExport(exportName(table, format.toLowerCase()), saves[format](table))
+  const save = (format: keyof typeof saves) => void ipc.shellExport(exportName(table, saves[format].ext), saves[format].encode(table))
     .then((path) => say(t("shell.exported", { path })), (reason) => say(formatAppError(normalizeAppError(reason)), true));
   return <MoreMenu label={t("environments.moreActions")} items={[
     ...(Object.keys(copies) as (keyof typeof copies)[]).map((format) => ({ label: t("shell.copyAs", { format }), icon: "copy" as const, run: () => copy(format) })),

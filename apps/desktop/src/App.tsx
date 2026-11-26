@@ -2,7 +2,8 @@ import { forgetHealth } from "./HealthChip";
 import { lazy, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ipc, type AgentRequest, type Client, type Environment, type Pending, type ServiceStatus } from "./ipc";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ipc, type AgentRequest, type Client, type Environment, type Pending, type SavedViewDraft, type ServiceStatus } from "./ipc";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { flushShellSessions } from "./shellFlush";
 import CommandPalette from "./CommandPalette";
@@ -29,6 +30,7 @@ const ApprovalsPage = lazy(() => import("./ApprovalsPage"));
 const McpLocalPage = lazy(() => import("./McpLocalPage"));
 const ActivityPage = lazy(() => import("./ActivityPage"));
 const ShellPage = lazy(() => import("./ShellPage"));
+const ViewsPage = lazy(() => import("./ViewsPage"));
 
 function initialPage(): Page {
   try {
@@ -80,12 +82,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const [pending, setPending] = useState<Pending[]>([]);
+  const [viewAlerts, setViewAlerts] = useState(0);
   const [clients, setClients] = useState<Client[]>([]);
   const [services, setServices] = useState<ServiceStatus | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [approvalFilter, setApprovalFilter] = useWindowState("app.approvalFilter", "");
   // Environment to show when Environments opens from elsewhere (an approval).
   const [environmentFocus, setEnvironmentFocus] = useState<string | null>(null);
+  const [openWritesSignal, setOpenWritesSignal] = useState(0);
   // Cleared once shown, so asking again for the same environment selects it again.
   useEffect(() => { if (page === "environments") setEnvironmentFocus(null); }, [page, environmentFocus]);
   // Not cleared on arrival like environmentFocus: Approvals loads lazily and would mount after the reset.
@@ -94,12 +98,23 @@ export default function App() {
   // Tray and notifications are drawn by Rust; keep them in the window's language.
   // Tray and notification texts the desktop shell shows itself; it fills in the {…} parts.
   useEffect(() => {
-    const texts = { open: t("desktop.open"), lock: t("desktop.lock"), quit: t("desktop.quit"), aClient: t("desktop.aClient"),
+    const texts = { open: t("desktop.open"), lock: t("desktop.lock"), quit: t("desktop.quit"),
+      terminal: t("desktop.terminal"), views: t("desktop.views"), approvals: t("desktop.approvals"),
+      closeOpenWrites: t("desktop.closeOpenWrites"), locked: t("desktop.locked"),
+      openWritesOne: t("desktop.openWritesOne"), openWritesOther: t("desktop.openWritesOther", { n: "{n}" }),
+      aClient: t("desktop.aClient"),
       pendingApproval: t("desktop.pendingApproval"), pendingApprovals: t("desktop.pendingApprovals"),
       request: t("desktop.request", { who: "{who}", method: "{method}", model: "{model}", environment: "{environment}" }),
       moreOne: t("desktop.moreOne"), moreOther: t("desktop.moreOther", { n: "{n}" }) };
     void invoke("desktop_set_texts", { texts }).catch(() => undefined);
   }, [i18n.resolvedLanguage, t]);
+
+  // Keep the native OS window title aligned with the active workspace page.
+  useEffect(() => {
+    const pageTitle = status === "unlocked" ? t(`nav.${page === "shell" ? "terminal" : page}` as never) : "";
+    const next = pageTitle ? `Odx — ${pageTitle}` : "Odx";
+    void Promise.resolve().then(() => getCurrentWindow().setTitle?.(next)).catch(() => undefined);
+  }, [page, status, i18n.resolvedLanguage, t]);
 
   // A clicked approval notification opens that request, also when it recreated the window.
   useEffect(() => {
@@ -112,6 +127,28 @@ export default function App() {
     const stop = listen("desktop-open-approval", take);
     return () => { void stop.then((unlisten) => unlisten(), () => undefined); };
   }, []);
+
+  // Tray quick-jump items and view-alert notifications navigate straight to the target page.
+  useEffect(() => {
+    const apply = (target: string | null | undefined) => {
+      if (target && (PAGE_ORDER as readonly string[]).includes(target)) setPage(target as Page);
+    };
+    const take = () => void invoke<string | null>("desktop_take_page").then(apply).catch(() => undefined);
+    take();
+    const stopPage = listen<string>("desktop-open-page", (event) => apply(event.payload));
+    const stopEnvs = listen("environments-changed", () => void refresh());
+    const loadViewAlerts = () => void Promise.resolve().then(() => ipc.views?.()).then((list) => {
+      if (!Array.isArray(list)) return;
+      setViewAlerts(list.filter((v) => v.schedule?.enabled && v.schedule.last_runs.some((r) => r.triggered || r.error)).length);
+    }).catch(() => undefined);
+    loadViewAlerts();
+    const stopViews = listen("views-changed", loadViewAlerts);
+    return () => {
+      void stopPage.then((unlisten) => unlisten(), () => undefined);
+      void stopEnvs.then((unlisten) => unlisten(), () => undefined);
+      void stopViews.then((unlisten) => unlisten(), () => undefined);
+    };
+  }, []);
   // MCP agents' Terminal requests: taken on each notice and when the window (re)loads; the Terminal mounts to run them.
   const [agentRequests, setAgentRequests] = useState<AgentRequest[]>([]);
   useEffect(() => {
@@ -119,7 +156,7 @@ export default function App() {
     const take = () => void Promise.resolve().then(() => ipc.agentTake()).then((requests) => {
       if (!requests.length) return;
       setShellVisited(true);
-      if (requests.some((request) => request.kind === "show")) setPage("shell");
+      if (requests.some((request) => request.kind === "show" || request.kind === "table")) setPage("shell");
       setAgentRequests((current) => [...current, ...requests]);
     }).catch(() => undefined);
     take();
@@ -129,6 +166,7 @@ export default function App() {
   const agentHandled = useCallback((id: number) => setAgentRequests((current) => current.filter((request) => request.id !== id)), []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shellTarget, setShellTarget] = useState<{ env: string; command?: string } | null>(null);
+  const [viewDraft, setViewDraft] = useState<SavedViewDraft | null>(null);
   const [decision, setDecision] = useState<{ approvals: Pending[]; approve: boolean } | null>(null);
   const [batchReason, setBatchReason] = useState("");
   const batchReasonInput = useRef<HTMLInputElement>(null);
@@ -284,47 +322,55 @@ export default function App() {
 
   return <div className={appWindow}><TooltipLayer /><WindowTitleBar>{themeToggle}</WindowTitleBar><DesktopNotices /><div className="flex flex-1 min-h-0 overflow-clip">
     <Sidebar page={page} setPage={setPage} busy={busy} lock={lock} openPalette={() => setPaletteOpen(true)}
-      counts={{ environments: envs.length, approvals: pending.length }} />
+      counts={{ environments: envs.length, approvals: pending.length, viewAlerts }} />
     <main className="flex-1 min-w-0 min-h-0 flex flex-col" id="main-content" aria-busy={busy}>
       {error && <div className={banner({ tone: "danger", page: true })} role="alert"><Icon name="alert" /><span className="grow">{formatAppError(error)}</span><IconButton size="sm" aria-label={t("common.dismissError")} onClick={() => setError("")}><Icon name="x" /></IconButton></div>}
       <div className="flex flex-col flex-1 min-h-0 min-w-0" hidden={page !== "shell"}>
         {shellVisited && <PageLoadBoundary>
           <ShellPage envs={envs} visible={page === "shell"} connectTo={shellTarget?.env} command={shellTarget?.command} onConnectHandled={() => setShellTarget(null)}
-            agentRequests={agentRequests} onAgentHandled={agentHandled} />
+            agentRequests={agentRequests} onAgentHandled={agentHandled}
+            onSaveAsView={(draft) => { setViewDraft(draft); setPage("views"); }} />
         </PageLoadBoundary>}
       </div>
       <PageLoadBoundary key={page}>
       {page === "settings" ? <SettingsPage theme={theme} setTheme={setTheme} busy={busy} pendingCount={pending.length}
         onContextSaved={refresh}
         onHeadersSaved={async () => { envs.forEach((e) => forgetHealth(e.id)); await refresh(); }}
+        onConfigureEnvironment={(draft) => { environmentDraft.current = draft; setPage("environments"); setCreatingEnvironment(true); }}
         lock={lock}
         changePassword={async (current, next) => { setBusy(true); setError(""); try { await ipc.changePassword(current, next); } finally { setBusy(false); } }} />
         : page === "environments" ? <EnvironmentsPage
         envs={envs}
         pending={pending}
         focusId={environmentFocus}
+        openWritesSignal={openWritesSignal}
         refresh={refresh}
         busy={busy}
         creating={creatingEnvironment}
         setCreating={setCreatingEnvironment}
         draftRef={environmentDraft}
-        save={(draft, tags, proxy) => mutate(async () => {
+        save={(draft, tags, proxy, org) => mutate(async () => {
           const created = await ipc.saveEnvironment(draft);
           setCreatingEnvironment(false);
-          // The environment already exists; report a tag or proxy failure without reopening the form.
+          // The environment already exists; report a tag, proxy or organization failure without reopening the form.
           if (tags.length) await ipc.setTags(created.id, tags).catch((reason) => setError(normalizeAppError(reason)));
           if (proxy.mode !== "inherit") await ipc.saveEnvironmentProxy(created.id, proxy).catch((reason) => setError(normalizeAppError(reason)));
+          if (org && (org.project || org.stage)) await ipc.setOrganization(created.id, org.project, org.stage).catch((reason) => setError(normalizeAppError(reason)));
           return created;
         })}
         update={(id, draft) => mutate(() => ipc.updateEnvironment(id, draft))}
         remove={(id) => run(() => ipc.deleteEnvironment(id, true))}
         clone={(id, name) => mutate(() => ipc.cloneEnvironment(id, name))}
         openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }}
+        closeOpenWrites={() => run(async () => {
+          const open = envs.filter((e) => e.write_mode === "temporary" || e.write_mode === "permanent");
+          await Promise.all(open.map((e) => ipc.mode(e.id, "read_only")));
+        }).then(() => undefined)}
         changeMode={(env, mode) => {
           if (mode === "temporary" || mode === "permanent") { setMinutes("60"); setModeDecision({ environment: env, mode }); }
           else void run(() => ipc.mode(env.id, mode));
         }}
-      /> : page === "shell" ? null : page === "activity" ? <ActivityPage envs={envs} refreshKey={refreshKey} openInShell={(env, command) => { setShellTarget({ env, command }); setPage("shell"); }} /> : page === "mcp" ? <McpLocalPage
+      /> : page === "shell" ? null : page === "views" ? <ViewsPage envs={envs} initialDraft={viewDraft} onDraftConsumed={() => setViewDraft(null)} openInShell={(env, command) => { setShellTarget({ env, command }); setPage("shell"); }} /> : page === "activity" ? <ActivityPage envs={envs} refreshKey={refreshKey} openInShell={(env, command) => { setShellTarget({ env, command }); setPage("shell"); }} /> : page === "mcp" ? <McpLocalPage
         clients={clients}
         services={services}
         envs={envs}
@@ -340,17 +386,24 @@ export default function App() {
       </PageLoadBoundary>
     </main>
   </div>
-    <ServiceStatusBar vault={status} services={services} pending={pending.length} openMcp={() => setPage("mcp")} openApprovals={() => setPage("approvals")} />
+    <ServiceStatusBar vault={status} services={services} pending={pending.length}
+      openWrites={envs.filter((e) => e.write_mode === "temporary" || e.write_mode === "permanent").length}
+      openOpenWrites={() => { setOpenWritesSignal((n) => n + 1); setPage("environments"); }}
+      openMcp={() => setPage("mcp")} openApprovals={() => setPage("approvals")} />
     <CommandPalette open={paletteOpen} setOpen={setPaletteOpen} envs={envs} setPage={setPage} lock={lock}
       showEnvironment={(env) => { setEnvironmentFocus(env.id); setPage("environments"); }}
-      openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }} />
+      openShell={(env) => { setShellTarget({ env: env.name }); setPage("shell"); }}
+      newEnvironment={() => { setPage("environments"); setCreatingEnvironment(true); }}
+      toggleTheme={() => setTheme(shown === "dark" ? "light" : "dark")}
+      themeIsDark={shown === "dark"} />
     <ConfirmDialog
       open={modeDecision !== null}
       busy={busy}
-      tone={modeDecision?.mode === "permanent" ? "danger" : "warn"}
+      tone={modeDecision?.mode === "permanent" || modeDecision?.environment.stage === "pro" ? "danger" : "warn"}
       title={modeDecision?.mode === "temporary" ? t("app.writeMode.temporaryTitle") : t("app.writeMode.permanentTitle")}
       description={modeDecision ? t(modeDecision.mode === "temporary" ? "app.writeMode.temporaryDescription" : "app.writeMode.permanentDescription", { name: modeDecision.environment.name }) : ""}
       confirmLabel={modeDecision?.mode === "temporary" ? t("app.writeMode.enableTemporary") : t("app.writeMode.enablePermanent")}
+      destructive={modeDecision?.environment.stage === "pro"}
       confirmDisabled={modeDecision?.mode === "temporary" && (!Number.isSafeInteger(Number(minutes)) || Number(minutes) < 1 || Number(minutes) > 4_294_967_295)}
       onOpenChange={(open) => { if (!open && !busy) setModeDecision(null); }}
       onConfirm={async () => {
@@ -360,6 +413,7 @@ export default function App() {
         setModeDecision(null);
       }}
     >
+      {modeDecision?.environment.stage === "pro" && <Banner tone="danger" compact><Icon name="alert" />{t("stage.proWriteWarning")}</Banner>}
       {modeDecision && <Props compact>
         <div><dt>{t("common.environment")}</dt><dd>{modeDecision.environment.name}</dd></div>
         <div><dt>{t("common.database")}</dt><dd className="mono">{modeDecision.environment.database}</dd></div>

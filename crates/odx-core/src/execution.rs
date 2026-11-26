@@ -306,6 +306,8 @@ pub(crate) struct AuditedCall<'a, A> {
     /// An earlier event opened this request (an approval): failures before sending close it as "not_sent".
     pub(crate) recorded: bool,
     pub(crate) max_response: usize,
+    pub(crate) initial_policy: Option<(Vec<crate::policy::Rule>, chrono::DateTime<chrono::Utc>)>,
+    pub(crate) read_relations: Option<crate::policy::ReadRelations>,
 }
 
 impl Core {
@@ -374,6 +376,10 @@ impl Core {
             Ok(env) => env,
             Err(error) => return not_sent(audit, error).await,
         };
+        let sent_args = (call.args)(uid);
+        let policy_args = sent_args.clone();
+        let policy_kwargs = call.kwargs.clone();
+        let initial_policy = call.initial_policy;
         let result = self
             .odoo
             .execute_kw_limited(
@@ -381,13 +387,147 @@ impl Core {
                 uid,
                 call.model,
                 call.method,
-                (call.args)(uid),
+                sent_args,
                 call.kwargs,
                 call.max_response,
             )
             .await;
         let result = if call.write {
             result.map_err(crate::odoo::jsonrpc::sent_error)
+        } else {
+            result
+        };
+        let result = if !call.write {
+            match result {
+                Ok((mut value, bytes)) => {
+                    let policy_snapshot = {
+                        let s = self.inner.lock().await;
+                        s.vault().ok().map(|v| (v.data().rules.clone(), v.now()))
+                    };
+                    if let (Some((mut rules, now)), Some((initial_rules, initial_now))) =
+                        (policy_snapshot, initial_policy)
+                    {
+                        if let Some(fields) = &audit.details.redacted_fields
+                            && let Some(rows) = value.as_array_mut()
+                        {
+                            for row in rows.iter_mut().filter_map(Value::as_object_mut) {
+                                for field in fields {
+                                    row.insert(field.clone(), Value::String("[REDACTED]".into()));
+                                }
+                                row.insert(
+                                    "__odx_redacted_fields".into(),
+                                    Value::Array(
+                                        fields.iter().cloned().map(Value::String).collect(),
+                                    ),
+                                );
+                            }
+                        }
+                        rules.extend(
+                            initial_rules
+                                .into_iter()
+                                .filter(|rule| !rule.is_expired(initial_now))
+                                .map(|mut rule| {
+                                    rule.expires_at = None;
+                                    rule
+                                }),
+                        );
+                        let redacted_fields = crate::policy::redact_read_rows(
+                            &rules,
+                            &env.id,
+                            call.model,
+                            call.method,
+                            &mut value,
+                            now,
+                        );
+                        if let Some(fields) = &redacted_fields
+                            && !fields.is_empty()
+                        {
+                            audit.details.redacted_fields = Some(fields.clone());
+                            audit.details.policy_rules = Some(crate::policy::trace_field_rules(
+                                &rules,
+                                &env.id,
+                                call.model,
+                                call.method,
+                                fields,
+                                now,
+                            ));
+                        }
+                        if let (Some(args), Some(kwargs)) =
+                            (policy_args.as_array(), policy_kwargs.as_object())
+                        {
+                            let effective = crate::policy::EffectiveCall {
+                                environment_id: &env.id,
+                                model: call.model,
+                                method: call.method,
+                                args,
+                                kwargs,
+                            };
+                            let block_rule = crate::policy::matching_read_inference_block(
+                                &rules, &effective, now,
+                            )
+                            .or_else(|| {
+                                if let Some(relations) = &call.read_relations {
+                                    crate::policy::matching_read_relations(
+                                        &rules, &effective, relations, now,
+                                    )
+                                } else {
+                                    crate::policy::matching_uncertain_relation(
+                                        &rules,
+                                        &effective,
+                                        &crate::policy::Effect::Read,
+                                        now,
+                                    )
+                                }
+                            })
+                            .or_else(|| {
+                                crate::policy::first_read_model_block(
+                                    &rules,
+                                    &env.id,
+                                    call.model,
+                                    call.method,
+                                    now,
+                                )
+                            });
+                            let missing_fields = crate::policy::has_field_block(
+                                &rules,
+                                &env.id,
+                                call.model,
+                                call.method,
+                                now,
+                            ) && !crate::policy::has_explicit_read_fields(
+                                policy_args.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                                policy_kwargs.as_object().unwrap_or(&serde_json::Map::new()),
+                                call.method,
+                            );
+                            let block_rule = block_rule.or_else(|| {
+                                (redacted_fields.is_none() || missing_fields)
+                                    .then(|| {
+                                        crate::policy::first_field_block(
+                                            &rules,
+                                            &env.id,
+                                            call.model,
+                                            call.method,
+                                            now,
+                                        )
+                                    })
+                                    .flatten()
+                            });
+                            if redacted_fields.is_none() || block_rule.is_some() || missing_fields {
+                                Err(block_rule.map_or(OdxError::Denied, |rule| {
+                                    OdxError::RuleDenied(vec![crate::policy::trace_rule(rule)])
+                                }))
+                            } else {
+                                Ok((value, bytes))
+                            }
+                        } else {
+                            Err(OdxError::Denied)
+                        }
+                    } else {
+                        Err(OdxError::Persistence)
+                    }
+                }
+                Err(error) => Err(error),
+            }
         } else {
             result
         };
@@ -866,5 +1006,45 @@ mod reset_tests {
         assert!(aside[0].join("vault.sqlite3").exists());
         core.create("another password").await.unwrap();
         assert_eq!(core.status().await, "unlocked");
+    }
+
+    #[tokio::test]
+    async fn organization_persists_across_vault_reopen_and_clone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("vault.sqlite3");
+        let core = Core::new(path.clone()).unwrap();
+        core.create("fixture password").await.unwrap();
+        let env = core
+            .save_environment(crate::EnvironmentDraft {
+                name: "Acme Pro".into(),
+                url: "https://erp.acme.test".into(),
+                database: "acme_prod".into(),
+                login: "admin".into(),
+                protocol: crate::Protocol::Auto,
+                context: serde_json::json!({}),
+                secret: "fixture-secret".into(),
+            })
+            .await
+            .unwrap();
+        let updated = core
+            .set_environment_organization(&env.id, Some("  Acme Corp  "), Some(crate::Stage::Pro))
+            .await
+            .unwrap();
+        assert_eq!(updated.project.as_deref(), Some("Acme Corp"));
+        assert_eq!(updated.stage, Some(crate::Stage::Pro));
+        let cloned = core.clone_environment(&env.id, "Acme Copy").await.unwrap();
+        assert_eq!(cloned.project.as_deref(), Some("Acme Corp"));
+        assert_eq!(cloned.stage, Some(crate::Stage::Pro));
+        core.lock().await;
+        drop(core);
+
+        let reopened = Core::new(path).unwrap();
+        reopened.unlock("fixture password").await.unwrap();
+        let envs = reopened.environments().await.unwrap();
+        assert_eq!(envs.len(), 2);
+        for item in envs {
+            assert_eq!(item.project.as_deref(), Some("Acme Corp"));
+            assert_eq!(item.stage, Some(crate::Stage::Pro));
+        }
     }
 }

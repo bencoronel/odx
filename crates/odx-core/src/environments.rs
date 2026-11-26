@@ -2,7 +2,7 @@
 //! detection.
 use crate::{
     approval::revoke_environment,
-    config::{Environment, EnvironmentDraft, WriteMode},
+    config::{Environment, EnvironmentDraft, Stage, WriteMode},
     error::{OdxError, Result},
     execution::{Core, Inner},
     tools::args::valid_model,
@@ -31,6 +31,10 @@ pub struct EnvironmentView {
     pub has_secret: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<Stage>,
 }
 
 impl EnvironmentView {
@@ -49,6 +53,8 @@ impl EnvironmentView {
             write_until: e.write_until,
             has_secret: !e.secret.is_empty(),
             tags: e.tags.clone(),
+            project: e.project.clone(),
+            stage: e.stage,
         }
     }
 }
@@ -145,6 +151,8 @@ impl Core {
         updated.headers = old.headers.clone();
         updated.proxy = old.proxy.clone();
         updated.tags = old.tags.clone();
+        updated.project = old.project.clone();
+        updated.stage = old.stage;
         updated.id = old.id.clone();
         updated.revision = old.revision + 1;
         updated.write_mode = old.write_mode;
@@ -164,7 +172,9 @@ impl Core {
             let env = data.environment_mut(id)?;
             *env = updated;
             if retarget {
-                data.rules.retain(|r| r.environment_id != id);
+                data.rules.retain(|r| {
+                    r.scope == crate::policy::RuleScope::Global || r.environment_id != id
+                });
             }
             Ok(())
         })?;
@@ -186,6 +196,27 @@ impl Core {
         })?;
         view.ok_or(OdxError::EnvironmentNotFound)
     }
+    /// Project and stage only organize and label environments; they keep the revision and pending approvals.
+    pub async fn set_environment_organization(
+        &self,
+        id: &str,
+        project: Option<&str>,
+        stage: Option<Stage>,
+    ) -> Result<EnvironmentView> {
+        let project = crate::config::normalize_project(project)?;
+        let mut s = self.inner.lock().await;
+        let v = s.vault_mut()?;
+        let now = v.now();
+        let mut view = None;
+        v.update(|data| {
+            let env = data.environment_mut(id)?;
+            env.project = project;
+            env.stage = stage;
+            view = Some(EnvironmentView::new(env, now));
+            Ok(())
+        })?;
+        view.ok_or(OdxError::EnvironmentNotFound)
+    }
     pub async fn tag_colors(&self) -> Result<std::collections::BTreeMap<String, String>> {
         let s = self.inner.lock().await;
         Ok(s.vault()?.data().tag_colors.clone())
@@ -198,7 +229,11 @@ impl Core {
                 OdxError::validation("validation.environment.tag_required", "tag required")
             })?
             .to_lowercase();
-        if color.is_some_and(|c| !crate::config::TAG_COLORS.contains(&c)) {
+        let normalized_color = color.map(|c| c.trim().to_ascii_lowercase());
+        if normalized_color
+            .as_deref()
+            .is_some_and(|c| !crate::config::is_valid_tag_color(c))
+        {
             return Err(OdxError::validation(
                 "validation.environment.tag_color_invalid",
                 "unknown tag color",
@@ -213,8 +248,8 @@ impl Core {
                 .flat_map(|e| e.tags.iter().map(|t| t.to_lowercase()))
                 .collect();
             data.tag_colors.retain(|t, _| used.contains(t));
-            match color {
-                Some(color) => data.tag_colors.insert(tag, color.to_owned()),
+            match normalized_color {
+                Some(color) => data.tag_colors.insert(tag, color),
                 None => data.tag_colors.remove(&tag),
             };
             Ok(())
@@ -258,8 +293,9 @@ impl Core {
             if before == data.environments.len() {
                 return Err(OdxError::EnvironmentNotFound);
             }
-            // Recreating an environment name inherits neither grants nor rules.
-            data.rules.retain(|r| r.environment_id != id);
+            // Recreating an environment name inherits neither grants nor local rules.
+            data.rules
+                .retain(|r| r.scope == crate::policy::RuleScope::Global || r.environment_id != id);
             for grant in &mut data.clients {
                 // Keep the token revision unchanged to preserve other connections.
                 grant.environment_ids.retain(|e| e != id);

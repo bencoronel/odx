@@ -2,6 +2,7 @@ import type { Capability, Client, Environment } from "./ipc";
 import { EnvIcon } from "./EnvIcon";
 import { Icon } from "./Icon";
 import { modeLabels, modeTone } from "./ModeSelect";
+import { StageBadge } from "./StageBadge";
 import CopyButton from "./CopyButton";
 import { useTranslation } from "react-i18next";
 import { groupByHost } from "./hosts";
@@ -40,7 +41,7 @@ export function ScopeFields({ scope, change, envs }: { scope: Scope; change: (sc
   const option = (env: Environment) => <label key={env.id} className="flex items-center gap-2 px-2 py-[7px] border border-line rounded-md bg-surface-2 cursor-pointer hover:border-line-strong has-[input:checked]:border-accent has-[input:checked]:bg-accent-soft">
     <input type="checkbox" checked={selected.includes(env.id)} onChange={() => change({ ...scope, selected: selected.includes(env.id) ? selected.filter((id) => id !== env.id) : [...selected, env.id] })} />
     <span className={envAvatar(true)}><EnvIcon env={env} /><StatusDot kind="badge" tone={modeTone[env.write_mode]} /></span>
-    <span className="grid min-w-0"><strong className="text-base font-medium">{env.name}</strong><small className="text-fg-3 text-xs">{t(modeLabels[env.write_mode] as "mode.readOnly")}</small></span>
+    <span className="grid min-w-0"><span className="flex items-center gap-1.5 min-w-0"><StageBadge stage={env.stage} compact /><strong className="text-base font-medium truncate">{env.name}</strong></span><small className="text-fg-3 text-xs">{t(modeLabels[env.write_mode] as "mode.readOnly")}</small></span>
     {writes && unattended(env) && <Chip tone="warn" className="ml-auto">{t("clients.unattendedShort")}</Chip>}
   </label>;
   return <>
@@ -54,9 +55,15 @@ export function ScopeFields({ scope, change, envs }: { scope: Scope; change: (sc
         <Button variant="ghost" size="sm" onClick={() => change({ ...scope, selected: envs.map((env) => env.id) })}>{t("clients.selectAll")}</Button>
         <Button variant="ghost" size="sm" onClick={() => change({ ...scope, selected: [] })}>{t("clients.selectNone")}</Button>
       </span>}
-      {/* Databases of one server sit under its host, as in Environments. */}
-      {!allEnvs && <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-1.5">{groupByHost(envs).map(([host, list]) => list.length === 1 ? option(list[0])
-        : [<small key={host} className="mono col-span-full px-0.5 pt-1 text-fg-3 text-xs">{host}</small>, ...list.map(option)])}</div>}
+      {/* Databases of one server sit under its host; each host forms its own row so lone servers never visually merge into another host's group. */}
+      {!allEnvs && (() => {
+        const grouped = groupByHost(envs);
+        const showHosts = grouped.some(([, list]) => list.length > 1);
+        return <div className="grid gap-2.5">{grouped.map(([host, list]) => <div key={host} className="grid gap-1.5">
+          {showHosts && <small className="mono px-0.5 text-fg-3 text-xs">{host}</small>}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-1.5">{list.map(option)}</div>
+        </div>)}</div>;
+      })()}
     </div>
     <div className={field}>
       <span>{t("clients.access")}</span>

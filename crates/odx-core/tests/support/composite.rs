@@ -257,11 +257,13 @@ pub fn respond(db: &str, model: &str, method: &str, args: &[Value], kwargs: &Val
             json!(matches!(op, "read") || (model == "res.partner" && op == "write"))
         }),
         ("res.users", "fields_get") => named(args, method).map(|_| {
-            let all = if db == "base-19" {
+            let mut all = if db == "base-19" {
                 json!({"all_group_ids":{"type":"many2many"},"group_ids":{"type":"many2many"}})
             } else {
                 json!({"groups_id":{"type":"many2many"}})
             };
+            if kwargs["allfields"].as_array().is_some_and(|fields| fields.contains(&json!("name"))) { all["name"] = json!({"type":"char"}); }
+            if kwargs["allfields"].as_array().is_some_and(|fields| fields.contains(&json!("password"))) { all["password"] = json!({"type":"char"}); }
             described(all, kwargs)
         }),
         ("res.users", "read")

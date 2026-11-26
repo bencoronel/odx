@@ -210,12 +210,194 @@ impl Core {
             "context".into(),
             effective_context(&global, &env.context, &Value::Object(call_context)),
         );
+        let mut call_args = call.args.clone();
+        let (rules, policy_now) = {
+            let s = self.inner.lock().await;
+            let v = s.vault()?;
+            (v.data().rules.clone(), v.now())
+        };
+        let mut redacted_fields = Vec::new();
+        if let Some(rule) =
+            crate::policy::first_any_field_block(&rules, &env.id, &call.model, policy_now)
+            && !READ_METHODS.contains(&call.method.as_str())
+            && !matches!(call.method.as_str(), "create" | "write" | "unlink")
+        {
+            self.log_as(
+                actor.as_deref(),
+                &env.id,
+                &format!("{}:{}", call.method, call.model),
+                "denied",
+                AuditDetails {
+                    error_code: Some("app.denied".into()),
+                    policy_rules: Some(vec![crate::policy::trace_rule(rule)]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(ToolError::from)?;
+            return Err(ToolError::new(
+                "forbidden",
+                "opaque methods are blocked while field protection applies",
+                Outcome::NotSent,
+            ));
+        }
+        if !write
+            && call.method != "fields_get"
+            && !crate::policy::is_value_free_read(&call.method)
+            && crate::policy::has_field_block(
+                &rules,
+                &env.id,
+                &call.model,
+                &call.method,
+                policy_now,
+            )
+        {
+            if matches!(call.method.as_str(), "read" | "search_read")
+                && kwargs.contains_key("fields")
+                && call_args.len() > 1
+            {
+                return Err(ToolError::new(
+                    "forbidden",
+                    "ambiguous field selection under field protection",
+                    Outcome::NotSent,
+                ));
+            }
+            let requested = match call.method.as_str() {
+                "read" | "search_read" if kwargs.contains_key("fields") => {
+                    kwargs.get("fields").and_then(Value::as_array)
+                }
+                "read" | "search_read" if call_args.len() > 1 => {
+                    call_args.get(1).and_then(Value::as_array)
+                }
+                _ => None,
+            }
+            .cloned();
+            let Some(requested) = requested else {
+                let rule = crate::policy::first_field_block(
+                    &rules,
+                    &env.id,
+                    &call.model,
+                    &call.method,
+                    policy_now,
+                );
+                self.log_as(
+                    actor.as_deref(),
+                    &env.id,
+                    &format!("{}:{}", call.method, call.model),
+                    "denied",
+                    AuditDetails {
+                        error_code: Some("app.denied".into()),
+                        policy_rules: rule.map(|rule| vec![crate::policy::trace_rule(rule)]),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(ToolError::from)?;
+                return Err(ToolError::new(
+                    "forbidden",
+                    "explicit fields are required when field protection applies",
+                    Outcome::NotSent,
+                ));
+            };
+            let mut allowed = Vec::new();
+            for value in requested {
+                let Some(field) = value.as_str() else {
+                    return Err(ToolError::new(
+                        "forbidden",
+                        "invalid field selection under field protection",
+                        Outcome::NotSent,
+                    ));
+                };
+                if crate::policy::field_is_blocked(
+                    &rules,
+                    &env.id,
+                    &call.model,
+                    &call.method,
+                    field,
+                    policy_now,
+                ) {
+                    redacted_fields.push(field.to_owned());
+                } else {
+                    allowed.push(value);
+                }
+            }
+            if allowed.is_empty() {
+                let traces = crate::policy::trace_field_rules(
+                    &rules,
+                    &env.id,
+                    &call.model,
+                    &call.method,
+                    &redacted_fields,
+                    policy_now,
+                );
+                self.log_as(
+                    actor.as_deref(),
+                    &env.id,
+                    &format!("{}:{}", call.method, call.model),
+                    "denied",
+                    AuditDetails {
+                        error_code: Some("app.denied".into()),
+                        policy_rules: Some(traces),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(ToolError::from)?;
+                return Err(ToolError::new(
+                    "forbidden",
+                    "all requested fields are blocked by a rule",
+                    Outcome::NotSent,
+                ));
+            }
+            if kwargs.contains_key("fields") {
+                kwargs.insert("fields".into(), Value::Array(allowed));
+            } else {
+                call_args[1] = Value::Array(allowed);
+            }
+        }
+        let effective = crate::policy::EffectiveCall {
+            environment_id: &env.id,
+            model: &call.model,
+            method: &call.method,
+            args: &call_args,
+            kwargs: &kwargs,
+        };
+        let effect = if call.method == "unlink"
+            || crate::tools::mutations::has_relational_delete(&Value::Array(call_args.clone()))
+        {
+            crate::policy::Effect::Delete
+        } else if write {
+            crate::policy::Effect::Write
+        } else {
+            crate::policy::Effect::Read
+        };
+        if let Some(rule) = crate::policy::matching_block(&rules, &effective, &effect, policy_now) {
+            let details = AuditDetails {
+                error_code: Some("app.denied".into()),
+                policy_rules: Some(vec![crate::policy::trace_rule(rule)]),
+                ..Default::default()
+            };
+            self.log_as(
+                actor.as_deref(),
+                &env.id,
+                &format!("{}:{}", call.method, call.model),
+                "denied",
+                details,
+            )
+            .await
+            .map_err(ToolError::from)?;
+            return Err(ToolError::new(
+                "forbidden",
+                "operation blocked by a rule",
+                Outcome::NotSent,
+            ));
+        }
         self.reject_credential_call(
             actor.as_deref(),
             &env,
             &call.model,
             &call.method,
-            &Value::Array(call.args.clone()),
+            &Value::Array(call_args.clone()),
             &Value::Object(kwargs.clone()),
         )
         .await?;
@@ -225,19 +407,33 @@ impl Core {
         }
         let env = self.resolve_protocol(env, session).await?;
         let operation = format!("{}:{}", call.method, call.model);
+        let mut audit_details = AuditDetails::call(
+            &env,
+            &call.model,
+            &call.method,
+            &Value::Array(call_args.clone()),
+            &Value::Object(kwargs.clone()),
+        );
+        if !redacted_fields.is_empty() {
+            audit_details.redacted_fields = Some(redacted_fields.clone());
+            audit_details.policy_rules = Some(crate::policy::trace_field_rules(
+                &rules,
+                &env.id,
+                &call.model,
+                &call.method,
+                &redacted_fields,
+                policy_now,
+            ));
+        }
         let audit = self
-            .audit_request(
-                &uuid::Uuid::new_v4().to_string(),
-                AuditDetails::call(
-                    &env,
-                    &call.model,
-                    &call.method,
-                    &Value::Array(call.args.clone()),
-                    &Value::Object(kwargs.clone()),
-                ),
-            )
+            .audit_request(&uuid::Uuid::new_v4().to_string(), audit_details)
             .await?;
         let started = Instant::now();
+        let policy_args = call_args.clone();
+        let policy_kwargs = kwargs.clone();
+        let policy_model = call.model.clone();
+        let policy_method = call.method.clone();
+        let policy_env_id = env.id.clone();
         let audited = AuditedCall {
             actor: actor.as_deref(),
             env: &env,
@@ -246,14 +442,71 @@ impl Core {
             operation: &operation,
             model: &call.model,
             method: &call.method,
-            args: move |_| Value::Array(call.args),
+            args: move |_| Value::Array(call_args),
             kwargs: Value::Object(kwargs),
             write,
             recorded: false,
             max_response: crate::odoo::jsonrpc::MAX_RESPONSE,
+            initial_policy: (!write).then(|| (rules.clone(), policy_now)),
+            read_relations: None,
         };
         let (data, bytes) = self
             .audited_call(audit, audited, &mut Upstream::start(), || async {
+                let (current_rules, current_time) = self.policy_snapshot(&policy_env_id).await?;
+                let effective = crate::policy::EffectiveCall {
+                    environment_id: &policy_env_id,
+                    model: &policy_model,
+                    method: &policy_method,
+                    args: &policy_args,
+                    kwargs: &policy_kwargs,
+                };
+                let block_rule = crate::policy::matching_block(
+                    &current_rules,
+                    &effective,
+                    &effect,
+                    current_time,
+                )
+                .or_else(|| {
+                    (!READ_METHODS.contains(&policy_method.as_str())
+                        && !matches!(policy_method.as_str(), "create" | "write" | "unlink"))
+                    .then(|| {
+                        crate::policy::first_any_field_block(
+                            &current_rules,
+                            &policy_env_id,
+                            &policy_model,
+                            current_time,
+                        )
+                    })
+                    .flatten()
+                })
+                .or_else(|| {
+                    (!write
+                        && crate::policy::has_field_block(
+                            &current_rules,
+                            &policy_env_id,
+                            &policy_model,
+                            &policy_method,
+                            current_time,
+                        )
+                        && !crate::policy::has_explicit_read_fields(
+                            &policy_args,
+                            &policy_kwargs,
+                            &policy_method,
+                        ))
+                    .then(|| {
+                        crate::policy::first_field_block(
+                            &current_rules,
+                            &policy_env_id,
+                            &policy_model,
+                            &policy_method,
+                            current_time,
+                        )
+                    })
+                    .flatten()
+                });
+                if let Some(rule) = block_rule {
+                    return Err(OdxError::RuleDenied(vec![crate::policy::trace_rule(rule)]));
+                }
                 Ok(env.clone())
             })
             .await?;

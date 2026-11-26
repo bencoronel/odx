@@ -58,6 +58,23 @@ impl Drop for NotificationWaiter {
 /// Notify new approval requests. Report failures in stderr and the window; requests remain visible in Approvals and the status bar.
 /// A click on the notification (Linux "default" action) opens the window on `approval`.
 pub fn notify(app: &AppHandle, title: String, body: String, approval: Option<String>) {
+    notify_target(app, title, body, approval.map(NotifyTarget::Approval));
+}
+
+/// Notify a scheduled view monitor alert; clicking opens Odx on the Views page and requests taskbar attention.
+pub fn notify_view_alert(app: &AppHandle, title: String, body: String) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+    }
+    notify_target(app, title, body, Some(NotifyTarget::Page("views".into())));
+}
+
+enum NotifyTarget {
+    Approval(String),
+    Page(String),
+}
+
+fn notify_target(app: &AppHandle, title: String, body: String, target: Option<NotifyTarget>) {
     #[cfg(target_os = "linux")]
     const ICON: &str = if cfg!(debug_assertions) {
         "icons/icon-dev.png"
@@ -73,8 +90,7 @@ pub fn notify(app: &AppHandle, title: String, body: String, approval: Option<Str
         .filter(|path| path.is_file())
         .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(ICON));
     // One blocking thread waits per notification with an action; past the cap, new ones show without "Open".
-    let waiter =
-        approval.and_then(|approval| NotificationWaiter::claim(app).map(|w| (w, approval)));
+    let waiter = target.and_then(|target| NotificationWaiter::claim(app).map(|w| (w, target)));
     let action = waiter.as_ref().map(|_| texts(app).open);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -102,14 +118,20 @@ pub fn notify(app: &AppHandle, title: String, body: String, approval: Option<Str
             Err(error) => return record_notification(&app, Some(error)),
         };
         #[cfg(all(unix, not(target_os = "macos")))]
-        if let Some((waiter, approval)) = waiter {
+        if let Some((waiter, target)) = waiter {
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 let _waiter = waiter;
                 handle.wait_for_action(|action| {
                     if action == "default" {
-                        *app.state::<Arc<Desktop>>().open_approval.lock().unwrap() = Some(approval);
-                        show_main(&app);
-                        let _ = app.emit("desktop-open-approval", ());
+                        match target {
+                            NotifyTarget::Approval(approval) => {
+                                *app.state::<Arc<Desktop>>().open_approval.lock().unwrap() =
+                                    Some(approval);
+                                show_main(&app);
+                                let _ = app.emit("desktop-open-approval", ());
+                            }
+                            NotifyTarget::Page(page) => open_page_and_show(&app, &page),
+                        }
                     }
                 });
             })
@@ -175,7 +197,23 @@ pub fn notify_approvals(
                     }
                 }
                 _ = check.tick() => {
-                    let pending = core.approvals().await.is_ok_and(|pending| !pending.is_empty());
+                    let is_unlocked = core.status().await == "unlocked";
+                    let pending_count = if is_unlocked {
+                        core.approvals().await.map_or(0, |pending| pending.len())
+                    } else {
+                        0
+                    };
+                    let open_writes = if is_unlocked {
+                        core.environments().await.map_or(0, |envs| {
+                            envs.iter()
+                                .filter(|e| !matches!(e.write_mode, odx_core::WriteMode::ReadOnly))
+                                .count()
+                        })
+                    } else {
+                        0
+                    };
+                    update_tray_state(&app, !is_unlocked, pending_count, open_writes);
+                    let pending = pending_count > 0;
                     if pending != attention {
                         attention = pending;
                         set_tray_attention(&app, pending);

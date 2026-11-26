@@ -5,6 +5,7 @@ import { Icon, type IconName } from "./Icon";
 import { PAGE_ORDER, pages, shortcut, type Page } from "./Sidebar";
 import type { Environment } from "./ipc";
 import { modeTone } from "./ModeSelect";
+import { StageBadge } from "./StageBadge";
 import { hostOf } from "./hosts";
 import { modalOpen } from "./modal";
 import { dialogContent, dialogOverlay } from "./ConfirmDialog";
@@ -16,7 +17,7 @@ type Action = { id: string; group: Group; label: string; icon: IconName; hint?: 
 const groups: Group[] = ["pages", "environments", "actions"];
 
 /** Ctrl+K anywhere while unlocked; the Terminal binds no Ctrl+K, so it wins there too. Confirmation dialogs keep the keyboard. */
-export default function CommandPalette({ open, setOpen, envs, setPage, showEnvironment, openShell, lock }: {
+export default function CommandPalette({ open, setOpen, envs, setPage, showEnvironment, openShell, lock, newEnvironment, toggleTheme, themeIsDark }: {
   open: boolean;
   setOpen: (open: boolean) => void;
   envs: Environment[];
@@ -24,6 +25,9 @@ export default function CommandPalette({ open, setOpen, envs, setPage, showEnvir
   showEnvironment: (env: Environment) => void;
   openShell: (env: Environment) => void;
   lock: () => void;
+  newEnvironment?: () => void;
+  toggleTheme?: () => void;
+  themeIsDark?: boolean;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -44,7 +48,9 @@ export default function CommandPalette({ open, setOpen, envs, setPage, showEnvir
   const actions: Action[] = [
     ...PAGE_ORDER.map((page): Action => ({ id: `page-${page}`, group: "pages", label: t(pages[page].title), keywords: t("palette.goTo", { page: "" }), icon: pages[page].icon, hint: shortcut(page), run: () => setPage(page) })),
     ...envs.map((env): Action => ({ id: `env-${env.id}`, group: "environments", label: env.name, icon: "server", env,
-      keywords: `${env.url} ${env.database} ${env.tags.join(" ")}`, run: () => showEnvironment(env), alt: () => openShell(env) })),
+      keywords: `${env.url} ${env.database} ${env.project ?? ""} ${env.stage ?? ""} ${env.tags.join(" ")}`, run: () => showEnvironment(env), alt: () => openShell(env) })),
+    ...(newEnvironment ? [{ id: "new-env", group: "actions" as const, label: t("environments.newEnvironment"), icon: "plus" as const, hint: "Ctrl+N", run: newEnvironment }] : []),
+    ...(toggleTheme ? [{ id: "theme", group: "actions" as const, label: t(themeIsDark ? "app.theme.useLight" : "app.theme.useDark"), icon: (themeIsDark ? "sun" : "moon") as IconName, run: toggleTheme }] : []),
     { id: "lock", group: "actions", label: t("palette.lock"), icon: "lock", run: lock },
   ];
   // Every word must appear in the label or keywords, in any order.
@@ -102,8 +108,8 @@ function PaletteRow({ action, active, heading, hover, choose }: { action: Action
       {env
         ? <span className="relative inline-grid place-items-center flex-none"><Icon name="server" /><span className={cx("size-[7px] rounded-full bg-tone flex-none absolute -right-[3px] -bottom-[3px] shadow-[0_0_0_2px_var(--surface)]", tones[modeTone[env.write_mode]])} /></span>
         : <Icon name={action.icon} />}
-      <span className="flex-1 grid min-w-0 leading-[1.3]"><span className="truncate">{action.label}</span>
-        {env && <small className="truncate text-fg-3 font-mono text-xs">{hostOf(env.url)} · {env.database}</small>}</span>
+      <span className="flex-1 grid min-w-0 leading-[1.3]"><span className="flex items-center gap-1.5 min-w-0"><StageBadge stage={env?.stage} compact /><span className="truncate">{action.label}</span></span>
+        {env && <small className="truncate text-fg-3 font-mono text-xs">{[env.project, hostOf(env.url), env.database].filter(Boolean).join(" · ")}</small>}</span>
       {action.hint && <kbd>{action.hint}</kbd>}
       {action.alt && <Button variant="ghost" size="sm" className={cx("flex-none", !active && "opacity-0 group-hover:opacity-100")} tabIndex={-1} aria-label={t("palette.openInShell", { name: action.label })}
         onClick={(event) => { event.stopPropagation(); choose(true); }}><Icon name="terminal" />{t("palette.shell")}</Button>}

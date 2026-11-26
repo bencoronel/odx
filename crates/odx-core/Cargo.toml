@@ -13,6 +13,7 @@ hex.workspace = true
 libsodium-rs.workspace = true
 libc.workspace = true
 quick-xml.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 axum.workspace = true

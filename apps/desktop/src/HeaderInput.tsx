@@ -24,33 +24,42 @@ type Props = Omit<ComponentProps<"input">, "value" | "onChange" | "onBlur"> & {
   caseSensitive?: boolean;
   /** List every suggestion while the value is empty, opening on focus. */
   showAll?: boolean;
+  /** Render an inline selector chevron + count inside the input once suggestions are available. */
+  dropdown?: boolean;
   onChange: (value: string) => void;
   /** Receives a chosen suggestion instead of `onChange`. */
   onPick?: (value: string) => void;
   onBlur: () => void;
 };
-export default function HeaderInput({ value, suggestions, disabledSuggestions = [], caseSensitive = false, showAll = false, onChange, onPick, onBlur, ...props }: Props) {
+export default function HeaderInput({ value, suggestions, disabledSuggestions = [], caseSensitive = false, showAll = false, dropdown = false, className, onChange, onPick, onBlur, ...props }: Props) {
   const { t } = useTranslation();
   const id = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const menu = useRef<HTMLUListElement>(null);
   const [open, setOpen] = useState(false);
+  const [browseAll, setBrowseAll] = useState(false);
   const [active, setActive] = useState(-1);
-  const matches = value.trim() ? suggestions.filter((s) => s.toLowerCase().includes(value.toLowerCase()) && (caseSensitive ? s !== value : s.toLowerCase() !== value.toLowerCase())) : showAll ? suggestions : [];
+  const matches = browseAll
+    ? suggestions
+    : value.trim()
+      ? suggestions.filter((s) => s.toLowerCase().includes(value.toLowerCase()) && (caseSensitive ? s !== value : s.toLowerCase() !== value.toLowerCase()))
+      : showAll ? suggestions : [];
   const disabled = (suggestion: string) => disabledSuggestions.includes(suggestion.toLowerCase());
   const selectable = matches.map((s, i) => disabled(s) ? -1 : i).filter((i) => i >= 0);
   const expanded = open && matches.length > 0;
+  const hasDropdown = dropdown && suggestions.length > 0;
   useEffect(() => {
     if (expanded && active >= 0) menu.current?.children[active]?.scrollIntoView?.({ block: "nearest" });
   }, [expanded, active]);
-  const choose = (suggestion: string) => { if (disabled(suggestion)) return; (onPick ?? onChange)(suggestion); setOpen(false); setActive(-1); };
+  const choose = (suggestion: string) => { if (disabled(suggestion)) return; (onPick ?? onChange)(suggestion); setOpen(false); setBrowseAll(false); setActive(-1); };
   return <div className="header-input relative min-w-0">
-    <input {...props} value={value} role="combobox" aria-autocomplete="list" aria-expanded={expanded}
+    <input ref={inputRef} {...props} value={value} className={cx(hasDropdown && "pr-[52px]! border-ok/50!", className)} role="combobox" aria-autocomplete="list" aria-expanded={expanded}
       aria-controls={expanded ? id : undefined} aria-activedescendant={expanded && active >= 0 && active < matches.length ? `${id}-${active}` : undefined}
-      onFocus={() => { setOpen(showAll); setActive(-1); }}
-      onChange={(e) => { onChange(e.target.value); setOpen(true); setActive(-1); }}
-      onBlur={() => { setOpen(false); setActive(-1); onBlur(); }}
+      onFocus={() => { setOpen(showAll || hasDropdown); setBrowseAll(hasDropdown && (!value.trim() || suggestions.includes(value))); setActive(-1); }}
+      onChange={(e) => { onChange(e.target.value); setOpen(true); setBrowseAll(false); setActive(-1); }}
+      onBlur={() => { setOpen(false); setBrowseAll(false); setActive(-1); onBlur(); }}
       onKeyDown={(e) => {
-        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); setActive(-1); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); setBrowseAll(false); setActive(-1); }
         else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && selectable.length) {
           e.preventDefault(); setOpen(true);
           const position = selectable.indexOf(active);
@@ -60,6 +69,16 @@ export default function HeaderInput({ value, suggestions, disabledSuggestions = 
           e.preventDefault(); e.stopPropagation(); choose(matches[active]);
         }
       }} />
+    {hasDropdown && <button type="button" tabIndex={-1} aria-hidden="true"
+      className="absolute right-1.5 top-1/2 -translate-y-1/2 h-5 px-1.5 inline-flex items-center gap-1 rounded bg-ok-soft text-ok text-2xs font-medium cursor-pointer hover:bg-hover transition-colors"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        if (expanded) { setOpen(false); setBrowseAll(false); }
+        else { setBrowseAll(true); setOpen(true); inputRef.current?.focus(); }
+      }}>
+      <span className="tabular-nums">{suggestions.length}</span>
+      <svg className={cx("size-2.5 transition-transform duration-150", expanded && "rotate-180")} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m3 4.5 3 3 3-3" /></svg>
+    </button>}
     {expanded && <ul id={id} ref={menu} className={termMenu("suggestions")} role="listbox" aria-label={t("headerInput.suggestionsFor", { field: props["aria-label"] })}>
       {matches.map((suggestion, index) => <li key={suggestion} id={`${id}-${index}`} role="option" aria-label={suggestion} aria-description={disabled(suggestion) ? t("headerInput.managedAutomatically") : undefined} aria-selected={index === active} aria-disabled={disabled(suggestion)} className="h-[26px] leading-[26px] aria-disabled:opacity-45 aria-disabled:cursor-default"
         onMouseEnter={() => { if (!disabled(suggestion)) setActive(index); }} onMouseDown={(e) => { e.preventDefault(); choose(suggestion); }}>

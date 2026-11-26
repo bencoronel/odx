@@ -76,6 +76,7 @@ impl Vault {
             global_context: serde_json::json!({}),
             clients: vec![crate::clients::new_stdio_grant()],
             rules: vec![],
+            views: vec![],
             settings: Default::default(),
             proxies: vec![],
             default_proxy: None,
@@ -100,6 +101,7 @@ impl Vault {
         let _opening = OPENING.lock().unwrap_or_else(|e| e.into_inner());
         let database = Arc::new(Database::open_live(path.as_ref(), password)?);
         let data = database.load()?;
+        crate::policy::validate_persisted_rules(&data.rules)?;
         // Initialize the expiry clock from the latest configuration/history timestamp.
         let last_event: Option<i64> = database.transaction(|tx| {
             Ok(tx.query_row("SELECT MAX(at) FROM activity", [], |row| row.get(0))?)

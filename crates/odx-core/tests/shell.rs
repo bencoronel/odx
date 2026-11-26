@@ -200,6 +200,52 @@ async fn shell_requires_confirmation_and_respects_read_only() {
 }
 
 #[tokio::test]
+async fn terminal_filters_fields_before_read_and_returns_redaction_metadata() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sim = support::simulator().await;
+    let core = support::unlocked_core(&tmp).await;
+    let env = core
+        .save_environment(support::draft("Terminal", &sim.url))
+        .await
+        .unwrap();
+    let rule: odx_core::RuleDraft = serde_json::from_value(json!({
+        "environment_id":"", "model":"", "method":"all", "kind":"fields",
+        "action":"block", "scope":{"kind":"global"}, "operations":["read"],
+        "model_selector":{"kind":"all"}, "field_selectors":[{"kind":"regex","pattern":"(?i)(token|password)"}],
+        "context":{}, "max_records":0
+    })).unwrap();
+    core.save_rule(rule).await.unwrap();
+    let mut request = call(&env.id, "res.partner", "read", json!([[1]]), false);
+    request.kwargs = serde_json::from_value(json!({"fields":["name", "password"]})).unwrap();
+    let result = core.shell_call(request).await.unwrap();
+    assert_eq!(result.data[0]["password"], "[REDACTED]");
+    assert_eq!(result.data[0]["__odx_redacted_fields"], json!(["password"]));
+    let upstream = sim
+        .counts
+        .calls()
+        .into_iter()
+        .find(|a| a.get(4) == Some(&json!("read")))
+        .unwrap();
+    assert_eq!(upstream[6]["fields"], json!(["name"]));
+
+    // `fields_get` (`\d`) and value-free `search` remain usable under field protection.
+    let mut meta_req = call(&env.id, "res.partner", "fields_get", json!([]), false);
+    meta_req.kwargs = serde_json::from_value(json!({"allfields":["name", "password"]})).unwrap();
+    let meta = core.shell_call(meta_req).await.unwrap();
+    assert!(meta.data.get("name").is_some());
+    assert!(meta.data.get("password").is_none());
+
+    let search_req = call(
+        &env.id,
+        "res.partner",
+        "search",
+        json!([[["name", "=", "Ada"]]]),
+        false,
+    );
+    assert!(core.shell_call(search_req).await.is_ok());
+}
+
+#[tokio::test]
 async fn shell_history_is_encrypted_capped_and_survives_unlock() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("vault.sqlite3");

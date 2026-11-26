@@ -30,12 +30,24 @@ pub enum AgentRequest {
         id: u64,
         terminal: String,
     },
+    Table {
+        id: u64,
+        terminal: String,
+        title: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<serde_json::Value>>,
+        model: Option<String>,
+        footer: Option<String>,
+        client_label: String,
+    },
 }
 
 impl AgentRequest {
     pub(super) fn id(&self) -> u64 {
         match self {
-            AgentRequest::Run { id, .. } | AgentRequest::Show { id, .. } => *id,
+            AgentRequest::Run { id, .. }
+            | AgentRequest::Show { id, .. }
+            | AgentRequest::Table { id, .. } => *id,
         }
     }
 }
@@ -57,13 +69,14 @@ pub fn open_table_window(
         tables.1.insert(label.clone(), table);
         (label, tables.0)
     };
+    let (width, height) = saved_table_size(app);
     let window = tauri::WebviewWindowBuilder::new(
         app,
         &label,
         tauri::WebviewUrl::App(format!("index.html?window={label}").into()),
     )
     .title(format!("{title}{}", invisible_tag(number)))
-    .inner_size(960.0, 620.0)
+    .inner_size(width, height)
     .min_inner_size(420.0, 260.0)
     // ODX's own frame, as the main window: no system title bar, rounded, shown after its first paint.
     .decorations(false)
@@ -136,6 +149,85 @@ pub fn serve_agents(
                 odx_core::DesktopRequest::Show { terminal, reply } => {
                     (AgentRequest::Show { id, terminal }, reply, true)
                 }
+                odx_core::DesktopRequest::ShowTable {
+                    terminal,
+                    title,
+                    columns,
+                    rows,
+                    model,
+                    footer,
+                    client_label,
+                    reply,
+                } => {
+                    if let Some(terminal) = terminal {
+                        let request = AgentRequest::Table {
+                            id,
+                            terminal,
+                            title,
+                            columns,
+                            rows,
+                            model,
+                            footer,
+                            client_label,
+                        };
+                        (request, reply, true)
+                    } else {
+                        let mut table = serde_json::json!({ "columns": columns, "rows": rows });
+                        if let Some(model) = model {
+                            table["model"] = serde_json::Value::String(model);
+                        }
+                        let mut payload = serde_json::json!({ "table": table, "title": title });
+                        if let Some(footer) = footer {
+                            payload["footer"] = serde_json::Value::String(footer);
+                        }
+                        let outcome = open_table_window(&app, payload, &title)
+                            .map(|()| serde_json::json!({ "opened": true }))
+                            .map_err(|e| format!("could not open table window: {e}"));
+                        let _ = reply.send(outcome);
+                        continue;
+                    }
+                }
+                odx_core::DesktopRequest::OpenUrl { url, reply } => {
+                    let outcome = crate::files::xdg_open(&url)
+                        .map(|()| serde_json::json!({ "opened": true }))
+                        .map_err(|_| "could not open browser".to_owned());
+                    let _ = reply.send(outcome);
+                    continue;
+                }
+                odx_core::DesktopRequest::ExportFile {
+                    name,
+                    content,
+                    reply,
+                } => {
+                    let outcome = (|| -> Result<serde_json::Value, String> {
+                        let (stem, ext) = crate::files::export_name(&name)
+                            .ok_or_else(|| "invalid export filename".to_owned())?;
+                        if content.len() > crate::files::MAX_EXPORT {
+                            return Err("export exceeds maximum size".to_owned());
+                        }
+                        let home = std::path::PathBuf::from(
+                            std::env::var_os("HOME")
+                                .ok_or_else(|| "HOME directory unavailable".to_owned())?,
+                        );
+                        let config = std::env::var_os("XDG_CONFIG_HOME")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| home.join(".config"));
+                        let path = crate::files::write_new(
+                            &crate::files::downloads_dir(&home, &config),
+                            stem,
+                            ext,
+                            content.as_bytes(),
+                        )
+                        .map_err(|e| format!("could not write export file: {e}"))?;
+                        Ok(serde_json::json!({ "path": path.display().to_string() }))
+                    })();
+                    let _ = reply.send(outcome);
+                    continue;
+                }
+                odx_core::DesktopRequest::ViewsChanged => {
+                    let _ = app.emit("views-changed", ());
+                    continue;
+                }
             };
             {
                 let mut queue = desktop.agent.lock().unwrap();
@@ -191,4 +283,15 @@ pub fn take_open_approval(app: &AppHandle) -> Option<String> {
         .lock()
         .unwrap()
         .take()
+}
+
+/// Hand the requested page (from tray menu or view alert notification) to the window once.
+pub fn take_open_page(app: &AppHandle) -> Option<String> {
+    app.state::<Arc<Desktop>>().open_page.lock().unwrap().take()
+}
+
+pub fn open_page_and_show(app: &AppHandle, page: &str) {
+    *app.state::<Arc<Desktop>>().open_page.lock().unwrap() = Some(page.to_owned());
+    show_main(app);
+    let _ = app.emit("desktop-open-page", page);
 }

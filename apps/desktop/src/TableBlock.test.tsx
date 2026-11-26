@@ -17,6 +17,12 @@ const show = (rows: Record<string, unknown>[], model = "res.partner", follow = v
   return follow;
 };
 
+it("shows redaction markers without exposing their internal metadata column", () => {
+  const table = rowsTable([{ id: 7, password: "[REDACTED]", __odx_redacted_fields: ["password"] }]);
+  expect(table.columns).toEqual(["id", "password"]);
+  expect(table.rows[0][1]).toBe("[REDACTED]");
+});
+
 it("copies tables as JSON and Markdown from the formats menu", async () => {
   const writeText = clipboard();
   show([{ id: 7, name: "Ada | Lovelace" }]);

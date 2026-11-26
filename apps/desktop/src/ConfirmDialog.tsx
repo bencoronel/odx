@@ -22,6 +22,7 @@ type ConfirmDialogProps = {
   confirmDisabled?: boolean;
   /** Element to focus on open instead of the safe default (Cancel). */
   initialFocus?: RefObject<HTMLElement | null>;
+  wide?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => Promise<void>;
 };
@@ -37,6 +38,7 @@ export function ConfirmDialog({
   children,
   confirmDisabled = false,
   initialFocus,
+  wide = false,
   onOpenChange,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -48,7 +50,7 @@ export function ConfirmDialog({
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className={dialogOverlay} />
-        <AlertDialog.Content className={`${dialogContent} w-[min(500px,calc(100%-32px))] gap-3.5 p-[18px]`} onOpenAutoFocus={initialFocus ? (event) => { event.preventDefault(); initialFocus.current?.focus(); } : undefined}>
+        <AlertDialog.Content className={`${dialogContent} ${wide ? "w-[min(580px,calc(100%-32px))]" : "w-[min(500px,calc(100%-32px))]"} gap-3.5 p-[18px]`} onOpenAutoFocus={initialFocus ? (event) => { event.preventDefault(); initialFocus.current?.focus(); } : undefined}>
           <header className="flex gap-3 items-start">
             <span className={tile(tone)}><Icon name={tone === "info" ? "shield" : "alert"} /></span>
             <div className="grow min-w-0">

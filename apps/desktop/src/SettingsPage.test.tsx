@@ -5,6 +5,7 @@ import { ipc, type Settings, type SettingsView } from "./ipc";
 vi.mock("./ipc", () => ({ ipc: { settings: vi.fn(), saveSettings: vi.fn() } }));
 vi.mock("./SettingsTable", () => ({ default: () => null }));
 vi.mock("./ProxyPanel", () => ({ default: () => null }));
+vi.mock("./RulesPanel", () => ({ default: () => null }));
 afterEach(cleanup);
 
 const defaults: Settings = { global_concurrency: 16, environment_concurrency: 4, upstream_timeout_secs: 60, approval_minutes: 5, activity_days: 30, activity_mib: 256, output_hours: 24, output_mib: 512 };

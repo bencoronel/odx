@@ -67,6 +67,10 @@ pub struct Desktop {
     texts: Mutex<DesktopTexts>,
     /// Approval whose notification was clicked, until the window takes it.
     open_approval: Mutex<Option<String>>,
+    /// Page to open when triggered from the tray menu or a view-alert notification.
+    open_page: Mutex<Option<String>>,
+    /// Latest summary shown in the tray tooltip and menu.
+    tray_state: Mutex<TrayState>,
     /// Agent requests (run a Terminal command, show a tab) waiting for the window, and their answers.
     agent: Mutex<AgentQueue>,
     /// Terminal tables opened in their own windows, by window label, in memory until that window takes them.
@@ -79,15 +83,29 @@ pub struct Desktop {
     locking: tokio::sync::Mutex<()>,
 }
 
+#[derive(Default, Clone, PartialEq, Eq)]
+pub(super) struct TrayState {
+    pub(super) locked: bool,
+    pub(super) pending_approvals: usize,
+    pub(super) open_writes: usize,
+}
+
 /// Text Rust shows itself (tray, notifications). The window owns the translations and sends them in its
 /// language (`desktop_set_texts`); English until then. `{who}`, `{method}`, `{model}`, `{environment}`
 /// and `{n}` are filled in here.
 #[derive(Deserialize, Clone, PartialEq, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct DesktopTexts {
     pub open: String,
     pub lock: String,
     pub quit: String,
+    pub terminal: String,
+    pub views: String,
+    pub approvals: String,
+    pub close_open_writes: String,
+    pub locked: String,
+    pub open_writes_one: String,
+    pub open_writes_other: String,
     pub a_client: String,
     pub pending_approval: String,
     pub pending_approvals: String,
@@ -101,6 +119,13 @@ impl Default for DesktopTexts {
             open: "Open".into(),
             lock: "Lock".into(),
             quit: "Quit".into(),
+            terminal: "Terminal".into(),
+            views: "Views".into(),
+            approvals: "Approvals".into(),
+            close_open_writes: "Close open writes".into(),
+            locked: "Locked".into(),
+            open_writes_one: "1 open write".into(),
+            open_writes_other: "{n} open writes".into(),
             a_client: "A client".into(),
             pending_approval: "Pending approval".into(),
             pending_approvals: "Pending approvals".into(),
@@ -193,6 +218,7 @@ struct WindowSession {
     reopen: bool,
     bounds: Option<(tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>)>,
     maximized: bool,
+    table_size: Option<(u32, u32)>,
     /// Maximize the main window once it shows (see `window::present`).
     maximize_on_show: bool,
 }
@@ -407,7 +433,13 @@ pub fn on_destroyed(app: &AppHandle) {
             let AgentQueue {
                 pending, replies, ..
             } = &mut *queue;
-            pending.retain(|request| reopen && matches!(request, AgentRequest::Show { .. }));
+            pending.retain(|request| {
+                reopen
+                    && matches!(
+                        request,
+                        AgentRequest::Show { .. } | AgentRequest::Table { .. }
+                    )
+            });
             let kept: Vec<u64> = pending.iter().map(AgentRequest::id).collect();
             let mut failed = Vec::new();
             for (id, reply) in std::mem::take(replies) {

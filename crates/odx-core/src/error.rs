@@ -24,6 +24,8 @@ pub enum OdxError {
     EnvironmentNotFound,
     #[error("denied by environment policy")]
     Denied,
+    #[error("denied by access rule")]
+    RuleDenied(Vec<crate::policy::RuleTrace>),
     #[error("approval missing, expired or already decided")]
     ApprovalUnavailable,
     #[error("uncertain result: Odoo may have applied the write")]
@@ -88,6 +90,7 @@ impl OdxError {
             Self::ClientNotFound => "app.client_not_found",
             Self::EnvironmentNotFound => "app.environment_not_found",
             Self::Denied => "app.denied",
+            Self::RuleDenied(_) => "app.denied",
             Self::ApprovalUnavailable => "app.approval_unavailable",
             Self::Uncertain => "upstream.uncertain_result",
             Self::Persistence | Self::Io(_) | Self::Json(_) => "app.persistence",
@@ -158,6 +161,7 @@ impl OdxError {
             OdxError::ClientNotFound => OdxError::ClientNotFound,
             OdxError::EnvironmentNotFound => OdxError::EnvironmentNotFound,
             OdxError::Denied => OdxError::Denied,
+            OdxError::RuleDenied(rules) => OdxError::RuleDenied(rules.clone()),
             OdxError::ApprovalUnavailable => OdxError::ApprovalUnavailable,
             OdxError::Uncertain => OdxError::Uncertain,
             OdxError::Persistence | OdxError::Io(_) | OdxError::Json(_) => OdxError::Persistence,

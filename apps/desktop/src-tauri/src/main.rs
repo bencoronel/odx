@@ -6,7 +6,7 @@ mod error;
 mod files;
 mod services;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Dev builds use their own socket so their connector never reaches a release app, and vice versa.
 pub const SOCKET_DIR: &str = if cfg!(debug_assertions) {
@@ -100,7 +100,8 @@ fn main() {
                 desktop::take_table(window.app_handle(), window.label());
             }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-                desktop::remember_main_bounds(window)
+                desktop::remember_main_bounds(window);
+                desktop::remember_table_size(window);
             }
             _ => {}
         })
@@ -140,6 +141,33 @@ fn main() {
             }
             app.manage(services);
             desktop::notify_approvals(app.handle().clone(), core.clone(), core.approval_notices());
+            {
+                let handle = app.handle().clone();
+                let core = core.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+                    tick.tick().await;
+                    loop {
+                        tick.tick().await;
+                        if let Ok(alerts) = core.run_due_views().await
+                            && !alerts.is_empty()
+                        {
+                            let _ = handle.emit("views-changed", ());
+                            for alert in alerts {
+                                let body = match alert.error {
+                                    Some(err) => format!("{}: {err}", alert.environment_name),
+                                    None => format!(
+                                        "{}: {} resultados",
+                                        alert.environment_name, alert.count
+                                    ),
+                                };
+                                let summary = format!("{} · {}", APP_NAME, alert.view_name);
+                                desktop::notify_view_alert(&handle, summary, body);
+                            }
+                        }
+                    }
+                });
+            }
             let (agent_requests, agent_queue) = tokio::sync::mpsc::unbounded_channel();
             core.set_desktop(agent_requests);
             desktop::serve_agents(app.handle().clone(), agent_queue);

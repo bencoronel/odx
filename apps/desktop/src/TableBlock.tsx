@@ -12,7 +12,7 @@ import { cellText, isIds, isM2o, toJson, toMarkdown, toTsv, type Link, type Tabl
 
 /** Cell clicks: follow a record or relation, or open a long value. */
 /** What a table can do. In a session all of it; in a table window only reading: the optional ones need the session. */
-export const CellActions = createContext<{ follow?: (link: Link, inOdoo?: boolean) => void; inspect?: (title: string, value: unknown) => void; exportTable?: (table: Table, format: "csv" | "json") => void;
+export const CellActions = createContext<{ follow?: (link: Link, inOdoo?: boolean) => void; inspect?: (title: string, value: unknown) => void; exportTable?: (table: Table, format: "csv" | "csv-excel" | "json") => void; saveAsView?: (table: Table) => void;
   /** A model's fields for header tooltips, when loaded. */
   fields: (model: string) => Field[] | undefined;
   /** The call as a Python script against this tab's environment, without its API key. */
@@ -324,8 +324,12 @@ function CopyTable({ table }: { table: Table }) {
         {code && <button type="button" role="menuitem" className={menuItem} onClick={() => copy("Python", code)}>{t("shell.copyAs", { format: "Python" })}</button>}
         {actions?.exportTable && <>
           <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.exportTable?.(table, "csv"); }}>{t("shell.saveAs", { format: "CSV" })}</button>
+          <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.exportTable?.(table, "csv-excel"); }}>{t("shell.saveAs", { format: "CSV (Excel ;)" })}</button>
           <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.exportTable?.(table, "json"); }}>{t("shell.saveAs", { format: "JSON" })}</button>
         </>}
+        {actions?.saveAsView && table.call && (table.call.method === "search_read" || table.call.method === "search") && (
+          <button type="button" role="menuitem" className={menuItem} onClick={() => { setOpen(false); actions.saveAsView?.(table); }}>{t("shell.saveAsView")}</button>
+        )}
       </div>}
     </span>
   </>;

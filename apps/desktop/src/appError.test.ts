@@ -23,6 +23,17 @@ it("localizes migrated validation codes and safe interpolation parameters on eac
   expect(JSON.stringify(error)).not.toContain("private");
 });
 
+it("localizes rule selector validation errors", async () => {
+  await setLanguage("en");
+  expect(formatAppError({ code: "validation.rule.regex_invalid" })).toBe(
+    "Enter a valid regular expression (maximum 256 characters).",
+  );
+  await setLanguage("es");
+  expect(formatAppError({ code: "validation.rule.regex_invalid" })).toBe(
+    "Escribe una expresión regular válida (máximo 256 caracteres).",
+  );
+});
+
 it("asks for the API key again when the connection target changes", async () => {
   await setLanguage("en");
   expect(formatAppError({ code: "validation.environment.secret_required" })).toBe("Enter the API key again: a new URL, database or user needs its own key.");

@@ -28,7 +28,7 @@ function combine(base: HeaderEntry[], overrides: HeaderEntry[]) {
 type TableSettings = { entries: HeaderEntry[]; inherited: HeaderEntry[] };
 const contextRows = (entries: ContextEntry[]): HeaderEntry[] => entries.map((entry) => ({ ...entry, value: formatContextValue(entry.value) }));
 
-export default function SettingsTable({ kind, environmentId, pendingCount = 0, onSaved }: { kind: "headers" | "context"; environmentId?: string; pendingCount?: number; onSaved?: () => void | Promise<void> }) {
+export default function SettingsTable({ kind, environmentId, pendingCount = 0, onSaved, onCount }: { kind: "headers" | "context"; environmentId?: string; pendingCount?: number; onSaved?: () => void | Promise<void>; onCount?: (count: number) => void }) {
   const { t } = useTranslation();
   const headerMode = kind === "headers";
   const title = headerMode ? (environmentId ? t("settingsTable.headers") : t("settingsTable.globalHeaders")) : (environmentId ? t("settingsTable.context") : t("settingsTable.globalContext"));
@@ -52,7 +52,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
     const load: Promise<TableSettings> = headerMode
       ? ipc.headers(environmentId).then((value) => ({ entries: value.headers, inherited: value.inherited }))
       : ipc.context(environmentId).then((value) => ({ entries: contextRows(value.entries), inherited: contextRows(Object.entries(value.inherited).map(([name, value]) => ({ name, value, enabled: true }))) }));
-    void load.then((value) => { if (active) setSettings(value); }).catch((reason) => { if (active) setError(normalizeAppError(reason)); });
+    void load.then((value) => { if (active) { setSettings(value); onCount?.(value.entries.length); } }).catch((reason) => { if (active) setError(normalizeAppError(reason)); });
     return () => { active = false; mounted.current = false; };
   }, [environmentId, headerMode]);
   const inherited = headerMode ? combine(defaults, settings?.inherited ?? []) : settings?.inherited ?? [];
@@ -108,6 +108,7 @@ export default function SettingsTable({ kind, environmentId, pendingCount = 0, o
         else await ipc.saveContext(headers.map((entry) => ({ ...entry, value: parseContextValue(entry.value) })), environmentId);
         if (mounted.current) {
           setSettings((current) => current && { ...current, entries: headers });
+          onCount?.(headers.length);
           if (revision === version.current) setSaveStatus("");
         }
         await onSaved?.();

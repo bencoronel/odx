@@ -174,6 +174,26 @@ environment's mode or locking the vault revokes pending requests.
 A relational delete inside `write` or `call` (an x2many command that deletes records) counts as a
 delete: it needs approval and each request may contain only one.
 
+### Rules
+
+Rules can approve writes or block reads, writes, and deletes. A matching block always wins over an
+approval rule, human confirmation, and temporary or permanent write mode. Rules can be local to an
+environment or global; global rules also apply to environments added later. Exact model and field
+selectors and bounded Rust regular expressions are supported. For example, `(?i)(token|password)`
+matches field names containing `token` or `password`, without regard to case.
+
+Field blocks remove explicitly selected fields from `read` and `search_read` before Odoo receives the
+request. Returned rows show `[REDACTED]` and a `__odx_redacted_fields` list. If field protection
+applies, structured reads use an explicit safe field list; a read that would send an implicit empty
+or all-fields selection is rejected rather than letting Odoo interpret it as “all fields.”
+`fields_get` omits protected definitions. Generic or opaque reads are rejected under field protection.
+Block rules also reject arguments containing protected field names, including domains, which avoids
+using those fields as filters. Relational paths, aliases, and custom aggregate results are not
+rewritten; operations that cannot be safely analyzed are denied where the field policy is applicable.
+
+Rules do not erase data already present in older Activity entries or external exports. They prevent
+new protected reads and sanitize new row-shaped read responses before audit and return.
+
 > [!NOTE]
 > Writes typed in the Terminal, including those an agent runs with `terminal_run`, are confirmed in the
 > Terminal tab itself: that confirmation stands in for the approval. Read-only and an expired temporary
@@ -236,8 +256,6 @@ returning them inline.
 - **Server mode:** Odx as a server for remote clients over MCP and an HTTP API, with the same
   permissions, approvals and audit. The HTTP API exists in the core but the app does not start it yet.
 - **Per-agent profiles:** today all local agents share one profile.
-- **Automatic approval rules:** auto-approve specific methods, fields or values per environment. The
-  rule engine exists in the core but has no screen yet.
 - **Odoo reports:** generating and downloading PDF reports such as invoices or delivery slips.
 - **Stable release:** Odx is still alpha.
 

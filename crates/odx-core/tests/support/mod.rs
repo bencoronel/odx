@@ -85,6 +85,9 @@ async fn jsonrpc(
     let method = p["method"].as_str().unwrap_or("");
     let service = p["service"].as_str().unwrap_or("");
     let a = p["args"].as_array().cloned().unwrap_or_default();
+    if service == "object" && method == "execute_kw" {
+        counts.calls.lock().unwrap().push(Value::Array(a.clone()));
+    }
     let result = if service == "db" && method == "list" {
         json!(["base-a", "base-b"])
     } else if service == "common" && method == "login" {
@@ -108,6 +111,16 @@ async fn jsonrpc(
         let db = a.first().and_then(Value::as_str).unwrap_or("");
         let m = a.get(4).and_then(Value::as_str).unwrap_or("");
         let _in_flight = counts.enter(db).await;
+        if m == "search_read" && counts.pause_next_search.swap(false, Ordering::SeqCst) {
+            counts.search_started.notify_one();
+            counts.release_search.notified().await;
+        }
+        if matches!(m, "read" | "search_read" | "fields_get")
+            && counts.pause_next_read.swap(false, Ordering::SeqCst)
+        {
+            counts.read_started.notify_one();
+            counts.release_read.notified().await;
+        }
         let failure = counts.fail_next_execute.lock().unwrap().take();
         if let Some(message) = failure {
             counts.queries.fetch_add(1, Ordering::SeqCst);
@@ -205,7 +218,19 @@ async fn jsonrpc(
             }
             "search_read" => {
                 counts.queries.fetch_add(1, Ordering::SeqCst);
-                json!([{"id":1,"display_name":format!("contact-{db}"),"context":a.get(6).and_then(|v|v.get("context")).cloned().unwrap_or(json!({}))}])
+                let requested = a
+                    .get(6)
+                    .and_then(|kw| kw["fields"].as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut row = json!({"id":1,"display_name":format!("contact-{db}"),"context":a.get(6).and_then(|v|v.get("context")).cloned().unwrap_or(json!({}))});
+                if requested.iter().any(|field| field == "password") {
+                    row["password"] = json!("fixture-secret-password");
+                }
+                if requested.iter().any(|field| field == "api_token") {
+                    row["api_token"] = json!("fixture-secret-token");
+                }
+                json!([row])
             }
             "write" => {
                 counts.writes.fetch_add(1, Ordering::SeqCst);
@@ -255,6 +280,24 @@ async fn jsonrpc(
                        "company_id":{"type":"many2one","relation":"res.company","string":"Company","required":false,"readonly":false,"store":true}});
                 // A many2many only when asked for by name, so existing field listings stay unchanged.
                 let kw = a.get(6).cloned().unwrap_or(json!({}));
+                if kw["allfields"]
+                    .as_array()
+                    .is_some_and(|names| names.contains(&json!("user_id")))
+                {
+                    fields["user_id"] = json!({"type":"many2one","relation":"res.users"});
+                }
+                if kw["allfields"]
+                    .as_array()
+                    .is_some_and(|names| names.contains(&json!("password")))
+                {
+                    fields["password"] = json!({"type":"char","string":"Password","required":false,"readonly":false,"store":true});
+                }
+                if kw["allfields"]
+                    .as_array()
+                    .is_some_and(|names| names.contains(&json!("api_token")))
+                {
+                    fields["api_token"] = json!({"type":"char","string":"API Token","required":false,"readonly":false,"store":true});
+                }
                 if kw["allfields"]
                     .as_array()
                     .is_some_and(|names| names.contains(&json!("tag_ids")))

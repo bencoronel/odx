@@ -17,6 +17,7 @@ pub struct Counts {
     pub(super) in_flight: Arc<std::sync::Mutex<InFlight>>,
     pub(super) response_bytes: Arc<AtomicUsize>,
     pub(super) headers: Arc<std::sync::Mutex<Vec<HeaderMap>>>,
+    pub(super) calls: Arc<std::sync::Mutex<Vec<Value>>>,
     pub(super) writes: Arc<AtomicUsize>,
     pub(super) logins: Arc<AtomicUsize>,
     pub(super) queries: Arc<AtomicUsize>,
@@ -25,6 +26,12 @@ pub struct Counts {
     pub(super) pause_next_write: Arc<AtomicBool>,
     pub(super) write_started: Arc<Notify>,
     pub(super) release_write: Arc<Notify>,
+    pub(super) pause_next_read: Arc<AtomicBool>,
+    pub(super) read_started: Arc<Notify>,
+    pub(super) release_read: Arc<Notify>,
+    pub(super) pause_next_search: Arc<AtomicBool>,
+    pub(super) search_started: Arc<Notify>,
+    pub(super) release_search: Arc<Notify>,
     pub(super) pause_next_login: Arc<AtomicBool>,
     pub(super) fail_next_login: Arc<AtomicBool>,
     pub(super) login_started: Arc<Notify>,
@@ -32,8 +39,29 @@ pub struct Counts {
     pub(super) fail_next_execute: Arc<std::sync::Mutex<Option<String>>>,
 }
 impl Counts {
+    pub fn pause_next_search(&self) {
+        self.pause_next_search.store(true, Ordering::SeqCst);
+    }
+    pub async fn wait_for_search(&self) {
+        self.search_started.notified().await;
+    }
+    pub fn release_search(&self) {
+        self.release_search.notify_one();
+    }
+    pub fn pause_next_read(&self) {
+        self.pause_next_read.store(true, Ordering::SeqCst);
+    }
+    pub async fn wait_for_read(&self) {
+        self.read_started.notified().await;
+    }
+    pub fn release_read(&self) {
+        self.release_read.notify_one();
+    }
     pub fn headers(&self) -> Vec<HeaderMap> {
         self.headers.lock().unwrap().clone()
+    }
+    pub fn calls(&self) -> Vec<Value> {
+        self.calls.lock().unwrap().clone()
     }
     pub fn writes(&self) -> usize {
         self.writes.load(Ordering::SeqCst)
